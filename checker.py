@@ -1,3 +1,4 @@
+
 """IPTV-Direct 本地 IPv4、HTTP、HLS 与 MPEG-TS 检测。"""
 
 from __future__ import annotations
@@ -450,7 +451,7 @@ class Detector:
             raise CheckError(INCOMPLETE, f"{label}不完整，无法确认全部内容")
         return result["data"]
 
-    def _manifest(self, deadline, queue_deadline, first):
+    def _manifest(self, deadline, queue_deadline, first, candidate_result):
         result = first
         if not first["complete"]:
             result = self._request(
@@ -460,6 +461,7 @@ class Detector:
         data = self._complete_manifest(result, "HLS 清单")
         final_url = result["url"]
         lines = self._playlist(data)
+        candidate_result["media_type"] = "HLS"
 
         if any(line.startswith("#EXT-X-STREAM-INF:") for line in lines):
             variants = [
@@ -509,6 +511,7 @@ class Detector:
     def check_one(self, candidate, submitted_at):
         result = {
             **candidate,
+            "media_type": "UNKNOWN",
             "checks": {
                 key: {"status": INCOMPLETE, "reason": "尚未检测"}
                 for key in ("ipv4", "http", "hls", "ts")
@@ -555,7 +558,9 @@ class Detector:
                 probe = probe[3:].lstrip()
             if probe.startswith(b"#EXTM3U"):
                 try:
-                    hls = self._manifest(deadline, queue_deadline, first)
+                    hls = self._manifest(
+                        deadline, queue_deadline, first, result
+                    )
                     result["checks"]["hls"] = hls
                     result["checks"]["ts"] = {
                         "status": PASS, "reason": hls["reason"]
@@ -568,6 +573,7 @@ class Detector:
                         "status": exc.status, "reason": "HLS 分片检测未通过"
                     }
             elif self._ts_ok(first["data"]):
+                result["media_type"] = "DIRECT_TS"
                 result["checks"]["ts"] = {
                     "status": PASS,
                     "reason": "Range 数据通过 5 个 TS 同步位置检查",
@@ -639,6 +645,7 @@ def check_candidates(candidates, settings):
                 except Exception as exc:
                     results.append({
                         **batch[index],
+                        "media_type": "UNKNOWN",
                         "checks": {
                             key: {
                                 "status": INCOMPLETE,
