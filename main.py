@@ -1,10 +1,6 @@
 
 #!/usr/bin/env python3
-"""IPTV-Direct entry point.
-
-统一读取配置、调度来源下载及内容识别。
-后续线路归一、检测和发布流程将在对应阶段接入。
-"""
+"""IPTV-Direct 总入口与统一调度。"""
 
 from __future__ import annotations
 
@@ -22,10 +18,11 @@ from collector import (
 from normalizer import (
     ChannelConfigError,
     load_channels,
-    parse_source_content,
+    normalize_source_content,
 )
 
 ROOT = Path(__file__).resolve().parent
+
 CONFIG_FILES = (
     "channels.txt",
     "manual.txt",
@@ -192,7 +189,7 @@ def load_configuration(root: Path = ROOT) -> dict[str, Any]:
 
 
 def collect_and_parse(config: dict[str, Any]) -> dict[str, Any]:
-    """逐条下载并识别来源内容，按正式数量上限停止。"""
+    """调度来源采集和 normalizer 处理，汇总本轮候选数量。"""
 
     collection = config["settings"]["collection"]
     detection = config["settings"]["detection"]
@@ -206,7 +203,11 @@ def collect_and_parse(config: dict[str, Any]) -> dict[str, Any]:
     errors = []
     valid_sources = 0
     total_candidates = 0
+    duplicate_candidates = 0
     stopped_reason = "所有配置来源均已处理"
+
+    # 整轮共用，由 normalizer 负责 URL 归一和全局去重。
+    seen_urls: set[str] = set()
 
     contents = iter_source_contents(
         config["manual_sources"],
@@ -226,52 +227,49 @@ def collect_and_parse(config: dict[str, Any]) -> dict[str, Any]:
 
         downloaded = item["download"]
 
+        remaining = max_total - total_candidates
+        if remaining <= 0:
+            stopped_reason = f"达到全部候选总上限 {max_total}"
+            break
+
         try:
-            parsed = parse_source_content(
-                downloaded["content"],
-                source,
-                config["channels"],
+            normalized = normalize_source_content(
+                content=downloaded["content"],
+                source=source,
+                channels=config["channels"],
+                max_candidates_per_source=max_per_source,
+                seen_urls=seen_urls,
                 content_type=downloaded["content_type"],
                 max_hls_manifest_bytes=max_hls_bytes,
             )
         except (TypeError, ValueError) as exc:
             errors.append(
                 f"{source.get('name', source.get('url', '来源'))}："
-                f"内容解析异常：{exc}"
+                f"内容处理异常：{exc}"
             )
             continue
 
-        if not parsed["recognized"]:
-            detail = "；".join(parsed["errors"]) or "无法识别内容格式"
+        if not normalized["recognized"]:
+            detail = (
+                "；".join(normalized["errors"])
+                or "无法识别内容格式"
+            )
             errors.append(
                 f"{source.get('name', source.get('url', '来源'))}：{detail}"
             )
             continue
 
-        candidates = parsed["candidates"]
+        # 总候选上限由 main 统一汇总和控制；
+        # 单来源上限及 URL 去重由 normalizer 执行。
+        source_candidate_count = min(
+            normalized["extracted_candidates"],
+            remaining,
+        )
 
-        if len(candidates) > max_per_source:
-            candidates = candidates[:max_per_source]
-            errors.append(
-                f"{source.get('name', source.get('url', '来源'))}："
-                f"候选条目达到单来源上限 {max_per_source}，"
-                "其余条目已停止处理"
-            )
+        candidates = normalized["candidates"][:remaining]
 
-        remaining = max_total - total_candidates
-
-        if remaining <= 0:
-            stopped_reason = f"达到全部候选总上限 {max_total}"
-            break
-
-        if len(candidates) > remaining:
-            candidates = candidates[:remaining]
-            errors.append(
-                f"达到全部候选总上限 {max_total}，"
-                "已停止当前来源后续条目"
-            )
-
-        total_candidates += len(candidates)
+        total_candidates += source_candidate_count
+        duplicate_candidates += normalized["duplicate_candidates"]
 
         matched_count = sum(
             1 for candidate in candidates
@@ -280,9 +278,12 @@ def collect_and_parse(config: dict[str, Any]) -> dict[str, Any]:
 
         parsed_sources.append({
             "source": source,
-            "format": parsed["format"],
-            "recognized": parsed["recognized"],
+            "format": normalized["format"],
+            "recognized": normalized["recognized"],
             "candidates": candidates,
+            "extracted_candidates": source_candidate_count,
+            "duplicate_candidates": normalized["duplicate_candidates"],
+            "retained_candidates": len(candidates),
             "matched_target_candidates": matched_count,
             "download": {
                 "requested_url": downloaded["url"],
@@ -295,10 +296,10 @@ def collect_and_parse(config: dict[str, Any]) -> dict[str, Any]:
 
         errors.extend(
             f"{source.get('name', source.get('url', '来源'))}：{error}"
-            for error in parsed["errors"]
+            for error in normalized["errors"]
         )
 
-        # 有效来源必须至少含有一条可精确匹配目标频道的候选。
+        # 有效来源必须至少含有一条匹配目标频道的候选。
         if matched_count > 0:
             valid_sources += 1
 
@@ -315,6 +316,10 @@ def collect_and_parse(config: dict[str, Any]) -> dict[str, Any]:
         "errors": errors,
         "valid_sources": valid_sources,
         "total_candidates": total_candidates,
+        "duplicate_candidates": duplicate_candidates,
+        "unique_candidates": sum(
+            len(source["candidates"]) for source in parsed_sources
+        ),
         "stopped_reason": stopped_reason,
     }
 
@@ -369,8 +374,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.mode == "test":
         print(
-            "测试运行不会下载真实来源；"
-            "当前测试数据流程尚未接入，本次安全结束。"
+            "测试运行流程尚未接入，"
+            "本次不会下载真实来源或修改正式订阅。"
         )
         return 2
 
@@ -380,7 +385,9 @@ def main(argv: list[str] | None = None) -> int:
         "来源处理结果："
         f"已识别来源 {len(result['sources'])} 个，"
         f"有效来源 {result['valid_sources']} 个，"
-        f"提取候选 {result['total_candidates']} 条。"
+        f"累计候选 {result['total_candidates']} 条，"
+        f"去重后候选 {result['unique_candidates']} 条，"
+        f"重复候选 {result['duplicate_candidates']} 条。"
     )
     print(f"停止原因：{result['stopped_reason']}")
 
@@ -388,8 +395,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"来源处理警告：{error}", file=sys.stderr)
 
     print(
-        "当前尚未接入 URL 归一、全局去重、线路检测和订阅发布，"
-        "本次运行在来源识别后安全结束。"
+        "当前尚未接入本地线路检测、Globalping 辅助检测、"
+        "正式准入和订阅发布，本次运行在来源处理后安全结束。"
     )
 
     return 2
