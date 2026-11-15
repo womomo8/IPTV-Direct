@@ -343,7 +343,7 @@ def check_range_result(measurement):
         headers = result.get("headers", {})
 
         normalized_headers = {
-            str(key).lower(): value
+            str(key).lower(): str(value).strip()
             for key, value in headers.items()
         }
 
@@ -352,15 +352,33 @@ def check_range_result(measurement):
             "",
         )
 
-        body = result.get("rawBody")
+        content_length = normalized_headers.get(
+            "content-length",
+            "",
+        )
+
+        # TS 是二进制数据。
+        # Globalping 的 rawBody 文本长度不能作为
+        # 原始 TS 字节数的可靠判断依据。
+        #
+        # 这里使用 HTTP 206 和 Content-Range
+        # 判断服务器是否正确响应指定字节范围。
+
+        total_size = ""
+
+        if "/" in content_range:
+            total_size = content_range.rsplit("/", 1)[-1]
 
         range_ok = (
             result.get("status") == "finished"
             and status_code == 206
-            and isinstance(content_range, str)
             and content_range.startswith("bytes 0-1023/")
-            and isinstance(body, str)
-            and len(body.encode("utf-8")) == 1024
+            and total_size.isdigit()
+            and int(total_size) > 1023
+            and (
+                not content_length
+                or content_length == "1024"
+            )
         )
 
         if range_ok:
@@ -376,6 +394,9 @@ def check_range_result(measurement):
 
         if content_range:
             print(f"Content-Range：{content_range}")
+
+        if content_length:
+            print(f"Content-Length：{content_length}")
 
         if result.get("status") == "failed":
             print(
@@ -490,8 +511,8 @@ def main():
 
         if range_success:
             print(
-                "TS Range：成功，"
-                f"{range_success} 个探针确认返回 1024 字节"
+                "TS Range：请求通过（HTTP 206），"
+                f"{range_success} 个探针确认返回正确的字节范围"
             )
         else:
             print(
@@ -500,8 +521,8 @@ def main():
 
         print("\n结果解释：")
         print("1. 只代表本次实际参与测量的探针。")
-        print("2. Range 失败不等于 TS 无法正常下载。")
-        print("3. HTTP 成功不等于真实播放器持续播放成功。")
+        print("2. HTTP 206 和正确的 Content-Range 证明服务器响应了范围请求。")
+        print("3. 这不代表完整 TS 已下载，也不代表真实播放器持续播放成功。")
         print("4. 不能据此证明所有大陆运营商均可播放。")
 
     except Exception as exc:
