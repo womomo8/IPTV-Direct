@@ -3,18 +3,17 @@
 # -*- coding: utf-8 -*-
 
 """
-IPTV-Direct Globalping API diagnostic test.
+IPTV-Direct Globalping API Diagnostic Test
 
-Tests:
-1. Main HLS playlist from China eyeball probes.
-2. First child playlist.
-3. First TS segment using an HTTP Range request.
+测试顺序：
+1. 中国大陆探针获取主 M3U8
+2. 获取子 M3U8
+3. 使用 Range 请求获取 TS 分片开头 1024 字节
 
-This is a diagnostic tool only. It does not modify IPTV subscriptions.
+仅用于诊断，不修改正式订阅。
 """
 
 import json
-import re
 import sys
 import time
 import urllib.error
@@ -23,21 +22,26 @@ import urllib.request
 
 
 API_BASE = "https://api.globalping.io/v1"
-MAIN_URL = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+
+MAIN_URL = (
+    "https://test-streams.mux.dev/"
+    "x36xhzz/x36xhzz.m3u8"
+)
 
 POLL_INTERVAL = 0.7
-MAX_POLL_SECONDS = 90
+MAX_POLL_SECONDS = 120
+
+USER_AGENT = "IPTV-Direct-Globalping-Test/1.0"
 
 API_HEADERS = {
     "Content-Type": "application/json",
     "Accept": "application/json",
-    "User-Agent": "IPTV-Direct-Globalping-Test/1.0",
+    "User-Agent": USER_AGENT,
 }
 
 
 def api_request(url, method="GET", payload=None):
     data = None
-    headers = dict(API_HEADERS)
 
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
@@ -45,19 +49,31 @@ def api_request(url, method="GET", payload=None):
     request = urllib.request.Request(
         url,
         data=data,
-        headers=headers,
+        headers=API_HEADERS,
         method=method,
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            body = response.read().decode("utf-8", errors="replace")
+        with urllib.request.urlopen(
+            request,
+            timeout=30,
+        ) as response:
+            body = response.read().decode(
+                "utf-8",
+                errors="replace",
+            )
+
             return response.status, json.loads(body)
 
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
+        detail = exc.read().decode(
+            "utf-8",
+            errors="replace",
+        )
+
         raise RuntimeError(
-            f"Globalping API HTTP {exc.code}: {detail[:1500]}"
+            f"Globalping API HTTP {exc.code}: "
+            f"{detail[:2000]}"
         ) from exc
 
     except urllib.error.URLError as exc:
@@ -65,18 +81,82 @@ def api_request(url, method="GET", payload=None):
             f"无法连接 Globalping API：{exc}"
         ) from exc
 
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            "Globalping API 返回的内容不是有效 JSON。"
+        ) from exc
 
-def create_measurement(target, extra_headers=None):
-    request_headers = {
-        "User-Agent": "IPTV-Direct-Globalping-Test/1.0",
+
+def split_target_url(url):
+    """
+    将完整 URL 拆分为 Globalping 所需字段。
+
+    target 只填写主机名。
+    协议、端口、路径和查询参数放入 measurementOptions。
+    """
+
+    parsed = urllib.parse.urlsplit(url)
+
+    if parsed.scheme not in ("http", "https"):
+        raise RuntimeError(
+            f"不支持的 URL 协议：{parsed.scheme}"
+        )
+
+    if not parsed.hostname:
+        raise RuntimeError(
+            f"URL 缺少有效主机名：{url}"
+        )
+
+    if parsed.username or parsed.password:
+        raise RuntimeError(
+            "测试 URL 不允许包含用户名或密码。"
+        )
+
+    protocol = parsed.scheme.upper()
+    target = parsed.hostname
+
+    if parsed.port is not None:
+        port = parsed.port
+    elif protocol == "HTTPS":
+        port = 443
+    else:
+        port = 80
+
+    path = parsed.path or "/"
+
+    if parsed.query:
+        path += "?" + parsed.query
+
+    return {
+        "target": target,
+        "protocol": protocol,
+        "port": port,
+        "path": path,
     }
+
+
+def create_measurement(url, extra_headers=None):
+    parts = split_target_url(url)
+
+    request_headers = {}
 
     if extra_headers:
         request_headers.update(extra_headers)
 
+    measurement_options = {
+        "protocol": parts["protocol"],
+        "port": parts["port"],
+        "ipVersion": 4,
+        "request": {
+            "method": "GET",
+            "path": parts["path"],
+            "headers": request_headers,
+        },
+    }
+
     payload = {
         "type": "http",
-        "target": target,
+        "target": parts["target"],
         "locations": [
             {
                 "country": "CN",
@@ -84,14 +164,17 @@ def create_measurement(target, extra_headers=None):
                 "limit": 3,
             }
         ],
-        "measurementOptions": {
-            "ipVersion": 4,
-            "request": {
-                "method": "GET",
-                "headers": request_headers,
-            },
-        },
+        "measurementOptions": measurement_options,
     }
+
+    print(f"目标域名：{parts['target']}")
+    print(f"请求协议：{parts['protocol']}")
+    print(f"请求端口：{parts['port']}")
+    print(f"请求路径：{parts['path']}")
+    print("探针区域：中国大陆")
+    print("探针类型：eyeball-network")
+    print("IP 版本：IPv4")
+    print("探针上限：3")
 
     status_code, result = api_request(
         f"{API_BASE}/measurements",
@@ -103,71 +186,82 @@ def create_measurement(target, extra_headers=None):
 
     if status_code != 202 or not measurement_id:
         raise RuntimeError(
-            f"创建测量失败：{json.dumps(result, ensure_ascii=False)}"
+            "创建测量失败："
+            + json.dumps(
+                result,
+                ensure_ascii=False,
+            )
         )
 
-    print(f"已创建测量：{measurement_id}")
-    print(f"Globalping 探针数量：{result.get('probesCount', '未知')}")
+    print(f"测量 ID：{measurement_id}")
+    print(
+        "实际探针数量（创建时）："
+        f"{result.get('probesCount', '待确认')}"
+    )
 
     return measurement_id
 
 
 def wait_for_measurement(measurement_id):
     url = f"{API_BASE}/measurements/{measurement_id}"
+
     start_time = time.monotonic()
 
     while True:
         _, result = api_request(url)
 
         status = result.get("status")
+
         print(f"测量状态：{status}")
 
         if status != "in-progress":
             return result
 
         if time.monotonic() - start_time > MAX_POLL_SECONDS:
-            raise RuntimeError("等待测量结果超时。")
+            raise RuntimeError(
+                "等待 Globalping 测量结果超时。"
+            )
 
-        # 官方建议：同一个测量结果查询间隔至少 500 毫秒。
         time.sleep(POLL_INTERVAL)
 
 
-def get_http_results(measurement):
+def print_probe_results(measurement):
     results = measurement.get("results", [])
 
     if not results:
         print("没有返回探针结果。")
         return []
 
+    print(f"\n实际返回探针数：{len(results)}")
+
     for index, item in enumerate(results, start=1):
         probe = item.get("probe", {})
         result = item.get("result", {})
 
         print(f"\n探针 {index}")
-        print(
-            "位置："
-            f"{probe.get('city', '未知')}, "
-            f"{probe.get('country', '未知')}"
-        )
+        print(f"国家：{probe.get('country', '未知')}")
+        print(f"城市：{probe.get('city', '未知')}")
         print(f"ASN：{probe.get('asn', '未知')}")
         print(f"网络：{probe.get('network', '未知')}")
         print(f"探针状态：{result.get('status', '未知')}")
         print(f"HTTP 状态码：{result.get('statusCode', '无')}")
-        print(f"正文是否截断：{result.get('truncated', False)}")
+
+        if result.get("failureSource"):
+            print(
+                "失败来源："
+                f"{result.get('failureSource')}"
+            )
+
+        if result.get("status") == "failed":
+            print(
+                "失败详情："
+                f"{result.get('rawOutput', '无')}"
+            )
 
     return results
 
 
-def extract_body(result):
-    body = result.get("rawBody")
-
-    if not isinstance(body, str):
-        return ""
-
-    return body
-
-
-def successful_http_results(measurement):
+def successful_results(measurement):
     valid = []
 
     for item in measurement.get("results", []):
@@ -184,84 +278,168 @@ def successful_http_results(measurement):
     return valid
 
 
-def extract_playlist_url(body, base_url):
+def extract_body(item):
+    result = item.get("result", {})
+    body = result.get("rawBody")
+
+    if isinstance(body, str):
+        return body
+
+    return ""
+
+
+def extract_first_media_url(body, base_url):
+    """
+    解析 M3U8 中第一条非注释媒体地址。
+    自动处理绝对地址和相对地址。
+    """
+
     for line in body.splitlines():
         line = line.strip()
 
-        if not line or line.startswith("#"):
+        if not line:
             continue
 
-        return urllib.parse.urljoin(base_url, line)
+        if line.startswith("#"):
+            continue
+
+        return urllib.parse.urljoin(
+            base_url,
+            line,
+        )
 
     return None
 
 
-def run_stage(title, target, extra_headers=None):
+def run_stage(title, url, extra_headers=None):
     print("\n" + "=" * 60)
     print(title)
-    print(f"目标：{target}")
     print("=" * 60)
 
+    print(f"完整目标：{url}\n")
+
     measurement_id = create_measurement(
-        target,
+        url,
         extra_headers=extra_headers,
     )
 
-    measurement = wait_for_measurement(measurement_id)
-    results = get_http_results(measurement)
+    measurement = wait_for_measurement(
+        measurement_id
+    )
+
+    results = print_probe_results(measurement)
 
     return measurement, results
 
 
+def check_range_result(measurement):
+    success_count = 0
+
+    for item in measurement.get("results", []):
+        probe = item.get("probe", {})
+        result = item.get("result", {})
+
+        status_code = result.get("statusCode")
+        headers = result.get("headers", {})
+
+        normalized_headers = {
+            str(key).lower(): value
+            for key, value in headers.items()
+        }
+
+        content_range = normalized_headers.get(
+            "content-range",
+            "",
+        )
+
+        body = result.get("rawBody")
+
+        range_ok = (
+            result.get("status") == "finished"
+            and status_code == 206
+            and isinstance(content_range, str)
+            and content_range.startswith("bytes 0-1023/")
+            and isinstance(body, str)
+            and len(body.encode("utf-8")) == 1024
+        )
+
+        if range_ok:
+            success_count += 1
+
+        print(
+            f"{probe.get('city', '未知')} / "
+            f"{probe.get('network', '未知')}："
+            f"HTTP {status_code}，"
+            f"Range "
+            f"{'成功' if range_ok else '未确认成功'}"
+        )
+
+        if content_range:
+            print(f"Content-Range：{content_range}")
+
+        if result.get("status") == "failed":
+            print(
+                "失败详情："
+                f"{result.get('rawOutput', '无')}"
+            )
+
+    return success_count
+
+
 def main():
-    print("IPTV-Direct：Globalping API 自动化诊断")
-    print("测试网络：China + eyeball-network")
-    print("IP 版本：IPv4")
-    print("探针上限：每次 3 个")
-    print("说明：这是公开 HLS 测试视频，不是真实电视直播。")
+    print("=" * 60)
+    print("IPTV-Direct Globalping API 自动化诊断")
+    print("=" * 60)
+
+    print("测试目标：公开 Mux HLS VOD 测试视频")
+    print("注意：这不是真实电视直播源。")
 
     try:
-        # 第一阶段：主播放列表
-        main_measurement, main_results = run_stage(
-            "第一阶段：主 M3U8",
+        # 第一阶段：主 M3U8
+        main_measurement, _ = run_stage(
+            "第一阶段：主 M3U8 测试",
             MAIN_URL,
         )
 
-        main_valid = successful_http_results(main_measurement)
+        main_valid = successful_results(
+            main_measurement
+        )
 
         if not main_valid:
             raise RuntimeError(
                 "主 M3U8 没有取得成功的 HTTP 2xx 结果。"
             )
 
-        playlist_body = extract_body(
-            main_valid[0].get("result", {})
+        main_body = extract_body(
+            main_valid[0]
         )
 
-        if not playlist_body:
+        if not main_body:
             raise RuntimeError(
                 "主 M3U8 正文为空，无法继续解析。"
             )
 
-        child_url = extract_playlist_url(
-            playlist_body,
+        child_url = extract_first_media_url(
+            main_body,
             MAIN_URL,
         )
 
         if not child_url:
             raise RuntimeError(
-                "没有在主 M3U8 中找到子播放列表地址。"
+                "没有找到主 M3U8 中的子播放列表地址。"
             )
 
-        print(f"\n解析到子播放列表：{child_url}")
+        print(f"\n解析到子 M3U8：{child_url}")
 
-        # 第二阶段：子播放列表
-        child_measurement, child_results = run_stage(
-            "第二阶段：子 M3U8",
+        # 第二阶段：子 M3U8
+        child_measurement, _ = run_stage(
+            "第二阶段：子 M3U8 测试",
             child_url,
         )
 
-        child_valid = successful_http_results(child_measurement)
+        child_valid = successful_results(
+            child_measurement
+        )
 
         if not child_valid:
             raise RuntimeError(
@@ -269,7 +447,7 @@ def main():
             )
 
         child_body = extract_body(
-            child_valid[0].get("result", {})
+            child_valid[0]
         )
 
         if not child_body:
@@ -277,20 +455,20 @@ def main():
                 "子 M3U8 正文为空，无法继续解析。"
             )
 
-        ts_url = extract_playlist_url(
+        ts_url = extract_first_media_url(
             child_body,
             child_url,
         )
 
         if not ts_url:
             raise RuntimeError(
-                "没有在子 M3U8 中找到 TS 分片地址。"
+                "没有找到子 M3U8 中的 TS 分片地址。"
             )
 
         print(f"\n解析到 TS 分片：{ts_url}")
 
-        # 第三阶段：Range 请求读取 1024 字节
-        range_measurement, range_results = run_stage(
+        # 第三阶段：TS Range 请求
+        range_measurement, _ = run_stage(
             "第三阶段：TS Range 分段读取",
             ts_url,
             extra_headers={
@@ -298,62 +476,40 @@ def main():
             },
         )
 
+        range_success = check_range_result(
+            range_measurement
+        )
+
+        # 最终摘要
         print("\n" + "=" * 60)
         print("最终诊断摘要")
         print("=" * 60)
 
-        range_valid = []
+        print("主 M3U8：HTTP 测试已完成")
+        print("子 M3U8：HTTP 测试已完成")
 
-        for item in range_measurement.get("results", []):
-            probe = item.get("probe", {})
-            result = item.get("result", {})
-            code = result.get("statusCode")
-            headers = result.get("headers", {})
-
-            content_range = ""
-
-            if isinstance(headers, dict):
-                content_range = (
-                    headers.get("content-range")
-                    or headers.get("Content-Range")
-                    or ""
-                )
-
-            range_ok = (
-                code == 206
-                and "0-1023/" in str(content_range)
-            )
-
-            if range_ok:
-                range_valid.append(item)
-
+        if range_success:
             print(
-                f"{probe.get('city', '未知')} / "
-                f"{probe.get('network', '未知')}："
-                f"HTTP {code}，"
-                f"Range {'成功' if range_ok else '未确认成功'}"
+                "TS Range：成功，"
+                f"{range_success} 个探针确认返回 1024 字节"
+            )
+        else:
+            print(
+                "TS Range：未确认成功"
             )
 
-        print("\n主 M3U8：已完成测量")
-        print("子 M3U8：已完成测量")
-        print(
-            "TS Range："
-            + (
-                "至少一个探针返回 206 和正确 Content-Range"
-                if range_valid
-                else "没有确认成功，需检查响应详情"
-            )
-        )
-
-        print("\n注意：")
-        print("1. 结果只代表本次实际参与测量的大陆探针。")
-        print("2. Range 失败不等于 TS 分片不能正常下载。")
-        print("3. API 测试成功不等于真实播放器持续播放成功。")
-        print("4. 这次测试不会证明所有中国运营商均可访问。")
+        print("\n结果解释：")
+        print("1. 只代表本次实际参与测量的探针。")
+        print("2. Range 失败不等于 TS 无法正常下载。")
+        print("3. HTTP 成功不等于真实播放器持续播放成功。")
+        print("4. 不能据此证明所有大陆运营商均可播放。")
 
     except Exception as exc:
-        print("\n测试未完整完成。")
-        print(f"原因：{exc}")
+        print("\n" + "=" * 60)
+        print("测试未完整完成")
+        print("=" * 60)
+        print(f"错误原因：{exc}")
+
         sys.exit(1)
 
 
