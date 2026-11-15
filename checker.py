@@ -170,7 +170,7 @@ class Detector:
     @staticmethod
     def _content_range(value, connected, limit):
         match = re.fullmatch(
-            r"bytes ([0-9]+)-([0-9]+)/([0-9]+|\\*)",
+            r"bytes ([0-9]+)-([0-9]+)/([0-9]+|\*)"
             value or "",
             re.IGNORECASE,
         )
