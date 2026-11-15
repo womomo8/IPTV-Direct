@@ -3,18 +3,24 @@
 
 from collections import Counter
 from html.parser import HTMLParser
+import socket
+import threading
+import time
+from typing import Any, Iterator
 from http.client import (
     HTTPConnection,
     HTTPException,
-    HTTPHandler,
     HTTPSConnection,
-    HTTPSHandler,
 )
-import time
-from typing import Any, Iterator
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlsplit, urlunsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import (
+    HTTPHandler,
+    HTTPSHandler,
+    HTTPRedirectHandler,
+    Request,
+    build_opener,
+)
 
 
 class SourceConfigError(ValueError):
@@ -219,10 +225,12 @@ def _remaining_seconds(deadline: float) -> float:
 
 
 class _DeadlineConnectionMixin:
-    """让连接、请求和响应头读取共用同一个截止时间。"""
+    """让连接、请求和响应正文共用同一个截止时间。"""
 
     def __init__(self, host, deadline, **kwargs):
         self.deadline = deadline
+        self._deadline_socket = None
+        self._deadline_timer = None
         super().__init__(host, **kwargs)
 
     def _apply_deadline(self):
@@ -232,9 +240,49 @@ class _DeadlineConnectionMixin:
         if self.sock is not None:
             self.sock.settimeout(remaining)
 
+    def _abort_connection(self):
+        """截止时间到达时主动关闭底层连接。"""
+        sock = self._deadline_socket or self.sock
+
+        if sock is None:
+            return
+
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+        try:
+            sock.close()
+        except OSError:
+            pass
+
+    def _start_deadline_timer(self):
+        if self._deadline_timer is not None:
+            return
+
+        delay = _remaining_seconds(self.deadline)
+
+        self._deadline_timer = threading.Timer(
+            delay,
+            self._abort_connection,
+        )
+        self._deadline_timer.daemon = True
+        self._deadline_timer.start()
+
+    def cancel_deadline(self):
+        """下载结束后取消截止计时器。"""
+        if self._deadline_timer is not None:
+            self._deadline_timer.cancel()
+            self._deadline_timer = None
+
     def connect(self):
         self._apply_deadline()
         super().connect()
+
+        self._deadline_socket = self.sock
+        self._start_deadline_timer()
+        self._apply_deadline()
 
     def request(self, *args, **kwargs):
         self._apply_deadline()
@@ -242,7 +290,15 @@ class _DeadlineConnectionMixin:
 
     def getresponse(self):
         self._apply_deadline()
-        return super().getresponse()
+
+        try:
+            response = super().getresponse()
+        except Exception:
+            self.cancel_deadline()
+            raise
+
+        response._iptv_deadline_connection = self
+        return response
 
 
 class _DeadlineHTTPConnection(
@@ -348,18 +404,12 @@ class _LimitedRedirectHandler(HTTPRedirectHandler):
 
 
 def _set_response_timeout(response, deadline: float):
-    """将当前响应读取的 socket 超时设置为剩余预算。"""
+    """将响应 socket 超时设置为剩余预算。"""
     remaining = _remaining_seconds(deadline)
 
-    raw_response = getattr(response, "fp", None)
-    raw_socket = None
-
-    if raw_response is not None:
-        raw = getattr(raw_response, "raw", None)
-        raw_socket = getattr(raw, "_sock", None)
-
-        if raw_socket is None:
-            raw_socket = getattr(raw_response, "_sock", None)
+    buffered = getattr(response, "fp", None)
+    raw = getattr(buffered, "raw", None)
+    raw_socket = getattr(raw, "_sock", None)
 
     if raw_socket is None:
         raise SourceDownloadError(
@@ -370,9 +420,11 @@ def _set_response_timeout(response, deadline: float):
 
 
 def _read_response(response, size: int, deadline: float) -> bytes:
-    """在读取前重新设置剩余时间，防止慢速传输无限延长。"""
+    """每次只读取一段数据，并检查统一截止时间。"""
     _set_response_timeout(response, deadline)
-    data = response.read(size)
+
+    data = response.read1(size)
+
     _remaining_seconds(deadline)
     return data
 
@@ -443,76 +495,120 @@ def download_url(
             request,
             timeout=timeout_seconds,
         ) as response:
-            _remaining_seconds(deadline)
-
-            status = getattr(
+            connection = getattr(
                 response,
-                "status",
-                response.getcode(),
+                "_iptv_deadline_connection",
+                None,
             )
 
-            if status not in (200, 206):
-                raise SourceDownloadError(
-                    f"HTTP 状态不符合要求：{status}"
+            try:
+                _remaining_seconds(deadline)
+
+                status = getattr(
+                    response,
+                    "status",
+                    response.getcode(),
                 )
 
-            final_url = response.geturl()
+                if status not in (200, 206):
+                    raise SourceDownloadError(
+                        f"HTTP 状态不符合要求：{status}"
+                    )
 
-            if not _valid_http_url(final_url):
-                raise SourceDownloadError(
-                    "重定向后的最终 URL 无效"
+                final_url = response.geturl()
+
+                if not _valid_http_url(final_url):
+                    raise SourceDownloadError(
+                        "重定向后的最终 URL 无效"
+                    )
+
+                content_type = (
+                    response.headers.get("Content-Type", "")
+                    .split(";")[0]
+                    .strip()
+                    .lower()
                 )
 
-            content_type = (
-                response.headers.get("Content-Type", "")
-                .split(";")[0]
-                .strip()
-                .lower()
-            )
-
-            first = _read_response(
-                response,
-                min(8192, max_bytes + 1),
-                deadline,
-            )
-
-            if len(first) > max_bytes:
-                raise SourceDownloadError(
-                    f"来源内容超过允许上限 {max_bytes} 字节"
+                first = _read_response(
+                    response,
+                    min(8192, max_bytes + 1),
+                    deadline,
                 )
 
-            is_media_type = (
-                content_type.startswith(("video/", "audio/"))
-                and "mpegurl" not in content_type
-            )
+                if len(first) > max_bytes:
+                    raise SourceDownloadError(
+                        f"来源内容超过允许上限 {max_bytes} 字节"
+                    )
 
-            if _looks_like_ts(first) or is_media_type:
-                return {
-                    "url": url,
-                    "final_url": final_url,
-                    "content": first,
-                    "content_type": content_type,
-                    "http_status": status,
-                    "truncated_media_probe": True,
-                }
-
-            content = bytearray(first)
-
-            def is_hls_manifest(data: bytes) -> bool:
-                sample = data[:max_hls_manifest_bytes]
-                text = sample.decode(
-                    "utf-8-sig",
-                    errors="ignore",
-                ).upper()
-
-                return (
-                    text.lstrip().startswith("#EXTM3U")
-                    and "#EXT-X-" in text
+                is_media_type = (
+                    content_type.startswith(("video/", "audio/"))
+                    and "mpegurl" not in content_type
                 )
 
-            hls_detected = is_hls_manifest(content)
+                if _looks_like_ts(first) or is_media_type:
+                    return {
+                        "url": url,
+                        "final_url": final_url,
+                        "content": first,
+                        "content_type": content_type,
+                        "http_status": status,
+                        "truncated_media_probe": True,
+                    }
 
-            while True:
+                content = bytearray(first)
+
+                def is_hls_manifest(data: bytes) -> bool:
+                    sample = data[:max_hls_manifest_bytes]
+                    text = sample.decode(
+                        "utf-8-sig",
+                        errors="ignore",
+                    ).upper()
+
+                    return (
+                        text.lstrip().startswith("#EXTM3U")
+                        and "#EXT-X-" in text
+                    )
+
+                hls_detected = is_hls_manifest(content)
+
+                while True:
+                    _remaining_seconds(deadline)
+
+                    content_limit = (
+                        max_hls_manifest_bytes
+                        if hls_detected
+                        else max_bytes
+                    )
+
+                    if len(content) > content_limit:
+                        label = (
+                            "HLS 播放清单"
+                            if hls_detected
+                            else "来源内容"
+                        )
+                        raise SourceDownloadError(
+                            f"{label}超过允许上限 {content_limit} 字节"
+                        )
+
+                    remaining = content_limit + 1 - len(content)
+
+                    if remaining <= 0:
+                        break
+
+                    chunk = _read_response(
+                        response,
+                        min(8192, remaining),
+                        deadline,
+                    )
+
+                    if not chunk:
+                        break
+
+                    content.extend(chunk)
+
+                    if not hls_detected:
+                        hls_detected = is_hls_manifest(content)
+
                 _remaining_seconds(deadline)
 
                 content_limit = (
@@ -531,56 +627,32 @@ def download_url(
                         f"{label}超过允许上限 {content_limit} 字节"
                     )
 
-                remaining = content_limit + 1 - len(content)
+                return {
+                    "url": url,
+                    "final_url": final_url,
+                    "content": bytes(content),
+                    "content_type": content_type,
+                    "http_status": status,
+                    "truncated_media_probe": False,
+                }
 
-                if remaining <= 0:
-                    break
-
-                chunk = _read_response(
-                    response,
-                    min(8192, remaining),
-                    deadline,
-                )
-
-                if not chunk:
-                    break
-
-                content.extend(chunk)
-
-                if not hls_detected:
-                    hls_detected = is_hls_manifest(content)
-
-            _remaining_seconds(deadline)
-
-            content_limit = (
-                max_hls_manifest_bytes
-                if hls_detected
-                else max_bytes
-            )
-
-            if len(content) > content_limit:
-                label = (
-                    "HLS 播放清单"
-                    if hls_detected
-                    else "来源内容"
-                )
-                raise SourceDownloadError(
-                    f"{label}超过允许上限 {content_limit} 字节"
-                )
-
-            return {
-                "url": url,
-                "final_url": final_url,
-                "content": bytes(content),
-                "content_type": content_type,
-                "http_status": status,
-                "truncated_media_probe": False,
-            }
+            finally:
+                if connection is not None:
+                    connection.cancel_deadline()
 
     except SourceDownloadError:
         raise
 
     except HTTPError as exc:
+        connection = getattr(
+            getattr(exc, "fp", None),
+            "_iptv_deadline_connection",
+            None,
+        )
+
+        if connection is not None:
+            connection.cancel_deadline()
+
         raise SourceDownloadError(
             f"HTTP 请求失败：{exc.code} {exc.reason}"
         ) from exc
