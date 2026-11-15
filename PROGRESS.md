@@ -1,19 +1,18 @@
+IPTV-Direct — PROGRESS.md
 
-# IPTV-Direct — PROGRESS.md
-
-**版本：** 1.3  
-**项目状态：** 初始施工阶段  
-**记录原则：** 只记录仓库中实际存在的内容、真实开发进度和实际测试结果，不把计划或文件创建当成项目功能完成。
+版本： 1.3
+项目状态： 初始施工阶段
+记录原则： 只记录仓库中实际存在的内容、真实开发进度和实际测试结果，不把计划或文件创建当成项目功能完成。
 
 ---
 
-## 一、当前项目状态
+一、当前项目状态
 
 IPTV-Direct 是从零开始的新项目。
 
-项目目标、正式技术标准和验收要求以 `MASTER_PLAN.md` 为准。
+项目目标、正式技术标准和验收要求以 "MASTER_PLAN.md" 为准。
 
-程序执行顺序和数据交接以 `CORE_FLOW.md` 为准。
+程序执行顺序和数据交接以 "CORE_FLOW.md" 为准。
 
 本文件只记录实际施工进度。
 
@@ -31,45 +30,43 @@ IPTV-Direct 是从零开始的新项目。
 
 ---
 
-## 二、当前仓库文件情况
+二、当前仓库文件情况
 
-| 文件或目录 | 当前状态 | 说明 |
-|---|---|---|
-| `MASTER_PLAN.md` | 已建立 | 正式标准文件 |
-| `CORE_FLOW.md` | 已建立 | 核心执行流程文件 |
-| `README.md` | 已建立 | 项目说明文件 |
-| `PROGRESS.md` | 已建立 | 本文件，记录实际施工进度 |
-| `.github/workflows/iptv-direct.yml` | 已建立 | 当前已有手动诊断工作流 |
-| `tools/globalping_api_test.py` | 已建立 | Globalping 独立诊断工具 |
-| `channels.txt` | 已建立并核验 | 目前只有注释示例，没有实际频道名称 |
-| `manual.txt` | 已建立并核验 | 目前没有实际来源 |
-| `sources.json` | 已建立并核验 | 当前 sources 为空数组 |
-| `settings.json` | 已建立并核验 | 正式参数与 MASTER_PLAN.md 对应 |
-| `main.py` | 已建立 | 已接入频道配置读取和来源配置整理 |
-| `collector.py` | 已建立 | 已实现人工来源和自动来源配置读取、校验 |
-| `normalizer.py` | 已建立 | 已实现频道配置解析和精确匹配基础函数 |
-| `checker.py` | 未建立 | 本地线路检测程序 |
-| `globalping.py` | 未建立 | 正式 Globalping 检测程序 |
-| `publisher.py` | 未建立 | 线路筛选、订阅生成和安全发布程序 |
-| `output/iptv.m3u` | 未生成 | 正式 M3U 订阅 |
-| `output/iptv.txt` | 未生成 | 正式 TXT 订阅 |
+文件或目录| 当前状态| 说明
+"MASTER_PLAN.md"| 已建立| 正式标准文件
+"CORE_FLOW.md"| 已建立| 核心执行流程文件
+"README.md"| 已建立| 项目说明文件
+"PROGRESS.md"| 已建立| 本文件，记录实际施工进度
+".github/workflows/iptv-direct.yml"| 已建立| 当前已有手动诊断工作流
+"tools/globalping_api_test.py"| 已建立| Globalping 独立诊断工具
+"channels.txt"| 已建立并核验| 目前只有注释示例，没有实际频道名称
+"manual.txt"| 已建立并核验| 目前没有实际来源
+"sources.json"| 已建立并核验| 当前 sources 为空数组
+"settings.json"| 已建立并核验| 正式参数与 MASTER_PLAN.md 对应
+"main.py"| 已建立| 已接入频道配置读取和来源配置整理
+"collector.py"| 已建立| 已实现人工来源和自动来源配置读取、校验
+"normalizer.py"| 已建立| 已实现频道配置解析和精确匹配基础函数
+"checker.py"| 未建立| 本地线路检测程序
+"globalping.py"| 未建立| 正式 Globalping 检测程序
+"publisher.py"| 未建立| 线路筛选、订阅生成和安全发布程序
+"output/iptv.m3u"| 未生成| 正式 M3U 订阅
+"output/iptv.txt"| 未生成| 正式 TXT 订阅
 
 ---
 
-## 三、实施阶段进度
+三、实施阶段进度
 
-| 阶段 | 施工内容 | 当前状态 |
-|---|---|---|
-| 1 | 项目结构与统一配置 | 配置文件及基础主程序已建立，整体验收待完成 |
-| 2 | 频道配置 | 基础读取、检查和精确匹配函数已建立，整体验收未完成 |
-| 3 | 人工来源和自动来源 | 基础读取、校验和主程序接入已完成，本地模拟测试通过 |
-| 4 | 来源下载和内容解析 | 未开始 |
-| 5 | 线路规范化、频道匹配和去重 | 未开始 |
-| 6 | IPv4、HTTP、HLS、TS 本地检测 | 未开始 |
-| 7 | Globalping 正式检测接入 | 未开始 |
-| 8 | 线路筛选和订阅生成 | 未开始 |
-| 9 | 发布保护和失败恢复 | 未开始 |
-| 10 | 自动化和整体验收 | 未开始 |
+阶段| 施工内容| 当前状态
+1| 项目结构与统一配置| 配置文件及基础主程序已建立，整体验收待完成
+2| 频道配置| 基础读取、检查和精确匹配函数已建立，整体验收未完成
+3| 人工来源和自动来源| 基础读取、校验和主程序接入已完成，本地模拟测试通过
+4| 来源下载和内容解析| 未开始
+5| 线路规范化、频道匹配和去重| 未开始
+6| IPv4、HTTP、HLS、TS 本地检测| 未开始
+7| Globalping 正式检测接入| 未开始
+8| 线路筛选和订阅生成| 未开始
+9| 发布保护和失败恢复| 未开始
+10| 自动化和整体验收| 未开始
 
 说明：
 
@@ -81,44 +78,44 @@ IPTV-Direct 是从零开始的新项目。
 
 ---
 
-## 四、已建立内容及验证情况
+四、已建立内容及验证情况
 
-### 4.1 项目文档
+4.1 项目文档
 
-- [x] `MASTER_PLAN.md` 已建立并提交。
-- [x] `CORE_FLOW.md` 已建立并提交。
-- [x] `README.md` 已建立。
-- [x] `PROGRESS.md` 已建立。
+- [x] "MASTER_PLAN.md" 已建立并提交。
+- [x] "CORE_FLOW.md" 已建立并提交。
+- [x] "README.md" 已建立。
+- [x] "PROGRESS.md" 已建立。
 
 文档建立不代表程序功能已经完成。
 
-### 4.2 配置文件
+4.2 配置文件
 
-- [x] `channels.txt` 已建立，格式为每行一个频道名称。
-- [x] `manual.txt` 已建立，格式为每行一个 HTTP 或 HTTPS 网址。
-- [x] `sources.json` 已建立，JSON 格式正确，当前 sources 为空数组。
-- [x] `settings.json` 已建立，JSON 格式正确，正式参数与 `MASTER_PLAN.md` 对应。
+- [x] "channels.txt" 已建立，格式为每行一个频道名称。
+- [x] "manual.txt" 已建立，格式为每行一个 HTTP 或 HTTPS 网址。
+- [x] "sources.json" 已建立，JSON 格式正确，当前 sources 为空数组。
+- [x] "settings.json" 已建立，JSON 格式正确，正式参数与 "MASTER_PLAN.md" 对应。
 
-当前 `channels.txt` 只有注释示例，没有实际频道名称。因此主程序读取该文件时会按规则报告没有有效频道，不能将这种情况记录为正常频道配置读取成功。
+当前 "channels.txt" 只有注释示例，没有实际频道名称。因此主程序读取该文件时会按规则报告没有有效频道，不能将这种情况记录为正常频道配置读取成功。
 
 配置文件建立不代表来源采集、频道识别或线路检测功能已经实现。
 
-### 4.3 Globalping 诊断工具
+4.3 Globalping 诊断工具
 
-- [x] `tools/globalping_api_test.py` 已建立。
+- [x] "tools/globalping_api_test.py" 已建立。
 - [x] 已建立对应的 GitHub Actions 手动诊断入口。
 - [ ] 尚未取得本进度文件记录的实际运行验收结果。
 - [ ] 尚未完成正式业务程序中的 Globalping 接入。
 
 现有诊断工具使用公开 Mux HLS 测试视频，不代表已经检测真实 IPTV 直播源，也不能证明中国移动国内真实播放成功。
 
-### 4.4 main.py
+4.4 main.py
 
 - [x] 已建立统一主程序入口。
 - [x] 已建立正式运行和测试运行参数入口。
 - [x] 已建立四个根目录配置文件的读取入口。
-- [x] 已接入 `normalizer.load_channels()`。
-- [x] 已接入 `collector.prepare_sources()`。
+- [x] 已接入 "normalizer.load_channels()"。
+- [x] 已接入 "collector.prepare_sources()"。
 - [x] 已接入人工来源和自动来源配置整理。
 - [x] 已保留正式参数配置检查。
 - [ ] 尚未接入来源下载和完整业务执行流程。
@@ -126,7 +123,7 @@ IPTV-Direct 是从零开始的新项目。
 
 当前主程序在配置检查后会安全结束，尚不能执行完整 IPTV 采集和订阅生成。
 
-### 4.5 collector.py
+4.5 collector.py
 
 - [x] 已建立人工来源读取。
 - [x] 已忽略空行和注释行。
@@ -134,14 +131,14 @@ IPTV-Direct 是从零开始的新项目。
 - [x] 已建立自动来源配置读取。
 - [x] 已检查来源 ID、名称、URL、启用状态和来源模式。
 - [x] 已检查重复来源 ID。
-- [x] 已支持 `playlist` 和 `index` 两种来源模式配置。
+- [x] 已支持 "playlist" 和 "index" 两种来源模式配置。
 - [x] 已跳过禁用来源。
 - [x] 单条来源配置错误会记录原因，不影响其他有效来源继续读取。
 - [x] 已区分人工来源和自动来源，并保留来源优先级及顺序信息。
-- [x] 已接入 `main.py`。
+- [x] 已接入 "main.py"。
 - [ ] 尚未实现来源网址下载。
 - [ ] 尚未实现索引页面链接提取。
-- [ ] 尚未实现下载内容交给 `normalizer.py` 的完整流程。
+- [ ] 尚未实现下载内容交给 "normalizer.py" 的完整流程。
 - [ ] 尚未完成真实来源采集验收。
 
 本阶段本地模拟测试：
@@ -157,7 +154,7 @@ IPTV-Direct 是从零开始的新项目。
 
 测试使用临时配置和虚拟网址，没有进行真实网络下载。
 
-### 4.6 normalizer.py
+4.6 normalizer.py
 
 - [x] 已建立频道配置读取功能。
 - [x] 已建立空行和注释行忽略功能。
@@ -186,28 +183,28 @@ IPTV-Direct 是从零开始的新项目。
 
 以上是本地基础功能测试，不代表完整订阅内容解析已经实现。
 
-### 4.7 正式业务程序
+4.7 正式业务程序
 
 当前六个正式业务程序的建立情况：
 
-- [x] `main.py`：基础入口、配置读取和来源整理已建立。
-- [x] `collector.py`：人工来源和自动来源配置读取已建立。
-- [x] `normalizer.py`：频道配置基础功能已建立，其他职责尚未完成。
-- [ ] `checker.py`：尚未建立。
-- [ ] `globalping.py`：尚未建立。
-- [ ] `publisher.py`：尚未建立。
+- [x] "main.py"：基础入口、配置读取和来源整理已建立。
+- [x] "collector.py"：人工来源和自动来源配置读取已建立。
+- [x] "normalizer.py"：频道配置基础功能已建立，其他职责尚未完成。
+- [ ] "checker.py"：尚未建立。
+- [ ] "globalping.py"：尚未建立。
+- [ ] "publisher.py"：尚未建立。
 
 正式线路下载、完整解析、检测、筛选、订阅生成和发布功能均尚未实现。
 
-### 4.8 正式订阅输出
+4.8 正式订阅输出
 
-- [ ] `output/iptv.m3u` 尚未生成。
-- [ ] `output/iptv.txt` 尚未生成。
+- [ ] "output/iptv.m3u" 尚未生成。
+- [ ] "output/iptv.txt" 尚未生成。
 - [ ] 两份订阅的一致性和安全发布尚未完成验收。
 
 ---
 
-## 五、当前待办事项
+五、当前待办事项
 
 1. 完成第一阶段项目结构和统一配置入口验收。
 2. 完成第二阶段频道配置及实际频道匹配验收。
@@ -217,15 +214,15 @@ IPTV-Direct 是从零开始的新项目。
 6. 接入 Globalping 正式辅助检测。
 7. 实现有效线路筛选、M3U 和 TXT 订阅生成。
 8. 实现发布质量保护、失败恢复和自动化运行。
-9. 按照 `MASTER_PLAN.md` 和 `CORE_FLOW.md` 完成各阶段测试及最终验收。
+9. 按照 "MASTER_PLAN.md" 和 "CORE_FLOW.md" 完成各阶段测试及最终验收。
 
 以上均为待办事项，不代表已经完成。
 
 ---
 
-## 六、测试记录
+六、测试记录
 
-### 6.1 normalizer.py 本地基础测试
+6.1 normalizer.py 本地基础测试
 
 测试内容：
 
@@ -241,7 +238,7 @@ IPTV-Direct 是从零开始的新项目。
 
 测试范围限制：不代表真实来源内容解析、线路检测或完整业务流程通过。
 
-### 6.2 main.py 与 collector.py 集成模拟测试
+6.2 main.py 与 collector.py 集成模拟测试
 
 测试内容：
 
@@ -266,19 +263,19 @@ IPTV-Direct 是从零开始的新项目。
 - 未执行真实 IPTV 线路检测。
 - 未取得 GitHub Actions 实际执行验收结果。
 
-### 6.3 GitHub 仓库核对
+6.3 GitHub 仓库核对
 
 已重新读取 GitHub 仓库中的：
 
-- `main.py`
-- `collector.py`
-- `normalizer.py`
-- `channels.txt`
-- `manual.txt`
-- `sources.json`
-- `settings.json`
+- "main.py"
+- "collector.py"
+- "normalizer.py"
+- "channels.txt"
+- "manual.txt"
+- "sources.json"
+- "settings.json"
 
-确认 `main.py` 已调用 `collector.py` 的来源整理功能，且当前配置文件内容与本次测试所说明的状态一致。
+确认 "main.py" 已调用 "collector.py" 的来源整理功能，且当前配置文件内容与本次测试所说明的状态一致。
 
 GitHub 文件核对不等于 GitHub Actions 实际运行通过。
 
@@ -295,14 +292,14 @@ GitHub 文件核对不等于 GitHub Actions 实际运行通过。
 
 ---
 
-## 七、进度更新规则
+七、进度更新规则
 
 1. 只记录实际发生的开发和测试工作。
 2. 文件已提交不等于对应功能已经实现。
 3. 程序能够运行不等于功能验收通过。
-4. 只有取得实际测试证据并符合 `MASTER_PLAN.md` 的验收要求，才能标记为已通过。
+4. 只有取得实际测试证据并符合 "MASTER_PLAN.md" 的验收要求，才能标记为已通过。
 5. 每次完成阶段任务后及时更新本文件。
 6. 不在本文件另行制定技术参数、检测标准或线路准入规则。
-7. 程序职责和正式技术标准以 `MASTER_PLAN.md` 为准，不得在本文件另行改变。
+7. 程序职责和正式技术标准以 "MASTER_PLAN.md" 为准，不得在本文件另行改变。
 
 进度记录最终原则：真实、准确、可核验。
