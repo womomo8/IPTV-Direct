@@ -572,7 +572,7 @@ class Detector:
                     "status": PASS,
                     "reason": "Range 数据通过 5 个 TS 同步位置检查",
                 }
-                          result["checks"]["hls"] = {
+                result["checks"]["hls"] = {
                     "status": "N/A",
                     "reason": "已识别为直接 TS，HLS 检测不适用",
                 }
