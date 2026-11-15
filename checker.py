@@ -572,9 +572,9 @@ class Detector:
                     "status": PASS,
                     "reason": "Range 数据通过 5 个 TS 同步位置检查",
                 }
-                result["checks"]["hls"] = {
-                    "status": INCOMPLETE,
-                    "reason": "该线路是直接 TS，不是 HLS 清单",
+                          result["checks"]["hls"] = {
+                    "status": "N/A",
+                    "reason": "已识别为直接 TS，HLS 检测不适用",
                 }
             else:
                 result["checks"]["hls"] = {
