@@ -1,0 +1,26 @@
+
+name: IPTV-Direct Unified Workflow
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  globalping-diagnostic:
+    name: Globalping China IPv4 Diagnostic
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Run Globalping API diagnostic
+        run: python tools/globalping_api_test.py
