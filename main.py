@@ -227,6 +227,13 @@ def collect_and_parse(config: dict[str, Any]) -> dict[str, Any]:
 
         downloaded = item["download"]
 
+        # 将下载后的最终地址交给 normalizer，
+        # 确保相对线路 URL 使用重定向后的地址解析。
+        source = {
+            **source,
+            "final_url": downloaded["final_url"],
+        }
+
         remaining = max_total - total_candidates
         if remaining <= 0:
             stopped_reason = f"达到全部候选总上限 {max_total}"
