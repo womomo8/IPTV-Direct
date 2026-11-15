@@ -271,10 +271,7 @@ def collect_and_parse(config: dict[str, Any]) -> dict[str, Any]:
         total_candidates += source_candidate_count
         duplicate_candidates += normalized["duplicate_candidates"]
 
-        matched_count = sum(
-            1 for candidate in candidates
-            if candidate.get("channel") is not None
-        )
+        matched_count = normalized["matched_target_candidates"]
 
         parsed_sources.append({
             "source": source,
