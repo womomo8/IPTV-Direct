@@ -241,6 +241,7 @@ def collect_and_parse(config: dict[str, Any]) -> dict[str, Any]:
                 seen_urls=seen_urls,
                 content_type=downloaded["content_type"],
                 max_hls_manifest_bytes=max_hls_bytes,
+                max_candidates_remaining=remaining,
             )
         except (TypeError, ValueError) as exc:
             errors.append(
@@ -259,14 +260,9 @@ def collect_and_parse(config: dict[str, Any]) -> dict[str, Any]:
             )
             continue
 
-        # 总候选上限由 main 统一汇总和控制；
-        # 单来源上限及 URL 去重由 normalizer 执行。
-        source_candidate_count = min(
-            normalized["extracted_candidates"],
-            remaining,
-        )
-
-        candidates = normalized["candidates"][:remaining]
+        # normalizer 同时执行单来源限制和全轮剩余额度限制。
+        source_candidate_count = normalized["extracted_candidates"]
+        candidates = normalized["candidates"]
 
         total_candidates += source_candidate_count
         duplicate_candidates += normalized["duplicate_candidates"]
