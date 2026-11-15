@@ -1,4 +1,3 @@
-
 name: IPTV-Direct Unified Workflow
 
 on:
@@ -9,16 +8,16 @@ on:
         required: true
         type: choice
         options:
-          - 手动测试
-        default: 手动测试
+          - 手动诊断
+        default: 手动诊断
 
 permissions:
   contents: read
 
 jobs:
   globalping-diagnostic:
-    name: 手动测试 - Globalping 中国 IPv4 诊断
-    if: ${{ inputs.mode == '手动测试' }}
+    name: 手动诊断 - Globalping 中国 IPv4 诊断
+    if: ${{ inputs.mode == '手动诊断' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -32,7 +31,7 @@ jobs:
           python-version: "3.x"
 
       - name: Show selected mode
-        run: echo "运行模式：手动测试"
+        run: echo "运行模式：手动诊断"
 
       - name: Run Globalping API diagnostic
         run: python tools/globalping_api_test.py
