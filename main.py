@@ -2,8 +2,7 @@
 #!/usr/bin/env python3
 """IPTV-Direct entry point.
 
-建立统一配置入口，并调用 normalizer.py
-读取和检查目标频道配置。
+建立统一配置入口，并调用 collector.py 整理来源配置。
 其他业务流程将在后续阶段接入。
 """
 
@@ -15,6 +14,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from collector import SourceConfigError, prepare_sources
 from normalizer import ChannelConfigError, load_channels
 
 ROOT = Path(__file__).resolve().parent
@@ -152,36 +152,28 @@ def load_configuration(root: Path = ROOT) -> dict[str, Any]:
         if not (root / filename).is_file():
             raise ValueError(f"缺少配置文件：{filename}")
 
-    # 频道配置统一由 normalizer.py 负责读取和检查。
     try:
-        channels = load_channels(
-            str(root / "channels.txt")
-        )
+        channels = load_channels(str(root / "channels.txt"))
     except ChannelConfigError as exc:
         raise ValueError(str(exc)) from exc
 
     manual_raw = _read_text_file(root / "manual.txt")
-    sources = _read_json_file(root / "sources.json")
+    sources_config = _read_json_file(root / "sources.json")
     settings = _read_json_file(root / "settings.json")
-
-    if not isinstance(sources.get("sources"), list):
-        raise ValueError(
-            "sources.json 必须包含 sources 数组"
-        )
 
     _check_settings(settings)
 
-    manual_entries = [
-        line.strip()
-        for line in manual_raw.splitlines()
-        if line.strip()
-        and not line.lstrip().startswith("#")
-    ]
+    try:
+        source_data = prepare_sources(manual_raw, sources_config)
+    except SourceConfigError as exc:
+        raise ValueError(str(exc)) from exc
 
     return {
         "channels": channels,
-        "manual_entries": manual_entries,
-        "sources": sources["sources"],
+        "manual_sources": source_data["manual_sources"],
+        "automatic_sources": source_data["automatic_sources"],
+        "disabled_sources": source_data["disabled_sources"],
+        "source_errors": source_data["errors"],
         "settings": settings,
     }
 
@@ -226,13 +218,17 @@ def main(argv: list[str] | None = None) -> int:
     print(
         "配置读取成功："
         f"目标频道 {len(config['channels'])} 个，"
-        f"人工来源 {len(config['manual_entries'])} 条，"
-        f"自动来源配置 {len(config['sources'])} 条。"
+        f"人工来源 {len(config['manual_sources'])} 条，"
+        f"启用的自动来源 {len(config['automatic_sources'])} 条，"
+        f"禁用的自动来源 {config['disabled_sources']} 条。"
     )
 
+    for error in config["source_errors"]:
+        print(f"来源配置警告：{error}", file=sys.stderr)
+
     print(
-        "当前施工阶段尚未接入完整业务流程，"
-        "本次运行在配置检查后安全结束。"
+        "当前施工阶段尚未接入来源下载和完整业务流程，"
+        "本次运行在来源配置检查后安全结束。"
     )
 
     return 2
