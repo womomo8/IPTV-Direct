@@ -167,17 +167,22 @@ class Detector:
             raise CheckError(FAIL, "HTTP Content-Length 无效", connected)
         return int(value)
 
-    @staticmethod
+     @staticmethod
     def _content_range(value, connected, limit):
         match = re.fullmatch(
-            r"bytes ([0-9]+)-([0-9]+)/([0-9]+|\*)"
+            r"bytes ([0-9]+)-([0-9]+)/([0-9]+|\*)",
             value or "",
             re.IGNORECASE,
         )
         if not match:
-            raise CheckError(FAIL, "HTTP 206 的 Content-Range 无效", connected)
+            raise CheckError(
+                FAIL,
+                "HTTP 206 的 Content-Range 无效",
+                connected,
+            )
 
-        start, end = int(match.group(1)), int(match.group(2))
+        start = int(match.group(1))
+        end = int(match.group(2))
         total = None if match.group(3) == "*" else int(match.group(3))
 
         if (
@@ -186,7 +191,11 @@ class Detector:
             or end >= limit
             or (total is not None and end >= total)
         ):
-            raise CheckError(FAIL, "HTTP 206 的范围或总长度无效", connected)
+            raise CheckError(
+                FAIL,
+                "HTTP 206 的范围或总长度无效",
+                connected,
+            )
 
         return start, end, total
 
