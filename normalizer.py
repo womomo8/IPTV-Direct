@@ -29,6 +29,22 @@ def load_channels(path):
     return channels
 
 
+def _is_absolute_http_url(value):
+    """判断是否为绝对 HTTP/HTTPS URL，不区分协议头大小写。"""
+    if not isinstance(value, str) or not value:
+        return False
+
+    try:
+        parsed = urlsplit(value)
+        return (
+            parsed.scheme.lower() in ("http", "https")
+            and bool(parsed.netloc)
+            and bool(parsed.hostname)
+        )
+    except ValueError:
+        return False
+
+
 def normalize_url(value):
     """规范化 HTTP/HTTPS URL，保留有效端口和查询参数。"""
     if not isinstance(value, str) or not value.strip():
@@ -54,6 +70,9 @@ def normalize_url(value):
         or parsed.password is not None
     ):
         raise ValueError("只接受不含用户名密码的 HTTP/HTTPS URL")
+
+    if parsed.netloc.endswith(":"):
+        raise ValueError("URL 端口格式无效")
 
     if port is not None and not 1 <= port <= 65535:
         raise ValueError("URL 端口无效")
@@ -83,6 +102,9 @@ def normalize_url(value):
 def _channel_match(names, channels, aliases):
     """只按标准名称或明确别名精确匹配。"""
     targets = {name.casefold(): name for name in channels}
+
+    if aliases is not None and not isinstance(aliases, dict):
+        raise TypeError("aliases 必须是字典")
 
     alias_map = {
         str(alias).casefold(): canonical
@@ -228,7 +250,7 @@ def parse_source_content(
         if line.startswith("#"):
             continue
 
-        is_absolute_url = line.startswith(("http://", "https://"))
+        is_absolute_url = _is_absolute_http_url(line)
 
         # M3U 中非注释行均按播放地址处理，支持相对 URL。
         is_m3u_url = is_m3u and not line.startswith("#")
@@ -274,7 +296,7 @@ def parse_source_content(
         if not is_m3u and "," in line:
             name, url = (part.strip() for part in line.split(",", 1))
 
-            if url.startswith(("http://", "https://")):
+            if _is_absolute_http_url(url):
                 channel = _channel_match([name], channels, aliases)
 
                 candidate = {
@@ -380,8 +402,7 @@ def normalize_source_content(
             )
             continue
 
-        # 未匹配频道的 URL 不占用全局去重记录，
-        # 避免挡住后续带有明确频道信息的同一线路。
+        # 未匹配频道的 URL 不占用全局去重记录。
         if candidate["channel"] is None:
             continue
 
