@@ -7,18 +7,24 @@ def normalize_source_content(
     content_type: str = "",
     max_hls_manifest_bytes: int = 1048576,
     aliases: Optional[Mapping[str, str]] = None,
+    max_candidates_remaining: Optional[int] = None,
 ) -> dict[str, Any]:
-    """解析单个来源，执行来源候选上限、URL归一和跨来源去重。
+    """解析单个来源，执行来源上限、全轮剩余额度、URL归一和去重。"""
 
-    有效来源统计在去重前完成，避免重复 URL 导致有效来源漏计。
-    seen_urls 由调用方在整轮任务中共用。
-    """
     if (
         not isinstance(max_candidates_per_source, int)
         or isinstance(max_candidates_per_source, bool)
         or max_candidates_per_source <= 0
     ):
         raise ValueError("单来源候选上限必须是正整数")
+
+    if max_candidates_remaining is not None and (
+        not isinstance(max_candidates_remaining, int)
+        or isinstance(max_candidates_remaining, bool)
+        or max_candidates_remaining <= 0
+    ):
+        raise ValueError("本轮剩余候选额度必须是正整数")
+
     if not isinstance(seen_urls, set):
         raise TypeError("seen_urls 必须是整轮共用的 set")
 
@@ -44,12 +50,24 @@ def normalize_source_content(
 
     all_candidates = parsed["candidates"]
     extracted_count = len(all_candidates)
-    limit_reached = extracted_count > max_candidates_per_source
 
-    # 单来源候选上限先执行。
-    candidates = all_candidates[:max_candidates_per_source]
+    candidate_limit = max_candidates_per_source
 
-    # 在 URL 去重之前统计目标频道候选，供 main.py 判断有效来源。
+    if max_candidates_remaining is not None:
+        candidate_limit = min(
+            candidate_limit,
+            max_candidates_remaining,
+        )
+
+    source_limit_reached = (
+        extracted_count > max_candidates_per_source
+        and candidate_limit == max_candidates_per_source
+    )
+
+    # 先执行单来源上限和全轮剩余额度。
+    candidates = all_candidates[:candidate_limit]
+
+    # 在 URL 去重前统计目标频道候选。
     matched_target_candidates = sum(
         1 for candidate in candidates
         if candidate.get("channel") is not None
@@ -60,6 +78,7 @@ def normalize_source_content(
 
     for candidate in candidates:
         raw_url = candidate.get("raw_url")
+
         try:
             normalized = normalize_url(raw_url)
         except (TypeError, ValueError):
@@ -70,13 +89,15 @@ def normalize_source_content(
             continue
 
         seen_urls.add(normalized)
+
         retained.append({
             **candidate,
             "normalized_url": normalized,
         })
 
     result_errors = list(parsed["errors"])
-    if limit_reached:
+
+    if source_limit_reached:
         result_errors.append(
             f"达到单来源候选上限 {max_candidates_per_source}，"
             "当前来源其余候选已停止处理"
@@ -86,11 +107,12 @@ def normalize_source_content(
         **parsed,
         "candidates": retained,
         "extracted_candidates": min(
-            extracted_count, max_candidates_per_source
+            extracted_count,
+            candidate_limit,
         ),
         "matched_target_candidates": matched_target_candidates,
         "duplicate_candidates": duplicate_count,
         "retained_candidates": len(retained),
-        "limit_reached": limit_reached,
+        "limit_reached": source_limit_reached,
         "errors": result_errors,
     }
