@@ -2,8 +2,8 @@
 #!/usr/bin/env python3
 """IPTV-Direct entry point.
 
-建立统一配置入口，并调用 collector.py 整理来源配置。
-其他业务流程将在后续阶段接入。
+统一读取配置、调度来源下载及内容识别。
+后续线路归一、检测和发布流程将在对应阶段接入。
 """
 
 from __future__ import annotations
@@ -14,11 +14,24 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from collector import SourceConfigError, prepare_sources
-from normalizer import ChannelConfigError, load_channels
+from collector import (
+    SourceConfigError,
+    iter_source_contents,
+    prepare_sources,
+)
+from normalizer import (
+    ChannelConfigError,
+    load_channels,
+    parse_source_content,
+)
 
 ROOT = Path(__file__).resolve().parent
-CONFIG_FILES = ("channels.txt", "manual.txt", "sources.json", "settings.json")
+CONFIG_FILES = (
+    "channels.txt",
+    "manual.txt",
+    "sources.json",
+    "settings.json",
+)
 
 
 def _read_text_file(path: Path) -> str:
@@ -178,6 +191,134 @@ def load_configuration(root: Path = ROOT) -> dict[str, Any]:
     }
 
 
+def collect_and_parse(config: dict[str, Any]) -> dict[str, Any]:
+    """逐条下载并识别来源内容，按正式数量上限停止。"""
+
+    collection = config["settings"]["collection"]
+    detection = config["settings"]["detection"]
+
+    max_valid_sources = collection["max_valid_sources"]
+    max_per_source = collection["max_candidates_per_source"]
+    max_total = collection["max_candidates_total"]
+    max_hls_bytes = detection["max_hls_manifest_bytes"]
+
+    parsed_sources = []
+    errors = []
+    valid_sources = 0
+    total_candidates = 0
+    stopped_reason = "所有配置来源均已处理"
+
+    contents = iter_source_contents(
+        config["manual_sources"],
+        config["automatic_sources"],
+        config["settings"],
+    )
+
+    for item in contents:
+        source = item["source"]
+
+        if item["errors"]:
+            errors.extend(
+                f"{source.get('name', source.get('url', '来源'))}：{error}"
+                for error in item["errors"]
+            )
+            continue
+
+        downloaded = item["download"]
+
+        try:
+            parsed = parse_source_content(
+                downloaded["content"],
+                source,
+                config["channels"],
+                content_type=downloaded["content_type"],
+                max_hls_manifest_bytes=max_hls_bytes,
+            )
+        except (TypeError, ValueError) as exc:
+            errors.append(
+                f"{source.get('name', source.get('url', '来源'))}："
+                f"内容解析异常：{exc}"
+            )
+            continue
+
+        if not parsed["recognized"]:
+            detail = "；".join(parsed["errors"]) or "无法识别内容格式"
+            errors.append(
+                f"{source.get('name', source.get('url', '来源'))}：{detail}"
+            )
+            continue
+
+        candidates = parsed["candidates"]
+
+        if len(candidates) > max_per_source:
+            candidates = candidates[:max_per_source]
+            errors.append(
+                f"{source.get('name', source.get('url', '来源'))}："
+                f"候选条目达到单来源上限 {max_per_source}，"
+                "其余条目已停止处理"
+            )
+
+        remaining = max_total - total_candidates
+
+        if remaining <= 0:
+            stopped_reason = f"达到全部候选总上限 {max_total}"
+            break
+
+        if len(candidates) > remaining:
+            candidates = candidates[:remaining]
+            errors.append(
+                f"达到全部候选总上限 {max_total}，"
+                "已停止当前来源后续条目"
+            )
+
+        total_candidates += len(candidates)
+
+        matched_count = sum(
+            1 for candidate in candidates
+            if candidate.get("channel") is not None
+        )
+
+        parsed_sources.append({
+            "source": source,
+            "format": parsed["format"],
+            "recognized": parsed["recognized"],
+            "candidates": candidates,
+            "matched_target_candidates": matched_count,
+            "download": {
+                "requested_url": downloaded["url"],
+                "final_url": downloaded["final_url"],
+                "content_type": downloaded["content_type"],
+                "http_status": downloaded["http_status"],
+                "truncated_media_probe": downloaded["truncated_media_probe"],
+            },
+        })
+
+        errors.extend(
+            f"{source.get('name', source.get('url', '来源'))}：{error}"
+            for error in parsed["errors"]
+        )
+
+        # 有效来源必须至少含有一条可精确匹配目标频道的候选。
+        if matched_count > 0:
+            valid_sources += 1
+
+        if valid_sources >= max_valid_sources:
+            stopped_reason = f"达到有效来源上限 {max_valid_sources}"
+            break
+
+        if total_candidates >= max_total:
+            stopped_reason = f"达到全部候选总上限 {max_total}"
+            break
+
+    return {
+        "sources": parsed_sources,
+        "errors": errors,
+        "valid_sources": valid_sources,
+        "total_candidates": total_candidates,
+        "stopped_reason": stopped_reason,
+    }
+
+
 def parse_args(
     argv: list[str] | None = None
 ) -> argparse.Namespace:
@@ -226,9 +367,29 @@ def main(argv: list[str] | None = None) -> int:
     for error in config["source_errors"]:
         print(f"来源配置警告：{error}", file=sys.stderr)
 
+    if args.mode == "test":
+        print(
+            "测试运行不会下载真实来源；"
+            "当前测试数据流程尚未接入，本次安全结束。"
+        )
+        return 2
+
+    result = collect_and_parse(config)
+
     print(
-        "当前施工阶段尚未接入来源下载和完整业务流程，"
-        "本次运行在来源配置检查后安全结束。"
+        "来源处理结果："
+        f"已识别来源 {len(result['sources'])} 个，"
+        f"有效来源 {result['valid_sources']} 个，"
+        f"提取候选 {result['total_candidates']} 条。"
+    )
+    print(f"停止原因：{result['stopped_reason']}")
+
+    for error in result["errors"]:
+        print(f"来源处理警告：{error}", file=sys.stderr)
+
+    print(
+        "当前尚未接入 URL 归一、全局去重、线路检测和订阅发布，"
+        "本次运行在来源识别后安全结束。"
     )
 
     return 2
