@@ -1,6 +1,11 @@
+
 name: IPTV-Direct Unified Workflow
 
 on:
+  schedule:
+    # 北京时间每天 06:17（UTC 前一天 22:17）
+    - cron: "17 22 * * *"
+
   workflow_dispatch:
     inputs:
       mode:
@@ -8,18 +13,70 @@ on:
         required: true
         type: choice
         options:
+          - 手动正式运行
+          - 手动测试运行
           - 手动诊断
-        default: 手动诊断
+        default: 手动正式运行
 
 permissions:
   contents: read
 
 jobs:
-  globalping-diagnostic:
-    name: 手动诊断 - Globalping 中国 IPv4 诊断
-    if: ${{ inputs.mode == '手动诊断' }}
+  formal:
+    name: 正式运行
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' &&
+      inputs.mode == '手动正式运行')
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Show run mode
+        run: echo "运行模式：正式运行"
+
+      - name: Run IPTV-Direct
+        run: python main.py --mode formal
+
+      - name: Commit subscription updates
+        run: |
+          for file in output/iptv.m3u output/iptv.txt; do
+            if [ -f "$file" ]; then
+              git add "$file"
+            fi
+          done
+
+          if git diff --cached --quiet; then
+            echo "订阅文件没有变化，无需提交。"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "更新 IPTV 订阅"
+          git push
+
+  test:
+    name: 手动测试运行
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.mode == '手动测试运行'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository
@@ -30,7 +87,32 @@ jobs:
         with:
           python-version: "3.x"
 
-      - name: Show selected mode
+      - name: Show run mode
+        run: echo "运行模式：测试运行"
+
+      - name: Run test mode
+        run: python main.py --mode test
+
+  diagnostic:
+    name: 手动诊断 - Globalping 中国 IPv4 诊断
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.mode == '手动诊断'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Show run mode
         run: echo "运行模式：手动诊断"
 
       - name: Run Globalping API diagnostic
