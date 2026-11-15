@@ -3,7 +3,13 @@
 
 from collections import Counter
 from html.parser import HTMLParser
-from http.client import HTTPException
+from http.client import (
+    HTTPConnection,
+    HTTPException,
+    HTTPHandler,
+    HTTPSConnection,
+    HTTPSHandler,
+)
 import time
 from typing import Any, Iterator
 from urllib.error import HTTPError, URLError
@@ -202,12 +208,98 @@ def prepare_sources(
     }
 
 
+def _remaining_seconds(deadline: float) -> float:
+    """计算统一下载截止时间的剩余秒数。"""
+    remaining = deadline - time.monotonic()
+
+    if remaining <= 0:
+        raise TimeoutError("来源下载超过总时间上限")
+
+    return remaining
+
+
+class _DeadlineConnectionMixin:
+    """让连接、请求和响应头读取共用同一个截止时间。"""
+
+    def __init__(self, host, deadline, **kwargs):
+        self.deadline = deadline
+        super().__init__(host, **kwargs)
+
+    def _apply_deadline(self):
+        remaining = _remaining_seconds(self.deadline)
+        self.timeout = remaining
+
+        if self.sock is not None:
+            self.sock.settimeout(remaining)
+
+    def connect(self):
+        self._apply_deadline()
+        super().connect()
+
+    def request(self, *args, **kwargs):
+        self._apply_deadline()
+        super().request(*args, **kwargs)
+
+    def getresponse(self):
+        self._apply_deadline()
+        return super().getresponse()
+
+
+class _DeadlineHTTPConnection(
+    _DeadlineConnectionMixin,
+    HTTPConnection,
+):
+    pass
+
+
+class _DeadlineHTTPSConnection(
+    _DeadlineConnectionMixin,
+    HTTPSConnection,
+):
+    pass
+
+
+class _DeadlineHTTPHandler(HTTPHandler):
+    def __init__(self, deadline):
+        super().__init__()
+        self.deadline = deadline
+
+    def http_open(self, req):
+        return self.do_open(
+            lambda host, **kwargs: _DeadlineHTTPConnection(
+                host,
+                self.deadline,
+                **kwargs,
+            ),
+            req,
+        )
+
+
+class _DeadlineHTTPSHandler(HTTPSHandler):
+    def __init__(self, deadline):
+        super().__init__()
+        self.deadline = deadline
+
+    def https_open(self, req):
+        return self.do_open(
+            lambda host, **kwargs: _DeadlineHTTPSConnection(
+                host,
+                self.deadline,
+                **kwargs,
+            ),
+            req,
+            context=self._context,
+            check_hostname=self._check_hostname,
+        )
+
+
 class _LimitedRedirectHandler(HTTPRedirectHandler):
     """限制重定向次数，并逐次校验跳转目标。"""
 
-    def __init__(self, maximum: int):
+    def __init__(self, maximum: int, deadline: float):
         super().__init__()
         self.maximum = maximum
+        self.deadline = deadline
 
     def redirect_request(
         self,
@@ -218,6 +310,8 @@ class _LimitedRedirectHandler(HTTPRedirectHandler):
         headers,
         newurl,
     ):
+        _remaining_seconds(self.deadline)
+
         count = getattr(req, "_iptv_redirect_count", 0)
 
         if count >= self.maximum:
@@ -253,6 +347,36 @@ class _LimitedRedirectHandler(HTTPRedirectHandler):
         return redirected
 
 
+def _set_response_timeout(response, deadline: float):
+    """将当前响应读取的 socket 超时设置为剩余预算。"""
+    remaining = _remaining_seconds(deadline)
+
+    raw_response = getattr(response, "fp", None)
+    raw_socket = None
+
+    if raw_response is not None:
+        raw = getattr(raw_response, "raw", None)
+        raw_socket = getattr(raw, "_sock", None)
+
+        if raw_socket is None:
+            raw_socket = getattr(raw_response, "_sock", None)
+
+    if raw_socket is None:
+        raise SourceDownloadError(
+            "无法设置响应读取的总时间限制"
+        )
+
+    raw_socket.settimeout(remaining)
+
+
+def _read_response(response, size: int, deadline: float) -> bytes:
+    """在读取前重新设置剩余时间，防止慢速传输无限延长。"""
+    _set_response_timeout(response, deadline)
+    data = response.read(size)
+    _remaining_seconds(deadline)
+    return data
+
+
 def _looks_like_ts(data: bytes) -> bool:
     """检查连续五个 188 字节 TS 同步位置。"""
     if len(data) < 188 * 4 + 1:
@@ -274,7 +398,7 @@ def download_url(
     max_redirects: int,
     max_hls_manifest_bytes: int,
 ) -> dict[str, Any]:
-    """下载来源内容；直接媒体只读取识别所需的开头数据。"""
+    """下载来源内容，整个过程共用一个总时间预算。"""
     if not _valid_http_url(url):
         raise SourceDownloadError("来源 URL 无效")
 
@@ -297,6 +421,8 @@ def download_url(
     ):
         raise SourceDownloadError("重定向次数参数无效")
 
+    deadline = time.monotonic() + timeout_seconds
+
     request = Request(
         url,
         headers={
@@ -306,12 +432,24 @@ def download_url(
         },
     )
 
-    opener = build_opener(_LimitedRedirectHandler(max_redirects))
-    started_at = time.monotonic()
+    opener = build_opener(
+        _DeadlineHTTPHandler(deadline),
+        _DeadlineHTTPSHandler(deadline),
+        _LimitedRedirectHandler(max_redirects, deadline),
+    )
 
     try:
-        with opener.open(request, timeout=timeout_seconds) as response:
-            status = getattr(response, "status", response.getcode())
+        with opener.open(
+            request,
+            timeout=timeout_seconds,
+        ) as response:
+            _remaining_seconds(deadline)
+
+            status = getattr(
+                response,
+                "status",
+                response.getcode(),
+            )
 
             if status not in (200, 206):
                 raise SourceDownloadError(
@@ -321,7 +459,9 @@ def download_url(
             final_url = response.geturl()
 
             if not _valid_http_url(final_url):
-                raise SourceDownloadError("重定向后的最终 URL 无效")
+                raise SourceDownloadError(
+                    "重定向后的最终 URL 无效"
+                )
 
             content_type = (
                 response.headers.get("Content-Type", "")
@@ -330,12 +470,11 @@ def download_url(
                 .lower()
             )
 
-            first = response.read(min(8192, max_bytes + 1))
-
-            if time.monotonic() - started_at > timeout_seconds:
-                raise SourceDownloadError(
-                    f"来源下载超过 {timeout_seconds} 秒时间上限"
-                )
+            first = _read_response(
+                response,
+                min(8192, max_bytes + 1),
+                deadline,
+            )
 
             if len(first) > max_bytes:
                 raise SourceDownloadError(
@@ -374,6 +513,8 @@ def download_url(
             hls_detected = is_hls_manifest(content)
 
             while True:
+                _remaining_seconds(deadline)
+
                 content_limit = (
                     max_hls_manifest_bytes
                     if hls_detected
@@ -381,7 +522,11 @@ def download_url(
                 )
 
                 if len(content) > content_limit:
-                    label = "HLS 播放清单" if hls_detected else "来源内容"
+                    label = (
+                        "HLS 播放清单"
+                        if hls_detected
+                        else "来源内容"
+                    )
                     raise SourceDownloadError(
                         f"{label}超过允许上限 {content_limit} 字节"
                     )
@@ -391,12 +536,11 @@ def download_url(
                 if remaining <= 0:
                     break
 
-                chunk = response.read(min(8192, remaining))
-
-                if time.monotonic() - started_at > timeout_seconds:
-                    raise SourceDownloadError(
-                        f"来源下载超过 {timeout_seconds} 秒时间上限"
-                    )
+                chunk = _read_response(
+                    response,
+                    min(8192, remaining),
+                    deadline,
+                )
 
                 if not chunk:
                     break
@@ -406,15 +550,22 @@ def download_url(
                 if not hls_detected:
                     hls_detected = is_hls_manifest(content)
 
-            if len(content) > (
-                max_hls_manifest_bytes if hls_detected else max_bytes
-            ):
-                label = "HLS 播放清单" if hls_detected else "来源内容"
-                limit = (
-                    max_hls_manifest_bytes if hls_detected else max_bytes
+            _remaining_seconds(deadline)
+
+            content_limit = (
+                max_hls_manifest_bytes
+                if hls_detected
+                else max_bytes
+            )
+
+            if len(content) > content_limit:
+                label = (
+                    "HLS 播放清单"
+                    if hls_detected
+                    else "来源内容"
                 )
                 raise SourceDownloadError(
-                    f"{label}超过允许上限 {limit} 字节"
+                    f"{label}超过允许上限 {content_limit} 字节"
                 )
 
             return {
