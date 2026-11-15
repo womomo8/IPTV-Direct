@@ -167,7 +167,7 @@ class Detector:
             raise CheckError(FAIL, "HTTP Content-Length 无效", connected)
         return int(value)
 
-     @staticmethod
+    @staticmethod
     def _content_range(value, connected, limit):
         match = re.fullmatch(
             r"bytes ([0-9]+)-([0-9]+)/([0-9]+|\*)",
