@@ -1,3 +1,4 @@
+
 """IPTV-Direct：人工来源、自动来源采集及下载。"""
 
 from collections import Counter
@@ -41,7 +42,6 @@ def _valid_http_url(value: Any) -> bool:
             return False
 
         port = parsed.port
-
         if port is not None and not 1 <= port <= 65535:
             return False
 
@@ -73,11 +73,7 @@ def _source_key(value: str) -> str:
         netloc += f":{port}"
 
     return urlunsplit((
-        scheme,
-        netloc,
-        parsed.path or "/",
-        parsed.query,
-        "",
+        scheme, netloc, parsed.path or "/", parsed.query, ""
     ))
 
 
@@ -85,7 +81,7 @@ def prepare_sources(
     manual_text: str,
     sources_config: dict[str, Any],
 ) -> dict[str, Any]:
-    """校验并整理人工来源和启用的自动来源。"""
+    """校验人工来源、内嵌 M3U 来源和启用的自动来源。"""
     if not isinstance(manual_text, str):
         raise SourceConfigError("manual.txt 内容必须是文本")
 
@@ -93,7 +89,6 @@ def prepare_sources(
         raise SourceConfigError("sources.json 顶层必须是 JSON 对象")
 
     configured = sources_config.get("sources")
-
     if not isinstance(configured, list):
         raise SourceConfigError("sources.json 必须包含 sources 数组")
 
@@ -101,31 +96,73 @@ def prepare_sources(
     automatic_sources = []
     errors = []
     disabled_count = 0
+    lines = manual_text.splitlines()
+    line_index = 0
 
-    for line_number, raw_line in enumerate(
-        manual_text.splitlines(),
-        start=1,
-    ):
-        url = raw_line.strip()
+    while line_index < len(lines):
+        raw_line = lines[line_index]
+        value = raw_line.strip()
+        line_number = line_index + 1
 
-        if not url or url.startswith("#"):
+        if not value:
+            line_index += 1
             continue
 
-        if not _valid_http_url(url):
+        if value.upper() == "#EXTM3U":
+            # 内嵌 M3U 从 #EXTM3U 开始，到 #END-M3U 结束。
+            block = [raw_line]
+            line_index += 1
+            ended = False
+
+            while line_index < len(lines):
+                block_line = lines[line_index]
+                if block_line.strip().upper() == "#END-M3U":
+                    ended = True
+                    line_index += 1
+                    break
+                block.append(block_line)
+                line_index += 1
+
+            if not ended:
+                errors.append(
+                    f"manual.txt 第 {line_number} 行："
+                    "内嵌 M3U 缺少 #END-M3U 结束标记，已跳过"
+                )
+                continue
+
+            m3u_text = "\n".join(block).strip() + "\n"
+            manual_sources.append({
+                "url": f"manual.txt#inline-m3u-{line_number}",
+                "source_type": "manual",
+                "priority": 0,
+                "order": len(manual_sources),
+                "name": f"人工内嵌 M3U（第{line_number}行）",
+                "mode": "inline",
+                "inline_content": m3u_text,
+            })
+            continue
+
+        if value.startswith("#"):
+            line_index += 1
+            continue
+
+        if not _valid_http_url(value):
             errors.append(
                 f"manual.txt 第 {line_number} 行："
                 "不是有效的 HTTP/HTTPS URL，已跳过"
             )
+            line_index += 1
             continue
 
         manual_sources.append({
-            "url": url,
+            "url": value,
             "source_type": "manual",
             "priority": 0,
             "order": len(manual_sources),
             "name": f"人工来源第{line_number}行",
             "mode": "manual",
         })
+        line_index += 1
 
     ids = [
         item["id"].strip()
@@ -209,41 +246,24 @@ class _LimitedRedirectHandler(HTTPRedirectHandler):
         self.maximum = maximum
 
     def redirect_request(
-        self,
-        req,
-        fp,
-        code,
-        msg,
-        headers,
-        newurl,
+        self, req, fp, code, msg, headers, newurl
     ):
         count = getattr(req, "_iptv_redirect_count", 0)
 
         if count >= self.maximum:
             raise HTTPError(
-                req.full_url,
-                code,
-                "超过最大重定向次数",
-                headers,
-                fp,
+                req.full_url, code, "超过最大重定向次数", headers, fp
             )
 
         if not _valid_http_url(newurl):
             raise HTTPError(
-                req.full_url,
-                code,
+                req.full_url, code,
                 "重定向目标不是有效的 HTTP/HTTPS URL",
-                headers,
-                fp,
+                headers, fp,
             )
 
         redirected = super().redirect_request(
-            req,
-            fp,
-            code,
-            msg,
-            headers,
-            newurl,
+            req, fp, code, msg, headers, newurl
         )
 
         if redirected is not None:
@@ -258,10 +278,7 @@ def _looks_like_ts(data: bytes) -> bool:
         return False
 
     return any(
-        all(
-            data[offset + 188 * index] == 0x47
-            for index in range(5)
-        )
+        all(data[offset + 188 * index] == 0x47 for index in range(5))
         for offset in range(min(188, len(data) - 188 * 4))
     )
 
@@ -318,15 +335,12 @@ def download_url(
                 )
 
             final_url = response.geturl()
-
             if not _valid_http_url(final_url):
                 raise SourceDownloadError("重定向后的最终 URL 无效")
 
             content_type = (
                 response.headers.get("Content-Type", "")
-                .split(";")[0]
-                .strip()
-                .lower()
+                .split(";")[0].strip().lower()
             )
 
             first = response.read(min(8192, max_bytes + 1))
@@ -361,10 +375,8 @@ def download_url(
             def is_hls_manifest(data: bytes) -> bool:
                 sample = data[:max_hls_manifest_bytes]
                 text = sample.decode(
-                    "utf-8-sig",
-                    errors="ignore",
+                    "utf-8-sig", errors="ignore"
                 ).upper()
-
                 return (
                     text.lstrip().startswith("#EXTM3U")
                     and "#EXT-X-" in text
@@ -374,19 +386,18 @@ def download_url(
 
             while True:
                 content_limit = (
-                    max_hls_manifest_bytes
-                    if hls_detected
-                    else max_bytes
+                    max_hls_manifest_bytes if hls_detected else max_bytes
                 )
 
                 if len(content) > content_limit:
-                    label = "HLS 播放清单" if hls_detected else "来源内容"
+                    label = (
+                        "HLS 播放清单" if hls_detected else "来源内容"
+                    )
                     raise SourceDownloadError(
                         f"{label}超过允许上限 {content_limit} 字节"
                     )
 
                 remaining = content_limit + 1 - len(content)
-
                 if remaining <= 0:
                     break
 
@@ -401,14 +412,15 @@ def download_url(
                     break
 
                 content.extend(chunk)
-
                 if not hls_detected:
                     hls_detected = is_hls_manifest(content)
 
             if len(content) > (
                 max_hls_manifest_bytes if hls_detected else max_bytes
             ):
-                label = "HLS 播放清单" if hls_detected else "来源内容"
+                label = (
+                    "HLS 播放清单" if hls_detected else "来源内容"
+                )
                 limit = (
                     max_hls_manifest_bytes if hls_detected else max_bytes
                 )
@@ -427,22 +439,14 @@ def download_url(
 
     except SourceDownloadError:
         raise
-
     except HTTPError as exc:
         raise SourceDownloadError(
             f"HTTP 请求失败：{exc.code} {exc.reason}"
         ) from exc
-
     except (
-        URLError,
-        HTTPException,
-        TimeoutError,
-        OSError,
-        ValueError,
+        URLError, HTTPException, TimeoutError, OSError, ValueError
     ) as exc:
-        raise SourceDownloadError(
-            f"来源下载失败：{exc}"
-        ) from exc
+        raise SourceDownloadError(f"来源下载失败：{exc}") from exc
 
 
 class _PlaylistLinkParser(HTMLParser):
@@ -455,9 +459,7 @@ class _PlaylistLinkParser(HTMLParser):
     def handle_starttag(self, tag, attrs):
         if tag.lower() != "a":
             return
-
         href = dict(attrs).get("href")
-
         if isinstance(href, str) and href.strip():
             self.links.append(href.strip())
 
@@ -492,23 +494,19 @@ def extract_playlist_links(
 
     for href in parser.links:
         absolute = urljoin(index_url, href)
-
         if not _valid_http_url(absolute):
             continue
 
         path = urlsplit(absolute).path.lower()
-
         if not path.endswith((".txt", ".m3u", ".m3u8")):
             continue
 
         key = _source_key(absolute)
-
         if key in seen:
             continue
 
         seen.add(key)
         results.append(absolute)
-
         if len(results) >= maximum:
             break
 
@@ -520,7 +518,7 @@ def iter_source_contents(
     automatic_sources: list[dict[str, Any]],
     settings: dict[str, Any],
 ) -> Iterator[dict[str, Any]]:
-    """按人工优先顺序逐条下载，供 main.py 逐条处理。"""
+    """按人工优先顺序逐条处理，支持本地内嵌 M3U。"""
     detection = settings["detection"]
     collection = settings["collection"]
 
@@ -534,31 +532,47 @@ def iter_source_contents(
 
     # 第一优先级：人工来源。
     for source in manual_sources:
-        url = source["url"]
-        key = _source_key(url)
+        # 内嵌 M3U 已在 manual.txt 中，不需要联网下载。
+        if source.get("mode") == "inline":
+            content = source.get("inline_content")
+            if not isinstance(content, str) or not content.strip():
+                yield {
+                    "source": dict(source),
+                    "download": None,
+                    "errors": ["人工内嵌 M3U 内容为空或格式无效"],
+                }
+                continue
 
-        if key in seen_urls:
+            yield {
+                "source": dict(source),
+                "download": {
+                    "url": source["url"],
+                    "final_url": source["url"],
+                    "content": content.encode("utf-8"),
+                    "content_type": "application/vnd.apple.mpegurl",
+                    "http_status": "LOCAL",
+                    "truncated_media_probe": False,
+                },
+                "errors": [],
+            }
             continue
 
+        url = source["url"]
+        key = _source_key(url)
+        if key in seen_urls:
+            continue
         seen_urls.add(key)
 
         try:
             downloaded = download_url(
-                url,
-                timeout,
-                max_bytes,
-                max_redirects,
-                max_hls_bytes,
+                url, timeout, max_bytes, max_redirects, max_hls_bytes
             )
-
             seen_urls.add(_source_key(downloaded["final_url"]))
-
             yield {
                 "source": dict(source),
                 "download": downloaded,
                 "errors": [],
             }
-
         except SourceDownloadError as exc:
             yield {
                 "source": dict(source),
@@ -570,23 +584,15 @@ def iter_source_contents(
     for source in automatic_sources:
         url = source["url"]
         key = _source_key(url)
-
         if key in seen_urls:
             continue
-
         seen_urls.add(key)
 
         try:
             index_download = download_url(
-                url,
-                timeout,
-                max_bytes,
-                max_redirects,
-                max_hls_bytes,
+                url, timeout, max_bytes, max_redirects, max_hls_bytes
             )
-
             seen_urls.add(_source_key(index_download["final_url"]))
-
         except SourceDownloadError as exc:
             yield {
                 "source": dict(source),
@@ -609,7 +615,6 @@ def iter_source_contents(
                 index_download["final_url"],
                 max_index_links,
             )
-
         except (ValueError, TypeError) as exc:
             yield {
                 "source": dict(source),
@@ -628,10 +633,8 @@ def iter_source_contents(
 
         for link_index, playlist_url in enumerate(links, start=1):
             key = _source_key(playlist_url)
-
             if key in seen_urls:
                 continue
-
             seen_urls.add(key)
 
             discovered_source = {
@@ -650,15 +653,12 @@ def iter_source_contents(
                     max_redirects,
                     max_hls_bytes,
                 )
-
                 seen_urls.add(_source_key(downloaded["final_url"]))
-
                 yield {
                     "source": discovered_source,
                     "download": downloaded,
                     "errors": [],
                 }
-
             except SourceDownloadError as exc:
                 yield {
                     "source": discovered_source,
