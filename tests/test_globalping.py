@@ -8,6 +8,7 @@
 """
 
 import json
+import os
 import urllib.error
 import unittest
 from unittest.mock import Mock, patch
@@ -83,42 +84,131 @@ class ApiRequestTests(unittest.TestCase):
         response.read.return_value = b'[{"id":"p1"}]'
         response.__enter__ = Mock(return_value=response)
         response.__exit__ = Mock(return_value=False)
+
         with patch.object(gp.urllib.request, "urlopen", return_value=response):
-            status, data, headers = gp._api_request("https://example.test/probes")
+            status, data, headers = gp._api_request(
+                "https://example.test/probes"
+            )
+
         self.assertEqual(status, 200)
         self.assertEqual(data, [{"id": "p1"}])
 
+    def test_token_is_sent_as_bearer_authorization(self):
+        response = Mock()
+        response.status = 200
+        response.headers = {"Content-Type": "application/json"}
+        response.read.return_value = b'{}'
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+
+        with patch.dict(os.environ, {"GLOBALPING_API_TOKEN": "test-secret"}):
+            with patch.object(
+                gp.urllib.request,
+                "urlopen",
+                return_value=response,
+            ) as request:
+                gp._api_request("https://example.test/limits")
+
+        sent_request = request.call_args.args[0]
+        self.assertEqual(
+            sent_request.get_header("Authorization"),
+            "Bearer test-secret",
+        )
+
+    def test_missing_token_does_not_add_authorization_header(self):
+        response = Mock()
+        response.status = 200
+        response.headers = {"Content-Type": "application/json"}
+        response.read.return_value = b'{}'
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+
+        with patch.dict(os.environ, {}, clear=True):
+            with patch.object(
+                gp.urllib.request,
+                "urlopen",
+                return_value=response,
+            ) as request:
+                gp._api_request("https://example.test/limits")
+
+        sent_request = request.call_args.args[0]
+        self.assertIsNone(sent_request.get_header("Authorization"))
+
     def test_304_is_normal_response(self):
         error = urllib.error.HTTPError(
-            "https://example.test/measurements/id", 304, "Not Modified",
-            {"ETag": '"abc"'}, None,
+            "https://example.test/measurements/id",
+            304,
+            "Not Modified",
+            {"ETag": '"abc"'},
+            None,
         )
-        with patch.object(gp.urllib.request, "urlopen", side_effect=error):
-            status, data, headers = gp._api_request("https://example.test/measurements/id")
+
+        with patch.object(
+            gp.urllib.request,
+            "urlopen",
+            side_effect=error,
+        ):
+            status, data, headers = gp._api_request(
+                "https://example.test/measurements/id"
+            )
+
         self.assertEqual(status, 304)
         self.assertIsNone(data)
         self.assertEqual(headers.get("etag"), '"abc"')
 
     def test_429_is_marked_rate_limited(self):
         error = urllib.error.HTTPError(
-            "https://example.test/measurements", 429, "Too Many Requests",
-            {"Retry-After": "10"}, None,
+            "https://example.test/measurements",
+            429,
+            "Too Many Requests",
+            {"Retry-After": "10"},
+            None,
         )
-        with patch.object(gp.urllib.request, "urlopen", side_effect=error):
+
+        with patch.object(
+            gp.urllib.request,
+            "urlopen",
+            side_effect=error,
+        ):
             with self.assertRaises(gp.GlobalpingError) as caught:
-                gp._api_request("https://example.test/measurements", method="POST", payload={})
+                gp._api_request(
+                    "https://example.test/measurements",
+                    method="POST",
+                    payload={},
+                )
+
         self.assertTrue(caught.exception.rate_limited)
         self.assertIn("429", str(caught.exception))
 
     def test_read_limits_parses_live_quota(self):
-        payload = {"rateLimit": {"measurements": {"create": {
-            "limit": 100, "remaining": 7, "reset": 12345,
-        }}}}
-        with patch.object(gp, "_api_request", return_value=(200, payload, {})):
-            self.assertEqual(gp.read_limits(), {"limit": 100, "remaining": 7, "reset": 12345})
+        payload = {
+            "rateLimit": {
+                "measurements": {
+                    "create": {
+                        "limit": 100,
+                        "remaining": 7,
+                        "reset": 12345,
+                    }
+                }
+            }
+        }
+
+        with patch.object(
+            gp,
+            "_api_request",
+            return_value=(200, payload, {}),
+        ):
+            self.assertEqual(
+                gp.read_limits(),
+                {"limit": 100, "remaining": 7, "reset": 12345},
+            )
 
     def test_read_limits_rejects_unknown_shape(self):
-        with patch.object(gp, "_api_request", return_value=(200, [], {})):
+        with patch.object(
+            gp,
+            "_api_request",
+            return_value=(200, [], {}),
+        ):
             with self.assertRaises(gp.GlobalpingError):
                 gp.read_limits()
 
@@ -126,19 +216,62 @@ class ApiRequestTests(unittest.TestCase):
 class ProbeSelectionTests(unittest.TestCase):
     def test_selects_mainland_eyeball_probes_mobile_first_and_max_three(self):
         probes = [
-            {"tags": ["eyeball-network"], "location": {"country": "CN", "asn": 9808, "network": "China Mobile"}},
-            {"tags": ["eyeball-network"], "location": {"country": "CN", "asn": 4134, "network": "China Telecom"}},
-            {"tags": ["eyeball-network"], "location": {"country": "CN", "asn": 4837, "network": "China Unicom"}},
-            {"tags": ["eyeball-network"], "location": {"country": "US", "asn": 9808, "network": "China Mobile"}},
-            {"tags": ["hosting"], "location": {"country": "CN", "asn": 9808, "network": "China Mobile"}},
+            {
+                "tags": ["eyeball-network"],
+                "location": {
+                    "country": "CN",
+                    "asn": 9808,
+                    "network": "China Mobile",
+                },
+            },
+            {
+                "tags": ["eyeball-network"],
+                "location": {
+                    "country": "CN",
+                    "asn": 4134,
+                    "network": "China Telecom",
+                },
+            },
+            {
+                "tags": ["eyeball-network"],
+                "location": {
+                    "country": "CN",
+                    "asn": 4837,
+                    "network": "China Unicom",
+                },
+            },
+            {
+                "tags": ["eyeball-network"],
+                "location": {
+                    "country": "US",
+                    "asn": 9808,
+                    "network": "China Mobile",
+                },
+            },
+            {
+                "tags": ["hosting"],
+                "location": {
+                    "country": "CN",
+                    "asn": 9808,
+                    "network": "China Mobile",
+                },
+            },
         ]
-        with patch.object(gp, "_api_request", return_value=(200, probes, {})):
+
+        with patch.object(
+            gp,
+            "_api_request",
+            return_value=(200, probes, {}),
+        ):
             locations = gp.choose_probes(3)
+
         self.assertEqual(sum(item["limit"] for item in locations), 3)
         self.assertLessEqual(sum(item["limit"] for item in locations), 3)
         self.assertEqual(locations[0]["asn"], 9808)
         self.assertTrue(all(item["country"] == "CN" for item in locations))
-        self.assertTrue(all(item["tags"] == ["eyeball-network"] for item in locations))
+        self.assertTrue(
+            all(item["tags"] == ["eyeball-network"] for item in locations)
+        )
 
     def test_rejects_invalid_probe_limit(self):
         for value in (0, -1, True, "3"):
@@ -147,21 +280,42 @@ class ProbeSelectionTests(unittest.TestCase):
                     gp.choose_probes(value)
 
     def test_rejects_non_array_probe_response(self):
-        with patch.object(gp, "_api_request", return_value=(200, {"data": []}, {})):
+        with patch.object(
+            gp,
+            "_api_request",
+            return_value=(200, {"data": []}, {}),
+        ):
             with self.assertRaises(gp.GlobalpingError):
                 gp.choose_probes(3)
 
     def test_no_eligible_probe_is_incomplete(self):
-        with patch.object(gp, "_api_request", return_value=(200, [
-            {"tags": ["eyeball-network"], "location": {"country": "US", "asn": 9808}}
-        ], {})):
+        with patch.object(
+            gp,
+            "_api_request",
+            return_value=(
+                200,
+                [
+                    {
+                        "tags": ["eyeball-network"],
+                        "location": {
+                            "country": "US",
+                            "asn": 9808,
+                        },
+                    }
+                ],
+                {},
+            ),
+        ):
             with self.assertRaises(gp.GlobalpingError):
                 gp.choose_probes(3)
 
 
 class UrlAndBodyTests(unittest.TestCase):
     def test_split_url_preserves_path_query_and_port(self):
-        parts = gp._split_url("https://example.test:8443/live/index.m3u8?token=x")
+        parts = gp._split_url(
+            "https://example.test:8443/live/index.m3u8?token=x"
+        )
+
         self.assertEqual(parts["target"], "example.test")
         self.assertEqual(parts["protocol"], "HTTPS")
         self.assertEqual(parts["port"], 8443)
@@ -172,8 +326,11 @@ class UrlAndBodyTests(unittest.TestCase):
         budget = {"remaining": 10, "probe_count": 1}
         locations = [{"country": "CN", "asn": 9808, "limit": 1}]
 
-        with patch.object(gp, "_remaining_budget", return_value=10), \
-             patch.object(gp, "_api_request", return_value=(202, {"id": "m1", "probesCount": 1}, {})) as request:
+        with patch.object(
+            gp,
+            "_api_request",
+            return_value=(202, {"id": "m1", "probesCount": 1}, {}),
+        ) as request:
             measurement_id = gp._create_measurement(
                 "http://1.2.3.4/live.ts",
                 locations,
@@ -183,13 +340,17 @@ class UrlAndBodyTests(unittest.TestCase):
         self.assertEqual(measurement_id, "m1")
         payload = request.call_args.kwargs["payload"]
         self.assertNotIn("ipVersion", payload["measurementOptions"])
+        self.assertEqual(budget["remaining"], 9)
 
     def test_domain_measurement_keeps_ipv4_version(self):
         budget = {"remaining": 10, "probe_count": 1}
         locations = [{"country": "CN", "asn": 9808, "limit": 1}]
 
-        with patch.object(gp, "_remaining_budget", return_value=10), \
-             patch.object(gp, "_api_request", return_value=(202, {"id": "m1", "probesCount": 1}, {})) as request:
+        with patch.object(
+            gp,
+            "_api_request",
+            return_value=(202, {"id": "m1", "probesCount": 1}, {}),
+        ) as request:
             measurement_id = gp._create_measurement(
                 "http://example.test/live.ts",
                 locations,
@@ -199,21 +360,86 @@ class UrlAndBodyTests(unittest.TestCase):
         self.assertEqual(measurement_id, "m1")
         payload = request.call_args.kwargs["payload"]
         self.assertEqual(payload["measurementOptions"]["ipVersion"], 4)
+        self.assertEqual(budget["remaining"], 9)
+
+    def test_create_measurement_does_not_query_limits_again(self):
+        budget = {"remaining": 10, "probe_count": 1}
+        locations = [{"country": "CN", "asn": 9808, "limit": 1}]
+
+        with patch.object(
+            gp,
+            "read_limits",
+            side_effect=AssertionError("不应重复查询额度"),
+        ):
+            with patch.object(
+                gp,
+                "_api_request",
+                return_value=(202, {"id": "m1", "probesCount": 1}, {}),
+            ):
+                result = gp._create_measurement(
+                    "http://example.test/live.ts",
+                    locations,
+                    budget,
+                )
+
+        self.assertEqual(result, "m1")
+        self.assertEqual(budget["remaining"], 9)
+
+    def test_create_measurement_rejects_insufficient_budget(self):
+        budget = {"remaining": 0, "probe_count": 1}
+        locations = [{"country": "CN", "asn": 9808, "limit": 1}]
+
+        with patch.object(gp, "_api_request") as request:
+            with self.assertRaises(gp.GlobalpingError):
+                gp._create_measurement(
+                    "http://example.test/live.ts",
+                    locations,
+                    budget,
+                )
+
+        request.assert_not_called()
+
+    def test_429_halts_budget(self):
+        budget = {"remaining": 10, "probe_count": 1}
+        locations = [{"country": "CN", "asn": 9808, "limit": 1}]
+
+        error = gp.GlobalpingError("HTTP 429", rate_limited=True)
+
+        with patch.object(gp, "_api_request", side_effect=error):
+            with self.assertRaises(gp.GlobalpingError):
+                gp._create_measurement(
+                    "http://example.test/live.ts",
+                    locations,
+                    budget,
+                )
+
+        self.assertTrue(budget["halted"])
 
     def test_split_url_rejects_ipv6_literal(self):
         with self.assertRaises(gp.GlobalpingError):
             gp._split_url("http://[2001:db8::1]/live.ts")
 
     def test_split_url_rejects_credentials_and_unsupported_scheme(self):
-        for url in ("http://user:pass@example.test/a", "ftp://example.test/a"):
+        for url in (
+            "http://user:pass@example.test/a",
+            "ftp://example.test/a",
+        ):
             with self.subTest(url=url):
                 with self.assertRaises(gp.GlobalpingError):
                     gp._split_url(url)
 
     def test_raw_body_rejects_missing_truncated_and_lossy_text(self):
         self.assertIsNone(gp._raw_body_bytes({}))
-        self.assertIsNone(gp._raw_body_bytes({"rawBody": "abc", "truncated": True}))
-        self.assertIsNone(gp._raw_body_bytes({"rawBody": "a\ufffdb", "truncated": False}))
+        self.assertIsNone(
+            gp._raw_body_bytes(
+                {"rawBody": "abc", "truncated": True}
+            )
+        )
+        self.assertIsNone(
+            gp._raw_body_bytes(
+                {"rawBody": "a\ufffdb", "truncated": False}
+            )
+        )
 
     def test_ts_sync_accepts_nonzero_packet_alignment(self):
         self.assertTrue(gp._ts_sync_ok(valid_ts(offset=17)))
@@ -225,81 +451,200 @@ class UrlAndBodyTests(unittest.TestCase):
 
 class PlaylistTests(unittest.TestCase):
     def test_parses_media_playlist_and_resolves_segment(self):
-        parsed = gp._parse_playlist(MEDIA_PLAYLIST, "https://example.test/live/index.m3u8")
+        parsed = gp._parse_playlist(
+            MEDIA_PLAYLIST,
+            "https://example.test/live/index.m3u8",
+        )
+
         self.assertEqual(parsed["kind"], "media")
-        self.assertEqual(parsed["segments"], ["https://example.test/live/segment.ts"])
+        self.assertEqual(
+            parsed["segments"],
+            ["https://example.test/live/segment.ts"],
+        )
 
     def test_parses_master_playlist_and_resolves_variant(self):
-        parsed = gp._parse_playlist(MASTER_PLAYLIST, "https://example.test/live/master.m3u8")
+        parsed = gp._parse_playlist(
+            MASTER_PLAYLIST,
+            "https://example.test/live/master.m3u8",
+        )
+
         self.assertEqual(parsed["kind"], "master")
-        self.assertEqual(parsed["child_url"], "https://example.test/live/variant/index.m3u8")
+        self.assertEqual(
+            parsed["child_url"],
+            "https://example.test/live/variant/index.m3u8",
+        )
 
     def test_rejects_channel_subscription_m3u(self):
-        body = b"#EXTM3U\n#EXTINF:-1,CCTV-5\nhttp://example.test/live.ts\n"
+        body = (
+            b"#EXTM3U\n"
+            b"#EXTINF:-1,CCTV-5\n"
+            b"http://example.test/live.ts\n"
+        )
+
         with self.assertRaises(gp.GlobalpingError) as caught:
-            gp._parse_playlist(body, "https://example.test/list.m3u")
+            gp._parse_playlist(
+                body,
+                "https://example.test/list.m3u",
+            )
+
         self.assertEqual(caught.exception.status, gp.FAIL)
 
     def test_rejects_encrypted_hls(self):
-        body = MEDIA_PLAYLIST.replace(b"#EXTINF:10,", b'#EXT-X-KEY:METHOD=AES-128,URI="key"\n#EXTINF:10,')
+        body = MEDIA_PLAYLIST.replace(
+            b"#EXTINF:10,",
+            b'#EXT-X-KEY:METHOD=AES-128,URI="key"\n#EXTINF:10,',
+        )
+
         with self.assertRaises(gp.GlobalpingError) as caught:
-            gp._parse_playlist(body, "https://example.test/index.m3u8")
+            gp._parse_playlist(
+                body,
+                "https://example.test/index.m3u8",
+            )
+
         self.assertEqual(caught.exception.status, gp.FAIL)
 
     def test_rejects_fmp4_hls(self):
-        body = MEDIA_PLAYLIST.replace(b"#EXTINF:10,", b'#EXT-X-MAP:URI="init.mp4"\n#EXTINF:10,')
+        body = MEDIA_PLAYLIST.replace(
+            b"#EXTINF:10,",
+            b'#EXT-X-MAP:URI="init.mp4"\n#EXTINF:10,',
+        )
+
         with self.assertRaises(gp.GlobalpingError) as caught:
-            gp._parse_playlist(body, "https://example.test/index.m3u8")
+            gp._parse_playlist(
+                body,
+                "https://example.test/index.m3u8",
+            )
+
         self.assertEqual(caught.exception.status, gp.FAIL)
 
     def test_rejects_malformed_extinf_pairing(self):
-        body = b"#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXTINF:10,\n#EXTINF:10,\nseg.ts\n"
+        body = (
+            b"#EXTM3U\n"
+            b"#EXT-X-TARGETDURATION:10\n"
+            b"#EXTINF:10,\n"
+            b"#EXTINF:10,\n"
+            b"seg.ts\n"
+        )
+
         with self.assertRaises(gp.GlobalpingError):
-            gp._parse_playlist(body, "https://example.test/index.m3u8")
+            gp._parse_playlist(
+                body,
+                "https://example.test/index.m3u8",
+            )
 
 
 class TsRangeTests(unittest.TestCase):
     def test_accepts_complete_206_ts_range(self):
         result = finished_http(
-            valid_ts(), 206,
-            {"Content-Range": "bytes 0-1023/4096", "Content-Length": "1024"},
+            valid_ts(),
+            206,
+            {
+                "Content-Range": "bytes 0-1023/4096",
+                "Content-Length": "1024",
+            },
         )
-        self.assertEqual(gp._range_ts_status(result)["status"], gp.PASS)
+
+        self.assertEqual(
+            gp._range_ts_status(result)["status"],
+            gp.PASS,
+        )
 
     def test_206_requires_valid_content_range(self):
-        for header in (None, "bytes 10-1023/4096", "bytes 0-2048/4096"):
+        for header in (
+            None,
+            "bytes 10-1023/4096",
+            "bytes 0-2048/4096",
+        ):
             with self.subTest(header=header):
-                headers = {} if header is None else {"Content-Range": header}
+                headers = (
+                    {}
+                    if header is None
+                    else {"Content-Range": header}
+                )
+
                 result = finished_http(valid_ts(), 206, headers)
-                self.assertEqual(gp._range_ts_status(result)["status"], gp.FAIL)
+
+                self.assertEqual(
+                    gp._range_ts_status(result)["status"],
+                    gp.FAIL,
+                )
 
     def test_206_short_body_is_incomplete(self):
         result = finished_http(
-            valid_ts(700), 206,
-            {"Content-Range": "bytes 0-699/4096", "Content-Length": "700"},
+            valid_ts(700),
+            206,
+            {
+                "Content-Range": "bytes 0-699/4096",
+                "Content-Length": "700",
+            },
         )
-        self.assertEqual(gp._range_ts_status(result)["status"], gp.INCOMPLETE)
+
+        self.assertEqual(
+            gp._range_ts_status(result)["status"],
+            gp.INCOMPLETE,
+        )
 
     def test_206_content_range_body_length_mismatch_is_incomplete(self):
         result = finished_http(
-            valid_ts(), 206,
-            {"Content-Range": "bytes 0-1022/4096", "Content-Length": "1024"},
+            valid_ts(),
+            206,
+            {
+                "Content-Range": "bytes 0-1022/4096",
+                "Content-Length": "1024",
+            },
         )
-        self.assertEqual(gp._range_ts_status(result)["status"], gp.INCOMPLETE)
+
+        self.assertEqual(
+            gp._range_ts_status(result)["status"],
+            gp.INCOMPLETE,
+        )
 
     def test_truncated_ts_body_is_incomplete(self):
-        result = finished_http(valid_ts(), 206, {"Content-Range": "bytes 0-1023/4096"}, truncated=True)
-        self.assertEqual(gp._range_ts_status(result)["status"], gp.INCOMPLETE)
+        result = finished_http(
+            valid_ts(),
+            206,
+            {"Content-Range": "bytes 0-1023/4096"},
+            truncated=True,
+        )
+
+        self.assertEqual(
+            gp._range_ts_status(result)["status"],
+            gp.INCOMPLETE,
+        )
 
     def test_server_ignoring_range_only_passes_when_full_body_is_available(self):
-        complete = finished_http(valid_ts(), 200, {"Content-Length": "1024"})
-        partial = finished_http(valid_ts(), 200, {"Content-Length": "4096"})
-        self.assertEqual(gp._range_ts_status(complete)["status"], gp.PASS)
-        self.assertEqual(gp._range_ts_status(partial)["status"], gp.INCOMPLETE)
+        complete = finished_http(
+            valid_ts(),
+            200,
+            {"Content-Length": "1024"},
+        )
+
+        partial = finished_http(
+            valid_ts(),
+            200,
+            {"Content-Length": "4096"},
+        )
+
+        self.assertEqual(
+            gp._range_ts_status(complete)["status"],
+            gp.PASS,
+        )
+        self.assertEqual(
+            gp._range_ts_status(partial)["status"],
+            gp.INCOMPLETE,
+        )
 
     def test_bad_ts_sync_is_fail(self):
-        result = finished_http(b"A" * 1024, 206, {"Content-Range": "bytes 0-1023/4096"})
-        self.assertEqual(gp._range_ts_status(result)["status"], gp.FAIL)
+        result = finished_http(
+            b"A" * 1024,
+            206,
+            {"Content-Range": "bytes 0-1023/4096"},
+        )
+
+        self.assertEqual(
+            gp._range_ts_status(result)["status"],
+            gp.FAIL,
+        )
 
 
 class StatusAndFlowTests(unittest.TestCase):
@@ -310,76 +655,325 @@ class StatusAndFlowTests(unittest.TestCase):
             "hls": gp._status(gp.NA, "not applicable"),
             "ts": gp._status(gp.INCOMPLETE, "not checked"),
         }
-        self.assertEqual(gp._overall_status(checks), gp.INCOMPLETE)
+
+        self.assertEqual(
+            gp._overall_status(checks),
+            gp.INCOMPLETE,
+        )
 
     def test_unknown_media_type_fails_without_api_calls(self):
-        with patch.object(gp, "read_limits") as limits, patch.object(gp, "choose_probes") as probes:
-            output = gp.check_candidates([{"name": "x", "media_type": "UNKNOWN", "normalized_url": "http://example.test/a"}], {"max_probes": 3})
+        with patch.object(gp, "read_limits") as limits:
+            with patch.object(gp, "choose_probes") as probes:
+                output = gp.check_candidates(
+                    [
+                        {
+                            "name": "x",
+                            "media_type": "UNKNOWN",
+                            "normalized_url": "http://example.test/a",
+                        }
+                    ],
+                    {"max_probes": 3},
+                )
+
         limits.assert_not_called()
         probes.assert_not_called()
-        self.assertEqual(output[0]["globalping"]["status"], gp.FAIL)
+        self.assertEqual(
+            output[0]["globalping"]["status"],
+            gp.FAIL,
+        )
 
     def test_direct_ts_marks_hls_na_but_requires_ts_pass(self):
-        probe_key = gp._probe_key(PROBE)
         ts_result = finished_http(
-            valid_ts(), 206,
-            {"Content-Range": "bytes 0-1023/4096", "Content-Length": "1024"},
+            valid_ts(),
+            206,
+            {
+                "Content-Range": "bytes 0-1023/4096",
+                "Content-Length": "1024",
+            },
         )
-        with patch.object(gp, "read_limits", return_value={"limit": 50, "remaining": 10, "reset": 1}), \
-             patch.object(gp, "choose_probes", return_value=[{"country": "CN", "asn": 9808, "tags": ["eyeball-network"], "limit": 1}]), \
-             patch.object(gp, "_stage", return_value=("m1", measurement(result_item(ts_result)))):
-            output = gp.check_candidates([{"id": "c1", "media_type": "DIRECT_TS", "normalized_url": "http://example.test/live.ts"}], {"max_probes": 3})
+
+        with patch.object(
+            gp,
+            "read_limits",
+            return_value={
+                "limit": 50,
+                "remaining": 10,
+                "reset": 1,
+            },
+        ):
+            with patch.object(
+                gp,
+                "choose_probes",
+                return_value=[
+                    {
+                        "country": "CN",
+                        "asn": 9808,
+                        "tags": ["eyeball-network"],
+                        "limit": 1,
+                    }
+                ],
+            ):
+                with patch.object(
+                    gp,
+                    "_stage",
+                    return_value=(
+                        "m1",
+                        measurement(result_item(ts_result)),
+                    ),
+                ):
+                    output = gp.check_candidates(
+                        [
+                            {
+                                "id": "c1",
+                                "media_type": "DIRECT_TS",
+                                "normalized_url": "http://example.test/live.ts",
+                            }
+                        ],
+                        {"max_probes": 3},
+                    )
+
         checks = output[0]["globalping"]["checks"]
+
         self.assertEqual(checks["hls"]["status"], gp.NA)
         self.assertEqual(checks["ts"]["status"], gp.PASS)
-        self.assertEqual(output[0]["globalping"]["status"], gp.PASS)
+        self.assertEqual(
+            output[0]["globalping"]["status"],
+            gp.PASS,
+        )
 
     def test_hls_requires_main_media_and_ts_stages(self):
         main_result = finished_http(MASTER_PLAYLIST, 200)
         media_result = finished_http(MEDIA_PLAYLIST, 200)
+
         ts_result = finished_http(
-            valid_ts(), 206,
-            {"Content-Range": "bytes 0-1023/4096", "Content-Length": "1024"},
+            valid_ts(),
+            206,
+            {
+                "Content-Range": "bytes 0-1023/4096",
+                "Content-Length": "1024",
+            },
         )
+
         responses = [
             ("m1", measurement(result_item(main_result))),
             ("m2", measurement(result_item(media_result))),
             ("m3", measurement(result_item(ts_result))),
         ]
-        with patch.object(gp, "read_limits", return_value={"limit": 50, "remaining": 20, "reset": 1}), \
-             patch.object(gp, "choose_probes", return_value=[{"country": "CN", "asn": 9808, "tags": ["eyeball-network"], "limit": 1}]), \
-             patch.object(gp, "_stage", side_effect=responses):
-            output = gp.check_candidates([{"id": "c1", "media_type": "HLS", "normalized_url": "http://example.test/master.m3u8"}], {"max_probes": 3})
+
+        with patch.object(
+            gp,
+            "read_limits",
+            return_value={
+                "limit": 50,
+                "remaining": 20,
+                "reset": 1,
+            },
+        ):
+            with patch.object(
+                gp,
+                "choose_probes",
+                return_value=[
+                    {
+                        "country": "CN",
+                        "asn": 9808,
+                        "tags": ["eyeball-network"],
+                        "limit": 1,
+                    }
+                ],
+            ):
+                with patch.object(
+                    gp,
+                    "_stage",
+                    side_effect=responses,
+                ):
+                    output = gp.check_candidates(
+                        [
+                            {
+                                "id": "c1",
+                                "media_type": "HLS",
+                                "normalized_url": "http://example.test/master.m3u8",
+                            }
+                        ],
+                        {"max_probes": 3},
+                    )
+
         result = output[0]["globalping"]
+
         self.assertEqual(result["status"], gp.PASS)
-        self.assertEqual(set(result["stages"]), {"main_playlist", "media_playlist", "ts_range"})
+        self.assertEqual(
+            set(result["stages"]),
+            {
+                "main_playlist",
+                "media_playlist",
+                "ts_range",
+            },
+        )
         self.assertEqual(len(result["measurements"]), 3)
+
+    def test_hls_is_skipped_when_full_three_stage_budget_is_unavailable(self):
+        calls = []
+
+        def fake_stage(*args, **kwargs):
+            calls.append(1)
+            return (
+                "direct-1",
+                measurement(
+                    result_item(
+                        finished_http(
+                            valid_ts(),
+                            206,
+                            {
+                                "Content-Range": "bytes 0-1023/4096",
+                                "Content-Length": "1024",
+                            },
+                        )
+                    )
+                ),
+            )
+
+        with patch.object(
+            gp,
+            "read_limits",
+            return_value={
+                "limit": 50,
+                "remaining": 2,
+                "reset": 1,
+            },
+        ):
+            with patch.object(
+                gp,
+                "choose_probes",
+                return_value=[
+                    {
+                        "country": "CN",
+                        "asn": 9808,
+                        "tags": ["eyeball-network"],
+                        "limit": 1,
+                    }
+                ],
+            ):
+                with patch.object(
+                    gp,
+                    "_stage",
+                    side_effect=fake_stage,
+                ):
+                    output = gp.check_candidates(
+                        [
+                            {
+                                "id": "hls",
+                                "media_type": "HLS",
+                                "normalized_url": "http://example.test/master.m3u8",
+                            },
+                            {
+                                "id": "ts",
+                                "media_type": "DIRECT_TS",
+                                "normalized_url": "http://example.test/live.ts",
+                            },
+                        ],
+                        {"max_probes": 3},
+                    )
+
+        self.assertEqual(len(calls), 1)
+
+        self.assertEqual(
+            output[0]["globalping"]["status"],
+            gp.INCOMPLETE,
+        )
+        self.assertIn(
+            "额度不足",
+            output[0]["globalping"]["error"],
+        )
+
+        self.assertEqual(
+            output[1]["globalping"]["status"],
+            gp.PASS,
+        )
 
     def test_rate_limit_stops_later_candidate_measurements(self):
         calls = []
+
         def rate_limited(*args, **kwargs):
             calls.append(1)
-            raise gp.GlobalpingError("HTTP 429", rate_limited=True)
-        with patch.object(gp, "read_limits", return_value={"limit": 50, "remaining": 20, "reset": 1}), \
-             patch.object(gp, "choose_probes", return_value=[{"country": "CN", "asn": 9808, "tags": ["eyeball-network"], "limit": 1}]), \
-             patch.object(gp, "_stage", side_effect=rate_limited):
-            output = gp.check_candidates([
-                {"id": "c1", "media_type": "DIRECT_TS", "normalized_url": "http://example.test/a.ts"},
-                {"id": "c2", "media_type": "DIRECT_TS", "normalized_url": "http://example.test/b.ts"},
-            ], {"max_probes": 3})
+            raise gp.GlobalpingError(
+                "HTTP 429",
+                rate_limited=True,
+            )
+
+        with patch.object(
+            gp,
+            "read_limits",
+            return_value={
+                "limit": 50,
+                "remaining": 20,
+                "reset": 1,
+            },
+        ):
+            with patch.object(
+                gp,
+                "choose_probes",
+                return_value=[
+                    {
+                        "country": "CN",
+                        "asn": 9808,
+                        "tags": ["eyeball-network"],
+                        "limit": 1,
+                    }
+                ],
+            ):
+                with patch.object(
+                    gp,
+                    "_stage",
+                    side_effect=rate_limited,
+                ):
+                    output = gp.check_candidates(
+                        [
+                            {
+                                "id": "c1",
+                                "media_type": "DIRECT_TS",
+                                "normalized_url": "http://example.test/a.ts",
+                            },
+                            {
+                                "id": "c2",
+                                "media_type": "DIRECT_TS",
+                                "normalized_url": "http://example.test/b.ts",
+                            },
+                        ],
+                        {"max_probes": 3},
+                    )
+
         self.assertEqual(len(calls), 1)
-        self.assertEqual(output[0]["globalping"]["status"], gp.INCOMPLETE)
-        self.assertEqual(output[1]["globalping"]["status"], gp.INCOMPLETE)
-        self.assertIn("停止", output[1]["globalping"]["error"])
+        self.assertEqual(
+            output[0]["globalping"]["status"],
+            gp.INCOMPLETE,
+        )
+        self.assertEqual(
+            output[1]["globalping"]["status"],
+            gp.INCOMPLETE,
+        )
+        self.assertIn(
+            "停止",
+            output[1]["globalping"]["error"],
+        )
 
     def test_halted_budget_prevents_new_measurement(self):
         with patch.object(gp, "_api_request") as request:
             with self.assertRaises(gp.GlobalpingError):
                 gp._create_measurement(
                     "http://example.test/a.ts",
-                    [{"country": "CN", "asn": 9808, "limit": 1}],
-                    {"remaining": 10, "probe_count": 1, "halted": True},
+                    [
+                        {
+                            "country": "CN",
+                            "asn": 9808,
+                            "limit": 1,
+                        }
+                    ],
+                    {
+                        "remaining": 10,
+                        "probe_count": 1,
+                        "halted": True,
+                    },
                 )
+
         request.assert_not_called()
 
 
