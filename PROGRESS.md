@@ -1,92 +1,88 @@
+IPTV-Direct — PROGRESS.md
 
-# IPTV-Direct — PROGRESS.md
+版本：3.0
 
-版本：2.0
+项目状态：第7阶段 Globalping 主程序接入及模拟数据交接验收已通过；第8阶段线路筛选和订阅生成尚未开始。
 
-项目状态：第4、5、6阶段专项验收已通过；第7阶段 Globalping 模块及专项模拟测试已完成，主程序接入和完整交接验收尚未完成。
-
-记录原则：只记录仓库实际状态和真实测试结果。代码已建立不代表功能验收通过。
+记录原则：只记录仓库实际状态和真实测试结果。代码已建立不代表功能验收通过；模拟测试不代表真实网络测试。
 
 ---
 
-## 一、当前项目状态
+一、当前项目状态
 
-项目正式标准以 `MASTER_PLAN.md` 为准。
-程序执行流程以 `CORE_FLOW.md` 为准。
+项目正式标准以 "MASTER_PLAN.md" 为准。
+程序执行流程以 "CORE_FLOW.md" 为准。
 本文件只记录实际施工进度。
 
 六个正式业务程序当前状态：
 
-| 程序 | 当前状态 |
-|---|---|
-| main.py | 已建立；基础配置、来源采集和内容解析调度已实现；尚未接入 checker、Globalping 和 publisher 的完整业务流程 |
-| collector.py | 已建立；来源整理、下载、索引链接发现和分批采集已实现；完整业务链路验收未完成 |
-| normalizer.py | 已建立；内容解析、频道匹配、URL归一和去重已实现；第5阶段专项验收通过 |
-| checker.py | 已建立；本地 IPv4、HTTP、HLS、TS 检测已实现；第6阶段专项验收通过 |
-| globalping.py | 已建立；Globalping API、额度、探针、测量和结果整理已实现；34项专项模拟测试通过；尚未接入 main.py |
-| publisher.py | 尚未建立 |
+程序| 当前状态
+main.py| 已接入 collector、normalizer、checker 和 globalping；已完成 Globalping 主程序交接模拟测试；尚未接入 publisher
+collector.py| 已建立；来源整理、下载、索引链接发现和采集限制已实现
+normalizer.py| 已建立；来源内容解析、频道匹配、URL 归一和去重已实现
+checker.py| 已建立；本地 IPv4、HTTP、HLS、TS 检测已实现；第6阶段专项验收通过
+globalping.py| 已建立；Globalping API、额度、探针、测量和结果整理已实现；第7阶段专项及主程序交接验收通过
+publisher.py| 尚未建立；第8阶段开始实施
 
-当前系统尚未形成完整的 IPTV 自动筛选和订阅发布闭环。
-
----
-
-## 二、当前仓库文件情况
-
-| 文件或目录 | 当前状态 | 说明 |
-|---|---|---|
-| MASTER_PLAN.md | 已建立 | 项目唯一正式标准依据 |
-| CORE_FLOW.md | 已建立 | 核心执行流程文件 |
-| PROGRESS.md | 已更新 | 本文件 |
-| README.md | 已建立 | 简要项目说明 |
-| settings.json | 已建立 | 正式运行参数配置 |
-| channels.txt | 已建立 | 目前没有实际目标频道 |
-| manual.txt | 已建立 | 目前没有实际来源 |
-| sources.json | 已建立 | sources 当前为空数组 |
-| main.py | 已建立 | 配置读取、来源采集和解析调度 |
-| collector.py | 已建立 | 来源整理、下载和索引提取 |
-| normalizer.py | 已建立 | 内容解析、频道匹配、归一和去重 |
-| checker.py | 已建立 | 本地 IPv4、HTTP、HLS、TS 检测 |
-| globalping.py | 已建立 | Globalping 辅助检测模块 |
-| publisher.py | 尚未建立 | 正式准入、订阅生成和发布程序 |
-| tests/test_checker.py | 已建立 | checker 专项测试 |
-| tests/test_checker_limits.py | 已建立 | checker 并发和队列限制测试 |
-| tests/test_globalping.py | 已建立 | Globalping 专项模拟测试 |
-| .github/workflows/iptv-direct.yml | 已建立 | 定时及三种手动运行入口 |
-| tools/globalping_api_test.py | 已建立 | 独立 Globalping 诊断工具 |
-| output/iptv.m3u | 未生成 | 正式 M3U 订阅 |
-| output/iptv.txt | 未生成 | 正式 TXT 订阅 |
+当前系统已经具备来源处理、本地检测和 Globalping 辅助检测的程序接入，但尚未形成正式线路准入、订阅生成和发布闭环。
 
 ---
 
-## 三、实施阶段进度
+二、当前仓库文件情况
 
-| 阶段 | 施工内容 | 当前状态 |
-|---|---|---|
-| 1 | 项目结构与统一配置 | 基础文件及配置读取已建立，完整验收未完成 |
-| 2 | 频道配置 | 读取、检查和精确匹配代码已建立，完整验收未完成 |
-| 3 | 人工来源和自动来源 | 来源配置读取、校验和整理已实现，完整验收未完成 |
-| 4 | 来源下载和解析 | 已通过 Run #12 专项模拟 HTTP 测试 |
-| 5 | 线路归一和去重 | 已通过 Run #12 专项测试 |
-| 6 | 本地检测 | 已通过 Run #26，30项专项测试全部通过 |
-| 7 | Globalping | 模块已建立，Run #27 的34项专项模拟测试通过；main.py 接入及完整交接验收未完成 |
-| 8 | 线路筛选和订阅生成 | 尚未开始 |
-| 9 | 发布保护 | 尚未开始 |
-| 10 | 自动化和整体验收 | 工作流已建立，完整运行验收未完成 |
+文件或目录| 当前状态| 说明
+MASTER_PLAN.md| 已建立| 项目唯一正式标准依据
+CORE_FLOW.md| 已建立| 核心执行流程文件
+PROGRESS.md| 已更新| 本文件
+README.md| 已建立| 项目介绍和使用说明
+settings.json| 已建立| 正式运行参数配置
+channels.txt| 已建立| 当前没有实际目标频道
+manual.txt| 已建立| 当前没有人工来源
+sources.json| 已建立| sources 当前为空数组
+main.py| 已建立| 已接入本地检测及 Globalping 检测
+collector.py| 已建立| 来源整理、下载和索引提取
+normalizer.py| 已建立| 内容解析、频道匹配、归一和去重
+checker.py| 已建立| 本地 IPv4、HTTP、HLS、TS 检测
+globalping.py| 已建立| Globalping 辅助检测
+publisher.py| 尚未建立| 第8阶段实施内容
+tests/test_checker.py| 已建立| checker 专项测试
+tests/test_checker_limits.py| 已建立| checker 并发和队列限制测试
+tests/test_globalping.py| 已建立| Globalping 专项模拟测试
+tests/test_main_globalping.py| 已建立| main.py 与 Globalping 交接模拟测试
+.github/workflows/iptv-direct.yml| 已建立| 定时及三种手动运行入口
+tools/globalping_api_test.py| 已建立| 独立 Globalping 诊断工具
+output/iptv.m3u| 未生成| 正式 M3U 订阅
+output/iptv.txt| 未生成| 正式 TXT 订阅
+
+---
+
+三、实施阶段进度
+
+阶段| 施工内容| 当前状态
+1| 项目结构与统一配置| 基础文件及配置读取已建立，完整验收未完成
+2| 频道配置| 读取、检查和精确匹配代码已建立，完整验收未完成
+3| 人工来源和自动来源| 来源配置读取、校验和整理已实现，完整验收未完成
+4| 来源下载和解析| Run #12 专项模拟 HTTP 测试通过
+5| 线路归一和去重| Run #12 专项测试通过
+6| 本地检测| Run #26，30项专项测试通过
+7| Globalping| Run #30，主程序交接模拟测试通过
+8| 线路筛选和订阅生成| 尚未开始
+9| 发布保护| 尚未开始
+10| 自动化和整体验收| 工作流已建立，完整运行验收未完成
 
 说明：
 
-1. 代码建立不等于阶段验收通过。
-2. 当前没有完整业务链路的成功运行记录。
-3. collector、normalizer、checker 和 Globalping 的专项测试通过，不代表完整业务流程已经验收。
-4. Globalping 专项模拟测试不代表真实 Globalping 测量或中国移动网络实播通过。
-5. 当前没有实际目标频道和来源配置，无法进行完整 IPTV 运行验收。
-6. 不得提前进入阶段8；必须先完成阶段7主程序接入和数据交接验收。
+1. 阶段4、5、6、7的专项测试通过，不代表全部业务链路已经验收。
+2. 阶段7已完成 Globalping 模块、主程序接入和模拟数据交接验收。
+3. Globalping 模拟测试不代表真实 Globalping 探针测量成功。
+4. 当前没有实际目标频道和来源配置，无法进行真实订阅生成验收。
+5. 第8阶段必须依据 MASTER_PLAN.md 和 CORE_FLOW.md 实施，不得自行降低线路准入标准。
 
 ---
 
-## 四、程序实际实现情况
+四、程序实际实现情况
 
-### 4.1 main.py
+4.1 main.py
 
 已实现：
 
@@ -96,31 +92,33 @@
 - 读取目标频道配置。
 - 调用 collector.py 整理人工和自动来源。
 - 调用 normalizer.py 解析来源内容。
-- 汇总已识别来源、有效来源、候选数量和重复数量。
+- 汇总来源处理和候选数量信息。
 - 执行现有来源数量及候选数量停止判断。
-- 输出来源处理结果和异常信息。
-- 阶段4来源下载与解析专项测试入口。
-- 阶段5线路归一和去重专项测试入口。
-- 模拟检测结果交接测试。
+- 导入 checker.py 和 globalping.py。
+- 通过 "run_detection_pipeline()" 执行本地检测与 Globalping 交接。
+- 本地检测未全部通过时，不提交 Globalping。
+- 校验本地检测和 Globalping 返回数量及候选身份。
+- 保留 Globalping PASS、FAIL、INCOMPLETE 状态。
+- Globalping 调用异常或结果不符合要求时，降级标记为 INCOMPLETE。
+- 保留直接 TS 的 HLS N/A 状态。
+- 保持多条候选线路原始顺序。
+- 测试模式提供模拟检测交接测试。
 
 尚未实现：
 
-- 按正式流程分批采集、检测和准入。
-- 调度 checker.py 完成本地检测。
-- 调度 globalping.py 完成辅助检测。
-- 调度 publisher.py 完成正式准入和频道线路统计。
-- 根据各频道有效线路数量决定是否继续采集。
+- 调度 publisher.py 执行正式线路准入。
+- 统计各频道累计有效线路数量。
+- 根据正式准入结果决定是否继续采集下一批。
 - 最终订阅生成和发布调度。
-- 完整测试运行流程。
+- 完整业务链路验收。
 
 当前运行状态：
 
-- 正式运行目前只执行配置读取、来源采集和内容解析，随后安全结束并返回未完成状态。
-- 测试运行已覆盖阶段4、阶段5专项测试及模拟检测结果交接。
-- 当前测试运行已执行 checker 和 Globalping 专项测试，但尚未形成 Globalping 与 main.py 的完整模拟数据交接测试。
-- 配置文件没有实际目标频道时，会在配置检查阶段停止。
+- 正式运行尚未完成订阅生成和发布，不能视为正式业务闭环。
+- 测试运行已覆盖阶段4、阶段5、checker、Globalping及主程序交接模拟测试。
+- 测试模式不调用真实 checker 网络检测和 Globalping API，不执行正式准入和订阅发布。
 
-### 4.2 collector.py
+4.2 collector.py
 
 已实现：
 
@@ -148,9 +146,7 @@
 - 真实索引页面提取测试。
 - 完整业务链路验收。
 
-本地模拟 HTTP 测试不代表真实公网 IPTV 来源兼容性已经验证。
-
-### 4.3 normalizer.py
+4.3 normalizer.py
 
 已实现：
 
@@ -160,12 +156,11 @@
 - 频道标准名称精确匹配。
 - 支持调用方明确提供的别名匹配。
 - 识别和解析 TXT、M3U、HLS 等支持的来源内容。
-- 提取 M3U 频道信息及直播 URL。
-- 解析 TXT 中的频道名称和 URL。
+- 提取频道信息及直播 URL。
 - 对无法确认频道信息的线路拒绝强行匹配。
 - 规范化 HTTP/HTTPS URL。
 - 去除 URL 片段和默认端口。
-- 执行整轮 URL 去重。
+- 执行全局 URL 去重。
 - 执行单来源候选数量限制。
 - 执行本轮候选剩余额度限制。
 - 返回候选数量、目标频道匹配数量、重复数量和解析错误。
@@ -173,7 +168,7 @@
 
 频道匹配规则：
 
-- channels.txt 只填写用户确定的标准频道名称。
+- channels.txt 填写用户确定的标准频道名称。
 - 正式流程以标准频道名称精确匹配为基础。
 - 只有存在可靠、明确的别名对应关系时，才允许别名映射。
 - 不把 tvg-id 自动当成频道别名。
@@ -183,10 +178,10 @@
 尚未完成：
 
 - 完整候选数据交接验收。
-- 与 checker.py 的集成验收。
+- 与 publisher.py 的集成验收。
 - 真实 IPTV 来源内容测试。
 
-### 4.4 checker.py
+4.4 checker.py
 
 已实现：
 
@@ -207,21 +202,19 @@
 第6阶段专项验收：
 
 - Run #26。
-- 30项 checker 和并发/队列专项测试全部通过。
-- 具体记录见第七章。
+- checker 本地检测专项测试26项通过。
+- 并发与队列限制专项测试4项通过。
+- 合计30项全部通过。
 
 尚未完成：
 
-- 与 globalping.py 的完整数据交接验收。
 - 与 publisher.py 的完整数据交接验收。
 - 真实公网 IPTV 来源兼容性测试。
 - 中国移动国内实播验证。
 
-### 4.5 globalping.py
+4.5 globalping.py
 
-已建立。
-
-当前代码已实现：
+已实现：
 
 - Globalping API 通信。
 - API JSON 对象和数组响应处理。
@@ -244,62 +237,55 @@
 
 专项模拟测试：
 
-- tests/test_globalping.py 已提交。
-- 本地模拟测试共34项，全部通过。
-- GitHub Actions Run #27 中 Globalping 专项测试全部通过。
+- tests/test_globalping.py 共34项。
+- Run #27 和 Run #30 均通过 Globalping 专项测试。
 
-当前尚未完成：
+尚未完成：
 
-- main.py 尚未导入和调用 globalping.py。
-- 尚未将 checker.py 的本地检测结果与 Globalping 检测结果完整交接。
-- 尚未验证 main.py 能否正确接收并保留每条线路的 Globalping 状态和失败原因。
-- 尚未完成 Globalping INCOMPLETE 降级处理的主流程集成验收。
-- 尚未进行真实 Globalping API 和真实探针测量验收。
+- 与 publisher.py 的完整数据交接验收。
+- 真实 Globalping API 和真实探针测量验收。
 
 重要限制：
 
-Run #27 使用模拟 API 和模拟网络响应，不代表真实 Globalping 测量已成功，也不代表中国移动网络实播通过。
+专项测试使用模拟 API 响应和模拟网络数据，不代表真实 Globalping 测量已成功，也不代表中国移动网络实播通过。
 
-阶段7当前只能标记为：
-
-**Globalping 模块及专项模拟测试已完成；主程序接入和完整阶段验收未完成。**
-
-### 4.6 publisher.py
+4.6 publisher.py
 
 尚未建立。
 
-需要实现：
+第8阶段需要依据 MASTER_PLAN.md 实现：
 
-- 按 MASTER_PLAN.md 执行正式线路准入。
-- 统计各频道累计有效线路数量。
-- 每个频道最多保留规定数量的合格线路。
-- 生成 M3U 和 TXT 订阅。
-- 检查两份订阅格式及内容一致性。
-- 执行发布前质量保护。
-- 正式文件替换。
-- 发布后重新读取核验。
-- 发布失败时恢复上一份有效订阅。
+- 正式线路准入判断。
+- 按实际媒体类型检查适用检测状态。
+- 正确处理 Globalping FAIL 和 INCOMPLETE。
+- 保留国内真实网络验证状态，不得伪造实播通过。
+- 人工来源优先于自动补充来源。
+- 按明确的来源优先级和原始顺序选择线路。
+- 每个频道最多保留2条合格线路。
+- 统计各频道累计有效线路数量并反馈 main.py。
+- 使用同一份最终筛选结果生成 M3U 和 TXT。
+- 检查订阅格式、内容及频道线路一致性。
 
-阶段7完成验收之前，不进入 publisher.py 开发。
+第9阶段再实施发布保护、正式文件替换、发布后核验和失败回滚。
 
 ---
 
-## 五、配置文件状态
+五、配置文件状态
 
 - channels.txt：目前没有实际目标频道。
 - manual.txt：目前没有人工来源。
 - sources.json：sources 当前为空数组。
 - settings.json：已建立，配置结构已由 main.py 检查。
 
-当前没有实际目标频道和来源，因此不能完成完整订阅生成验收。
+当前没有实际目标频道和来源，因此不能完成真实订阅生成验收。
 
 ---
 
-## 六、GitHub Actions 状态
+六、GitHub Actions 状态
 
 工作流文件：
 
-`.github/workflows/iptv-direct.yml`
+".github/workflows/iptv-direct.yml"
 
 已建立：
 
@@ -310,48 +296,28 @@ Run #27 使用模拟 API 和模拟网络响应，不代表真实 Globalping 测�
 - 正式运行提交订阅文件的步骤。
 - 不同运行模式对应的权限设置。
 
-最新工作流测试：
+最新测试：
 
-- Run #27。
+- Run #30。
 - 手动测试运行成功。
 - checker 专项测试步骤成功。
 - Globalping 专项测试步骤成功。
-- main.py 测试模式步骤成功。
-- 手动诊断任务和正式运行任务在本次测试中按设计跳过。
+- main.py 与 Globalping 交接测试步骤成功。
+- 原有测试流程成功。
+- 正式运行任务和诊断任务按本次测试模式设计跳过。
 
 当前限制：
 
-- 正式运行依赖尚未完成的业务程序。
-- 测试运行尚未覆盖完整 Globalping 主程序数据交接。
-- 正式运行目前不能生成完整订阅。
-- 诊断工具独立运行，不参与正式线路准入。
-- 尚无完整业务运行成功的验收记录。
-
-工作流文件已建立不代表各运行模式已经全部验收通过。
+- 正式运行尚未形成完整准入和订阅发布流程。
+- publisher.py 尚未建立。
+- 当前没有实际目标频道和来源配置。
+- 尚无正式订阅生成及发布成功的验收记录。
 
 ---
 
-## 七、测试记录
+七、测试记录
 
-### 7.1 历史基础测试记录
-
-此前记录的测试包括：
-
-- 频道配置读取。
-- 空行和注释处理。
-- 重复频道检查。
-- 精确匹配和显式别名匹配。
-- 来源配置读取。
-- 人工来源和自动来源整理。
-- 禁用来源跳过。
-- 无效 URL 拦截。
-- 重复来源 ID 拦截。
-- 单条错误来源隔离。
-- 主程序来源配置接入模拟测试。
-
-以上属于历史基础测试，不代表当前全部代码已经完成集成验收。
-
-### 7.2 Run #12：阶段4、阶段5专项测试
+7.1 Run #12：阶段4、阶段5专项测试
 
 - Workflow：IPTV-Direct Unified Workflow。
 - Run：#12。
@@ -359,7 +325,6 @@ Run #27 使用模拟 API 和模拟网络响应，不代表真实 Globalping 测�
 - Job ID：133039261601。
 - 测试提交：3f9ca524f02f04047e3b80a9553d4f7441d976d9。
 - Job 结果：success。
-- 测试环境：GitHub Actions，Python 3.15.2。
 
 阶段4实际测试：
 
@@ -374,7 +339,7 @@ Run #27 使用模拟 API 和模拟网络响应，不代表真实 Globalping 测�
 阶段5实际测试：
 
 - 标准频道名称精确匹配 PASS。
-- 明确别名映射函数调用 PASS。
+- 明确别名映射 PASS。
 - 拒绝相似名称模糊匹配 PASS。
 - URL 归一 PASS。
 - 跨来源全局 URL 去重 PASS。
@@ -384,15 +349,11 @@ Run #27 使用模拟 API 和模拟网络响应，不代表真实 Globalping 测�
 
 隔离情况：
 
-测试使用本地模拟 HTTP 服务和模拟播放列表；未创建 Globalping 测量；未调用正式准入；未修改正式订阅。
-
-限定：
-
-本次证明 collector 和 normalizer 的上述模拟测试用例通过，不代表真实公网 IPTV 来源兼容性，也不代表 checker 的真实公网检测或中国移动实播通过。
+使用本地模拟 HTTP 服务和模拟播放列表；未创建 Globalping 测量；未调用正式准入；未修改正式订阅。
 
 阶段4、阶段5专项验收通过。
 
-### 7.3 Run #26：第6阶段本地检测专项验收
+7.2 Run #26：第6阶段本地检测专项验收
 
 - Workflow：IPTV-Direct Unified Workflow。
 - Run：#26。
@@ -400,7 +361,7 @@ Run #27 使用模拟 API 和模拟网络响应，不代表真实 Globalping 测�
 - Job ID：133070279602。
 - 测试提交：9a39870ccdc5a241bc4b0c8b09037e6915235d29。
 - Job 结果：success。
-- 测试环境：GitHub Actions，Python 3.15.2。
+- 测试环境：GitHub Actions。
 
 实际执行结果：
 
@@ -410,38 +371,13 @@ Run #27 使用模拟 API 和模拟网络响应，不代表真实 Globalping 测�
 - 合计30项全部 PASS。
 - python main.py --mode test PASS。
 
-覆盖内容：
-
-- IPv4 socket 连接。
-- 连接拒绝。
-- HTTP 200/206。
-- 空正文。
-- 非法 Content-Length/Content-Range。
-- 重定向及每跳 IPv4 DNS。
-- HTTPS IPv4、SNI 和证书验证配置。
-- HLS 主清单和媒体清单。
-- 相对地址。
-- TS 分片。
-- 加密 HLS 和 fMP4 拒绝。
-- TS 读取大小限制。
-- TS 同步字节检查。
-- 超时、并发、队列和排队超时。
-
 隔离情况：
 
-- 使用本机 HTTP 模拟服务和连接层模拟。
-- main.py 测试模式使用模拟检测结果。
-- 没有执行真实 Globalping 测量。
-- 没有调用正式准入。
-- 没有修改正式订阅。
-
-限定：
-
-本次证明 checker.py 的本地检测逻辑和相关边界测试通过，不代表真实公网 IPTV 来源兼容性、中国移动家庭宽带或移动网络实播通过。
+使用本机 HTTP 模拟服务和连接层模拟；没有执行真实 Globalping 测量，没有调用正式准入，没有修改正式订阅。
 
 第6阶段本地检测专项验收通过。
 
-### 7.4 Run #27：第7阶段 Globalping 专项模拟测试
+7.3 Run #27：第7阶段 Globalping 专项模拟测试
 
 - Workflow：IPTV-Direct Unified Workflow。
 - Run：#27。
@@ -449,19 +385,15 @@ Run #27 使用模拟 API 和模拟网络响应，不代表真实 Globalping 测�
 - Job ID：133080201954。
 - 测试提交：f0d07f4bac8c4d196779d5d7740b421df19b79c6。
 - Job 结果：success。
-- 测试环境：GitHub Actions，Python 3.15.2。
 
-实际执行步骤：
+实际执行结果：
 
 - Python 语法检查 PASS。
-- checker 专项测试步骤 PASS。
-- Globalping 专项测试步骤 PASS。
-- main.py 测试模式步骤 PASS。
+- checker 专项测试 PASS。
+- Globalping 专项测试 PASS。
+- main.py 测试模式 PASS。
 
-Globalping 专项测试：
-
-- tests/test_globalping.py 共34项。
-- 34项全部通过。
+Globalping 专项测试共34项，全部通过。
 
 覆盖内容包括：
 
@@ -484,69 +416,107 @@ Globalping 专项测试：
 
 隔离情况：
 
-- 使用模拟 API 响应和模拟网络数据。
-- 未调用真实 Globalping 测量。
-- 未消耗真实测量额度。
-- 未覆盖正式订阅。
-- 本次工作流的诊断任务和正式运行任务均按设计跳过。
+使用模拟 API 响应和模拟网络数据；未调用真实 Globalping 测量；未消耗真实测量额度；未覆盖正式订阅。
+
+7.4 Run #29：主程序交接测试首次失败
+
+- Run：#29。
+- Run ID：43805734514。
+- Job 结果：failure。
+
+失败原因：
+
+"tests/test_main_globalping.py" 中直接 TS 测试的模拟远程结果没有保留本地 checks 数据，导致测试读取本地 HLS 状态时出现 KeyError。
+
+处理结果：
+
+修正测试夹具，使模拟远程结果保留本地检测数据，再重新执行完整测试。
+
+本次失败属于测试数据构造问题，不代表真实 Globalping 测量失败。
+
+7.5 Run #30：第7阶段主程序接入和完整交接验收
+
+<badge>验收通过</badge>
+
+- Workflow：IPTV-Direct Unified Workflow。
+- Run：#30。
+- Run ID：43806083097。
+- Job ID：133097066623。
+- 测试提交：ee43a5c267e7c669fe998c989073c76adbd9fe44。
+- 当前 main 分支提交：ee43a5c267e7c669fe998c989073c76adbd9fe44。
+- Job 结果：success。
+- 测试环境：GitHub Actions，Python 3.15.2。
+
+实际执行结果：
+
+测试步骤| 结果
+Python 语法检查| PASS
+checker 专项测试| 30项全部通过
+Globalping 专项测试| 34项全部通过
+main.py 与 Globalping 交接测试| 9项全部通过
+原有 main.py 测试流程| PASS
+
+main.py 与 Globalping 交接测试覆盖：
+
+- HLS PASS 状态保留。
+- HLS FAIL 状态保留。
+- HLS INCOMPLETE 状态保留。
+- 直接 TS 的 HLS N/A 状态保留。
+- 本地检测失败时不调用 Globalping。
+- Globalping 调用异常时降级为 INCOMPLETE。
+- Globalping 返回身份不匹配时降级为 INCOMPLETE。
+- Globalping 返回无效状态时降级为 INCOMPLETE。
+- 多条候选线路保持原始顺序及各自检测状态。
+
+原有测试流程实际输出：
+
+- 阶段4来源下载与解析测试全部 PASS。
+- 阶段5线路归一和去重专项测试全部 PASS。
+- 主程序交接测试 PASS。
+- 测试模式未调用真实 checker 网络检测、Globalping API、正式准入或订阅发布。
+
+隔离情况：
+
+- 使用模拟检测函数。
+- 未发起真实 Globalping 测量。
+- 未消耗真实 Globalping 测量额度。
+- 未执行正式线路准入。
+- 未生成或覆盖正式订阅。
 
 限定：
 
-Run #27 证明 Globalping 模块的专项模拟测试通过，不代表真实 Globalping API、真实探针测量或中国移动网络实播已经通过。
+Run #30 证明主程序与 Globalping 的模拟数据交接及异常降级测试通过，不代表真实 Globalping API、真实探针测量或中国移动网络实播已经通过。
 
-阶段判断：
-
-- Globalping 模块已经建立。
-- 34项专项模拟测试已经通过。
-- main.py 尚未接入 Globalping。
-- 完整数据交接、主流程异常降级和阶段7整体验收尚未完成。
-
-### 7.5 尚未完成的测试
-
-- collector.py 真实网络下载测试。
-- 索引页面真实链接提取测试。
-- normalizer.py 完整真实来源内容测试。
-- 候选数据全链路交接测试。
-- checker.py 与 Globalping 的完整数据交接验收。
-- main.py 对 Globalping 结果的接收和状态保留测试。
-- Globalping INCOMPLETE 降级流程集成测试。
-- 真实 Globalping API 和真实探针测量测试。
-- 正式准入和订阅生成测试。
-- 发布保护和回滚测试。
-- GitHub Actions 完整运行测试。
-- 正式运行和订阅发布验收。
-
-没有实际测试证据，不得标记为通过。模拟测试不得当作真实网络测试。
+第7阶段 Globalping 主程序接入及模拟数据交接验收通过。
 
 ---
 
-## 八、当前待办事项
+八、当前待办事项
 
-严格按 MASTER_PLAN.md 和 CORE_FLOW.md 的顺序执行：
+严格按照 MASTER_PLAN.md 和 CORE_FLOW.md 执行。
 
-1. 阶段4、阶段5专项验收已通过；后续仍需在完整业务链路中复核来源解析和候选数据交接。
-2. 阶段6 checker.py 本地检测专项验收已通过；真实公网来源兼容性和中国移动国内实播状态仍需独立记录。
-3. 完成阶段7：检查 globalping.py 与 checker.py 的输入输出结构。
-4. 完成阶段7：由 main.py 正式调度 globalping.py，将本批候选线路和正式配置传入。
-5. 完成阶段7：接收 Globalping 返回结果，保留线路对应关系、探针信息、各阶段状态、总体状态和失败原因。
-6. 完成阶段7：验证 Globalping PASS、FAIL、INCOMPLETE、N/A 的主流程处理及 MASTER_PLAN.md 规定的降级规则。
-7. 完成阶段7：补充 main.py 与 Globalping 的模拟集成测试，确保测试模式不创建真实测量、不消耗额度、不覆盖订阅。
-8. 执行阶段7专项测试和集成测试，核对真实 Actions 结果，满足验收要求后再进入阶段8。
-9. 阶段7验收通过后，才开始 publisher.py 的正式准入和订阅生成。
-10. 后续按既定阶段完成发布保护、失败恢复和整体验收。
+1. 第7阶段已经验收通过，不再重复开发或重复添加相同交接测试。
+2. 开始第8阶段：线路筛选和订阅生成。
+3. 实施前核对 MASTER_PLAN.md 中的正式准入条件、线路保留顺序、每频道数量上限及输出格式。
+4. 核对 main.py、checker.py、globalping.py 当前实际数据结构，确定 publisher.py 的输入输出接口。
+5. 先明确 publisher.py 与 main.py 的数据交接，再编写完整程序。
+6. 为正式准入、线路排序、频道数量限制、Globalping 降级及 M3U/TXT 一致性建立专项模拟测试。
+7. 测试运行不得调用真实 Globalping 测量，不得覆盖正式订阅。
+8. 完成第8阶段测试并核对 GitHub Actions 实际结果。
+9. 第8阶段通过后，再进入第9阶段发布保护和失败恢复。
 
-当前唯一下一步：
+当前唯一下一步：实施第8阶段前，核对 MASTER_PLAN.md 的准入及订阅输出标准，并检查现有 main.py、checker.py、globalping.py 的实际数据结构，确定 publisher.py 接口。
 
-**先完成 main.py 对 globalping.py 的正式接入和数据交接测试。**
-
-不得提前开发 publisher.py，不得跳过阶段7验收。
+不得跳过接口核对直接编写 publisher.py，不得提前进入第9阶段。
 
 ---
 
-## 九、进度更新规则
+九、进度更新规则
 
 1. 只记录仓库中实际存在的代码和真实测试结果。
 2. 文件已提交不等于功能已经完成。
 3. 程序能够运行不等于功能验收通过。
 4. 模拟测试和真实网络测试必须分别记录。
 5. 未通过验收的功能不得标记为完成。
+6. 不得把 Globalping 云端探针结果写成中国移动国内实播验证结果。
+7. 所有后续修改必须遵守 MASTER_PLAN.md 和 CORE_FLOW.md。
