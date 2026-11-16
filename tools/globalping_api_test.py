@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -9,6 +8,7 @@
 """
 
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -36,6 +36,17 @@ HEADERS = {
 }
 
 
+def auth_headers():
+    """生成请求头；Token 只从环境变量读取，不输出、不写入文件。"""
+    headers = dict(HEADERS)
+    token = os.environ.get("GLOBALPING_API_TOKEN", "").strip()
+
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    return headers
+
+
 class GlobalpingError(RuntimeError):
     pass
 
@@ -43,35 +54,48 @@ class GlobalpingError(RuntimeError):
 def api_request(url, method="GET", payload=None):
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
-        url, data=data, headers=HEADERS, method=method
+        url,
+        data=data,
+        headers=auth_headers(),
+        method=method,
     )
+
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             raw = response.read()
+
             if response.headers.get("Content-Encoding", "").lower() == "gzip":
                 import gzip
                 raw = gzip.decompress(raw)
+
             body = raw.decode("utf-8", errors="replace")
             parsed = json.loads(body) if body else {}
+
             return response.status, parsed, dict(response.headers.items())
+
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         headers = dict(exc.headers.items()) if exc.headers else {}
+
         if exc.code == 429:
             rate_headers = {
                 k: v for k, v in headers.items()
                 if "rate" in k.lower() or "reset" in k.lower()
             }
+
             raise GlobalpingError(
                 "Globalping 返回 HTTP 429，已触及当前限额。"
                 f"限额响应头：{json.dumps(rate_headers, ensure_ascii=False)}；"
                 f"响应内容：{detail[:1000]}"
             ) from exc
+
         raise GlobalpingError(
             f"Globalping API HTTP {exc.code}: {detail[:1500]}"
         ) from exc
+
     except urllib.error.URLError as exc:
         raise GlobalpingError(f"无法连接 Globalping API：{exc}") from exc
+
     except (json.JSONDecodeError, OSError) as exc:
         raise GlobalpingError(f"Globalping API 响应处理失败：{exc}") from exc
 
@@ -85,6 +109,7 @@ def read_limits():
         limit = int(details["limit"])
         remaining = int(details["remaining"])
         reset = int(details["reset"])
+
     except (KeyError, TypeError, ValueError) as exc:
         raise GlobalpingError(
             "无法识别 /v1/limits 返回的限额字段；为避免超额，本次停止测试。"
@@ -339,7 +364,7 @@ def wait_for_measurement(measurement_id):
     etag = None
 
     while True:
-        headers = dict(HEADERS)
+        headers = auth_headers()
 
         if etag:
             headers["If-None-Match"] = etag
