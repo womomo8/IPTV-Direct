@@ -649,9 +649,6 @@ def run_formal_flow(config: dict[str, Any]) -> int:
     for error in errors:
         print(f"来源警告：{error}", file=sys.stderr)
 
-    if detected:
-        _print_detection_summary(detected)
-
     if system_error:
         print(
             "发生准入系统错误，停止后续处理；"
