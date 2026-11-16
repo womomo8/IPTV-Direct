@@ -582,6 +582,10 @@ def validate_subscriptions(
         m3u_entries.append((channel, url))
         index += 2
 
+    # 没有任何有效频道线路时，不能把空订阅视为校验通过。
+    if not m3u_entries:
+        raise PublisherError("订阅没有任何有效线路")
+
     txt_entries = []
 
     for line in txt_text.splitlines():
@@ -597,6 +601,9 @@ def validate_subscriptions(
             raise PublisherError("TXT 包含无效播放 URL")
 
         txt_entries.append((channel, url))
+
+    if not txt_entries:
+        raise PublisherError("TXT 订阅没有任何有效线路")
 
     if m3u_entries != txt_entries:
         raise PublisherError("M3U 与 TXT 的频道和线路内容不一致")
