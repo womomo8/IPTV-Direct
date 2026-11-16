@@ -1,7 +1,8 @@
-"""main.py 来源批次调度、停止条件及 publisher 交接测试。
+"""main.py 跨来源候选池、统一检测和优选测试。
 
-全部使用模拟数据，不访问真实来源，不执行真实线路检测，
-不调用 Globalping API，不修改正式订阅。
+全部使用模拟数据：
+不访问真实来源、不执行真实线路检测、
+不调用 Globalping API、不消耗额度、不修改正式订阅。
 """
 
 import contextlib
@@ -10,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 import main
-import publisher
+
 from normalizer import _channel_match
 
 
@@ -45,20 +46,24 @@ def make_settings(
     }
 
 
-def make_source_item(index):
+def make_source_item(index, source_type="automatic"):
     url = f"https://example.test/source{index}.m3u"
+
+    priority = 0 if source_type == "manual" else 1
 
     return {
         "source": {
             "name": f"模拟来源{index}",
             "url": url,
-            "priority": 0,
+            "source_type": source_type,
+            "priority": priority,
             "order": index,
         },
         "download": {
             "final_url": url,
-            "content": "模拟来源内容",
+            "content": f"模拟来源内容{index}",
             "content_type": "text/plain",
+            "http_status": 200,
         },
         "errors": [],
     }
@@ -78,6 +83,9 @@ def make_normalized(source_info):
                 "channel": CHANNEL,
                 "normalized_url": url,
                 "media_type": "HLS",
+                "priority": source_info.get("priority", 1),
+                "source_order": source_info.get("order", 0),
+                "source_type": source_info.get("source_type", "automatic"),
             }
         ],
     }
@@ -101,6 +109,20 @@ class MainCollectionFlowTests(unittest.TestCase):
 
         output = io.StringIO()
         errors = io.StringIO()
+        detection_inputs = []
+
+        def fake_detection(candidates, current_settings, channels=None):
+            detection_inputs.append({
+                "candidates": list(candidates),
+                "settings": current_settings,
+                "channels": channels,
+            })
+            return list(candidates)
+
+        def fake_normalize(**kwargs):
+            if normalize_callback is not None:
+                return normalize_callback(**kwargs)
+            return make_normalized(kwargs["source"])
 
         with (
             patch(
@@ -109,15 +131,11 @@ class MainCollectionFlowTests(unittest.TestCase):
             ),
             patch(
                 "main.normalize_source_content",
-                side_effect=(
-                    normalize_callback
-                    if normalize_callback is not None
-                    else lambda **kwargs: make_normalized(kwargs["source"])
-                ),
+                side_effect=fake_normalize,
             ),
             patch(
                 "main.run_detection_pipeline",
-                side_effect=lambda candidates, current_settings: candidates,
+                side_effect=fake_detection,
             ),
             patch("main._print_detection_summary"),
             patch(
@@ -155,6 +173,7 @@ class MainCollectionFlowTests(unittest.TestCase):
             errors.getvalue(),
             admission_mock,
             build_mock,
+            detection_inputs,
         )
 
     @staticmethod
@@ -162,6 +181,7 @@ class MainCollectionFlowTests(unittest.TestCase):
         accepted_routes,
         all_channels_reached=False,
         count=0,
+        candidates=None,
     ):
         return {
             "accepted_routes": accepted_routes,
@@ -178,12 +198,10 @@ class MainCollectionFlowTests(unittest.TestCase):
             received_aliases.append(kwargs.get("aliases"))
             return make_normalized(kwargs["source"])
 
-        # main.py 以 settings=... 关键字调用准入函数，
-        # 因此模拟函数的参数名必须是 settings。
         def admit(candidates, accepted_routes, channels, settings):
             return self.make_admission(accepted_routes)
 
-        result, _, _, _, _ = self.run_flow(
+        result, _, _, _, _, _ = self.run_flow(
             iter([make_source_item(0)]),
             settings,
             admit,
@@ -191,7 +209,48 @@ class MainCollectionFlowTests(unittest.TestCase):
         )
 
         self.assertEqual(result, 0)
-        self.assertEqual(received_aliases, [settings["aliases"]])
+        self.assertEqual(
+            received_aliases,
+            [settings["aliases"]],
+        )
+
+    def test_all_sources_are_collected_before_detection(self):
+        consumed = []
+
+        def source_stream():
+            for index in range(3):
+                consumed.append(index)
+                yield make_source_item(index)
+
+        def normalize_callback(**kwargs):
+            return make_normalized(kwargs["source"])
+
+        def admit(candidates, accepted_routes, channels, settings):
+            return self.make_admission(accepted_routes)
+
+        result, _, _, admission_mock, _, detection_inputs = self.run_flow(
+            source_stream(),
+            make_settings(),
+            admit,
+            normalize_callback=normalize_callback,
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(consumed, [0, 1, 2])
+
+        # 所有来源处理完毕后，只统一检测一次。
+        self.assertEqual(len(detection_inputs), 1)
+        self.assertEqual(
+            len(detection_inputs[0]["candidates"]),
+            3,
+        )
+
+        # publisher 也只在完整候选池形成后调用一次。
+        self.assertEqual(admission_mock.call_count, 1)
+        self.assertEqual(
+            len(admission_mock.call_args.kwargs["candidates"]),
+            3,
+        )
 
     def test_valid_source_limit_stops_before_next_source(self):
         consumed = []
@@ -202,20 +261,20 @@ class MainCollectionFlowTests(unittest.TestCase):
                 yield make_source_item(index)
 
         def admit(candidates, accepted_routes, channels, settings):
-            return self.make_admission(
-                accepted_routes,
-                count=0,
-            )
+            return self.make_admission(accepted_routes)
 
-        result, output, _, admission_mock, build_mock = self.run_flow(
-            source_stream(),
-            make_settings(max_valid_sources=1),
-            admit,
+        result, output, _, admission_mock, build_mock, detection_inputs = (
+            self.run_flow(
+                source_stream(),
+                make_settings(max_valid_sources=1),
+                admit,
+            )
         )
 
         self.assertEqual(result, 0)
         self.assertEqual(consumed, [0])
         self.assertEqual(admission_mock.call_count, 1)
+        self.assertEqual(len(detection_inputs), 1)
         self.assertIn("达到有效来源上限 1", output)
         build_mock.assert_called_once()
 
@@ -230,19 +289,22 @@ class MainCollectionFlowTests(unittest.TestCase):
         def admit(candidates, accepted_routes, channels, settings):
             return self.make_admission(accepted_routes)
 
-        result, output, _, admission_mock, build_mock = self.run_flow(
-            source_stream(),
-            make_settings(max_candidates_total=1),
-            admit,
+        result, output, _, admission_mock, build_mock, detection_inputs = (
+            self.run_flow(
+                source_stream(),
+                make_settings(max_candidates_total=1),
+                admit,
+            )
         )
 
         self.assertEqual(result, 0)
         self.assertEqual(consumed, [0])
         self.assertEqual(admission_mock.call_count, 1)
+        self.assertEqual(len(detection_inputs), 1)
         self.assertIn("达到全部候选总上限 1", output)
         build_mock.assert_called_once()
 
-    def test_all_channels_reached_stops_before_next_source(self):
+    def test_channel_target_does_not_interrupt_collection_early(self):
         consumed = []
 
         def source_stream():
@@ -257,66 +319,231 @@ class MainCollectionFlowTests(unittest.TestCase):
                 count=2,
             )
 
-        result, output, _, admission_mock, build_mock = self.run_flow(
+        result, _, _, admission_mock, _, detection_inputs = self.run_flow(
             source_stream(),
             make_settings(),
             admit,
         )
 
         self.assertEqual(result, 0)
-        self.assertEqual(consumed, [0])
-        self.assertEqual(admission_mock.call_count, 1)
-        self.assertIn("所有目标频道均已达到", output)
-        build_mock.assert_called_once()
 
-    def test_next_batch_receives_previous_admitted_routes(self):
-        consumed = []
-        received_routes = []
+        # 频道目标只能在完整候选池统一检测和准入后判断，
+        # 不能再像旧流程一样处理一个来源就提前停止采集。
+        self.assertEqual(consumed, [0, 1, 2])
+        self.assertEqual(len(detection_inputs), 1)
+        self.assertEqual(admission_mock.call_count, 1)
+
+    def test_publisher_receives_one_complete_candidate_batch(self):
+        received = []
 
         def source_stream():
-            for index in range(3):
-                consumed.append(index)
+            for index in range(4):
                 yield make_source_item(index)
 
         def admit(candidates, accepted_routes, channels, settings):
-            received_routes.append(list(accepted_routes))
+            received.append({
+                "candidates": list(candidates),
+                "accepted_routes": list(accepted_routes),
+                "channels": list(channels),
+            })
+            return self.make_admission(accepted_routes)
 
-            new_routes = accepted_routes + [
-                {"batch": len(received_routes)}
-            ]
-
-            return self.make_admission(
-                new_routes,
-                count=len(new_routes),
-            )
-
-        result, output, _, admission_mock, build_mock = self.run_flow(
+        result, _, _, admission_mock, _, _ = self.run_flow(
             source_stream(),
-            make_settings(max_valid_sources=2),
+            make_settings(),
             admit,
         )
 
         self.assertEqual(result, 0)
-        self.assertEqual(consumed, [0, 1])
-        self.assertEqual(admission_mock.call_count, 2)
+        self.assertEqual(admission_mock.call_count, 1)
+        self.assertEqual(len(received), 1)
+        self.assertEqual(len(received[0]["candidates"]), 4)
+        self.assertEqual(received[0]["accepted_routes"], [])
+        self.assertEqual(received[0]["channels"], [CHANNEL])
+
+    def test_source_failure_does_not_stop_later_sources(self):
+        def source_stream():
+            yield {
+                "source": {
+                    "name": "失败来源",
+                    "url": "https://example.test/fail.m3u",
+                    "source_type": "automatic",
+                },
+                "download": None,
+                "errors": ["模拟下载失败"],
+            }
+            yield make_source_item(1)
+
+        def admit(candidates, accepted_routes, channels, settings):
+            return self.make_admission(accepted_routes)
+
+        result, _, errors, admission_mock, _, detection_inputs = self.run_flow(
+            source_stream(),
+            make_settings(),
+            admit,
+        )
+
+        self.assertEqual(result, 0)
+        self.assertIn("模拟下载失败", errors)
+        self.assertEqual(len(detection_inputs), 1)
+        self.assertEqual(len(detection_inputs[0]["candidates"]), 1)
+        self.assertEqual(admission_mock.call_count, 1)
+
+
+class CandidateQualityRankingTests(unittest.TestCase):
+
+    @staticmethod
+    def candidate(
+        channel,
+        url,
+        media_type="HLS",
+        request_count=3,
+        success_count=3,
+        timeout_count=0,
+        elapsed=3.0,
+        read_seconds=1.0,
+        bytes_read=1000,
+        segment_total=3,
+        segment_success=3,
+    ):
+        return {
+            "channel": channel,
+            "normalized_url": url,
+            "media_type": media_type,
+            "quality": {
+                "request_count": request_count,
+                "request_success_count": success_count,
+                "timeout_count": timeout_count,
+                "total_elapsed_seconds": elapsed,
+                "total_read_seconds": read_seconds,
+                "total_bytes_read": bytes_read,
+                "segment_total": segment_total,
+                "segment_success_count": segment_success,
+            },
+        }
+
+    def test_best_candidate_in_each_channel_is_prioritized_first(self):
+        a_slow = self.candidate(
+            "频道A",
+            "https://example.test/a-slow.m3u8",
+            segment_success=1,
+            segment_total=3,
+            success_count=2,
+            timeout_count=1,
+        )
+        a_fast = self.candidate(
+            "频道A",
+            "https://example.test/a-fast.m3u8",
+            segment_success=3,
+            segment_total=3,
+            success_count=3,
+            timeout_count=0,
+        )
+        b_slow = self.candidate(
+            "频道B",
+            "https://example.test/b-slow.m3u8",
+            segment_success=1,
+            segment_total=3,
+            success_count=2,
+            timeout_count=1,
+        )
+        b_fast = self.candidate(
+            "频道B",
+            "https://example.test/b-fast.m3u8",
+            segment_success=3,
+            segment_total=3,
+            success_count=3,
+            timeout_count=0,
+        )
+
+        ranked = main.rank_candidates_for_globalping(
+            [a_slow, a_fast, b_slow, b_fast],
+            ["频道A", "频道B"],
+        )
 
         self.assertEqual(
-            received_routes,
+            [item["normalized_url"] for item in ranked],
             [
-                [],
-                [{"batch": 1}],
+                "https://example.test/a-fast.m3u8",
+                "https://example.test/b-fast.m3u8",
+                "https://example.test/a-slow.m3u8",
+                "https://example.test/b-slow.m3u8",
             ],
         )
 
-        self.assertIn("达到有效来源上限 2", output)
-        build_mock.assert_called_once()
+    def test_hls_and_direct_ts_are_not_compared_as_same_type(self):
+        hls_first = self.candidate(
+            "同一频道",
+            "https://example.test/first.m3u8",
+            media_type="HLS",
+        )
+        ts_first = self.candidate(
+            "同一频道",
+            "https://example.test/first.ts",
+            media_type="DIRECT_TS",
+            segment_total=0,
+            segment_success=0,
+        )
+        hls_second = self.candidate(
+            "同一频道",
+            "https://example.test/second.m3u8",
+            media_type="HLS",
+            segment_success=2,
+            segment_total=3,
+        )
+        ts_second = self.candidate(
+            "同一频道",
+            "https://example.test/second.ts",
+            media_type="DIRECT_TS",
+            segment_total=0,
+            segment_success=0,
+        )
+
+        ranked = main.rank_candidates_for_globalping(
+            [hls_first, ts_first, hls_second, ts_second],
+            ["同一频道"],
+        )
+
+        # 各媒体类型只在自己的组内排序，再轮流交接。
+        self.assertEqual(
+            [item["normalized_url"] for item in ranked],
+            [
+                "https://example.test/first.m3u8",
+                "https://example.test/first.ts",
+                "https://example.test/second.m3u8",
+                "https://example.test/second.ts",
+            ],
+        )
+
+    def test_missing_quality_data_keeps_original_order(self):
+        first = {
+            "channel": "频道A",
+            "normalized_url": "https://example.test/first.m3u8",
+            "media_type": "HLS",
+        }
+        second = {
+            "channel": "频道A",
+            "normalized_url": "https://example.test/second.m3u8",
+            "media_type": "HLS",
+        }
+
+        ranked = main.rank_candidates_for_globalping(
+            [first, second],
+            ["频道A"],
+        )
+
+        self.assertEqual(ranked, [first, second])
 
 
 class ChannelAliasTests(unittest.TestCase):
 
     def test_cctv5_alias_matches_canonical_channel(self):
         self.assertEqual(
-            _channel_match(["CCTV5"], ["CCTV-5"], {"CCTV5": "CCTV-5"}),
+            _channel_match(
+                ["CCTV5"],
+                ["CCTV-5"],
+                {"CCTV5": "CCTV-5"},
+            ),
             "CCTV-5",
         )
 
@@ -406,84 +633,6 @@ class CollectionStopReasonTests(unittest.TestCase):
         )
 
         self.assertIsNone(reason)
-
-
-class GlobalpingSummaryTests(unittest.TestCase):
-
-    def test_summary_excludes_not_submitted_candidates(self):
-        results = [
-            {
-                "channel": "CCTV-5",
-                "media_type": "HLS",
-                "normalized_url": "https://example.test/live.m3u8?token=secret",
-                "checks": {
-                    "ipv4": {"status": main.PASS},
-                    "http": {"status": main.PASS},
-                    "hls": {"status": main.PASS},
-                    "ts": {"status": main.PASS},
-                },
-                "globalping": {
-                    "status": main.INCOMPLETE,
-                    "error": "测量结果未能完成。",
-                    "probes": {
-                        "probe1": {
-                            "country": "CN",
-                            "city": "北京",
-                            "network": "China Mobile",
-                            "asn": 9808,
-                        }
-                    },
-                    "stages": {
-                        "main_playlist": {
-                            "measurement_id": "test-measurement-1",
-                            "status": main.INCOMPLETE,
-                            "reason": "测量结果未能完成。",
-                        }
-                    },
-                },
-            },
-            {
-                "channel": "CCTV-6",
-                "media_type": "HLS",
-                "normalized_url": "https://example.test/other.m3u8",
-                "checks": {
-                    "ipv4": {"status": main.FAIL},
-                    "http": {"status": main.INCOMPLETE},
-                    "hls": {"status": main.INCOMPLETE},
-                    "ts": {"status": main.INCOMPLETE},
-                },
-                "globalping": {
-                    "status": main.INCOMPLETE,
-                    "error": (
-                        "本地检测未全部通过，未提交 Globalping；"
-                        "不代表远程检测失败。"
-                    ),
-                    "probes": {},
-                    "stages": {},
-                },
-            },
-        ]
-
-        output = io.StringIO()
-
-        with contextlib.redirect_stdout(output):
-            main._print_detection_summary(results)
-
-        report = output.getvalue()
-
-        self.assertIn("候选 2 条", report)
-        self.assertIn("本地全部通过 1 条", report)
-        self.assertIn("Globalping 已提交 1 条", report)
-        self.assertIn("未提交 1 条", report)
-        self.assertIn("实际远程结果 PASS 0 条", report)
-        self.assertIn("INCOMPLETE 1 条", report)
-
-        self.assertIn("北京", report)
-        self.assertIn("China Mobile", report)
-        self.assertIn("test-measurement-1", report)
-        self.assertIn("测量结果未能完成", report)
-
-        self.assertNotIn("token=secret", report)
 
 
 if __name__ == "__main__":
