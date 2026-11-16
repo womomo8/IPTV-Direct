@@ -720,6 +720,7 @@ class Detector:
             return result
 
         slot = None
+        slot_acquired = False
         try:
             parsed = urlsplit(url)
             host = parsed.hostname
@@ -747,11 +748,14 @@ class Detector:
             if wait <= 0 or not slot.acquire(timeout=wait):
                 raise CheckError(
                     INCOMPLETE,
-                    "等待主机并发槽位超过 60 秒",
+                    f"等待主机并发槽位超过 {self.settings['max_queue_seconds']} 秒",
                 )
+            slot_acquired = True
 
             deadline = time.monotonic() + self.budget
             first_slot, slot = slot, None
+            # 信号量所有权已移交给 _request，由 _request 负责释放。
+            slot_acquired = False
             first = self._request(
                 url,
                 deadline,
@@ -855,7 +859,9 @@ class Detector:
                 )
 
         finally:
-            if slot is not None:
+            # 只有当前函数确实成功获取且仍持有槽位时才能释放。
+            # acquire 超时失败时，slot 变量虽然非空，但不拥有该信号量。
+            if slot is not None and slot_acquired:
                 slot.release()
 
         return result
