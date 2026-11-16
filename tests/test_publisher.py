@@ -1,8 +1,8 @@
-
 """IPTV-Direct：publisher.py 线路准入与订阅生成专项测试。"""
 
 import unittest
 
+import main
 import publisher
 
 
@@ -347,6 +347,216 @@ class PublisherAdmissionTests(unittest.TestCase):
         self.assertEqual(
             result["results"][0]["status"],
             publisher.REJECTED,
+        )
+
+
+class MainPublisherHandoffIntegrationTests(unittest.TestCase):
+    """验证 main 优选、Globalping 结果和真实 publisher 的完整交接。"""
+
+    @staticmethod
+    def _quality(
+        segment_success,
+        timeout_count,
+        elapsed,
+        read_seconds,
+        bytes_read,
+        request_success=3,
+    ):
+        return {
+            "request_count": 3,
+            "request_success_count": request_success,
+            "timeout_count": timeout_count,
+            "total_elapsed_seconds": elapsed,
+            "total_read_seconds": read_seconds,
+            "total_bytes_read": bytes_read,
+            "segment_total": 3,
+            "segment_success_count": segment_success,
+        }
+
+    @staticmethod
+    def _local_result(candidate):
+        return {
+            **candidate,
+            "media_type": "HLS",
+            "checks": {
+                "ipv4": {"status": "PASS"},
+                "http": {"status": "PASS"},
+                "hls": {"status": "PASS"},
+                "ts": {"status": "PASS"},
+            },
+        }
+
+    @staticmethod
+    def _remote_result(candidate):
+        return {
+            **candidate,
+            "globalping": {
+                "status": "PASS",
+                "checks": {
+                    "ipv4": {"status": "PASS"},
+                    "http": {"status": "PASS"},
+                    "hls": {"status": "PASS"},
+                    "ts": {"status": "PASS"},
+                },
+                "stages": {},
+                "probes": {},
+                "measurements": [],
+                "error": None,
+            },
+        }
+
+    def test_quality_order_and_publisher_priority_are_both_preserved(self):
+        """
+        Globalping 按质量优先检测；
+        main 恢复原始候选顺序；
+        publisher 仍按人工来源和来源顺序准入。
+        """
+
+        auto_best = make_candidate(
+            url="https://example.com/auto-best.m3u8",
+            priority=1,
+            source_order=1,
+        )
+        auto_best["quality"] = self._quality(
+            segment_success=3,
+            timeout_count=0,
+            elapsed=1.0,
+            read_seconds=0.5,
+            bytes_read=3000,
+        )
+
+        manual_slow = make_candidate(
+            url="https://example.com/manual-slow.m3u8",
+            priority=0,
+            source_order=0,
+        )
+        manual_slow["quality"] = self._quality(
+            segment_success=1,
+            timeout_count=1,
+            elapsed=4.0,
+            read_seconds=3.0,
+            bytes_read=1000,
+            request_success=2,
+        )
+
+        auto_first = make_candidate(
+            url="https://example.com/auto-first.m3u8",
+            priority=1,
+            source_order=0,
+        )
+        auto_first["quality"] = self._quality(
+            segment_success=2,
+            timeout_count=0,
+            elapsed=2.0,
+            read_seconds=1.0,
+            bytes_read=2000,
+        )
+
+        original_candidates = [
+            auto_best,
+            manual_slow,
+            auto_first,
+        ]
+
+        remote_order = []
+
+        def local_check(candidates, settings):
+            return [
+                self._local_result(candidate)
+                for candidate in candidates
+            ]
+
+        def remote_check(candidates, settings):
+            remote_order.extend(
+                item["normalized_url"]
+                for item in candidates
+            )
+            return [
+                self._remote_result(candidate)
+                for candidate in candidates
+            ]
+
+        detected = main.run_detection_pipeline(
+            candidates=original_candidates,
+            settings={
+                "detection": {},
+                "globalping": {
+                    "max_probes": 3,
+                },
+            },
+            local_check=local_check,
+            remote_check=remote_check,
+            channels=["CCTV-1"],
+        )
+
+        # 第一层：Globalping 收到的是同频道质量优先顺序。
+        self.assertEqual(
+            remote_order,
+            [
+                "https://example.com/auto-best.m3u8",
+                "https://example.com/auto-first.m3u8",
+                "https://example.com/manual-slow.m3u8",
+            ],
+        )
+
+        # 第二层：main 返回时恢复候选池原始顺序。
+        self.assertEqual(
+            [
+                item["normalized_url"]
+                for item in detected
+            ],
+            [
+                "https://example.com/auto-best.m3u8",
+                "https://example.com/manual-slow.m3u8",
+                "https://example.com/auto-first.m3u8",
+            ],
+        )
+
+        # 第三层：真实 publisher 执行人工优先、来源顺序和数量上限。
+        admission = main.process_admission_batch(
+            candidates=detected,
+            accepted_routes=[],
+            channels=["CCTV-1"],
+            settings=SETTINGS,
+        )
+
+        accepted_urls = [
+            item["normalized_url"]
+            for item in admission["accepted_routes"]
+        ]
+
+        self.assertEqual(
+            accepted_urls,
+            [
+                "https://example.com/manual-slow.m3u8",
+                "https://example.com/auto-first.m3u8",
+            ],
+        )
+
+        self.assertEqual(admission["channel_counts"]["CCTV-1"], 2)
+
+        # 自动来源中，source_order=0 的线路优先于 source_order=1。
+        # 质量最好的 auto_best 不得绕过已确定的来源顺序政策。
+        self.assertNotIn(
+            "https://example.com/auto-best.m3u8",
+            accepted_urls,
+        )
+
+        # 本地质量数据和 Globalping 结果必须完整保留到正式准入结果。
+        accepted_auto = admission["accepted_routes"][1]
+
+        self.assertEqual(
+            accepted_auto["quality"],
+            auto_first["quality"],
+        )
+        self.assertEqual(
+            accepted_auto["globalping"]["status"],
+            "PASS",
+        )
+
+        self.assertEqual(
+            len(admission["results"]),
+            3,
         )
 
 
