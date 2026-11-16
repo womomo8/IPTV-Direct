@@ -148,32 +148,32 @@ def load_configuration(
     except SourceConfigError as exc:
         raise ValueError(str(exc)) from exc
 
-settings = _read_json(root / "settings.json")
-_check_settings(settings)
+    settings = _read_json(root / "settings.json")
+    _check_settings(settings)
 
-aliases = settings.get("aliases", {})
-if not isinstance(aliases, dict):
-    raise ValueError("settings.json aliases 必须是字典")
+    aliases = settings.get("aliases", {})
+    if not isinstance(aliases, dict):
+        raise ValueError("settings.json aliases 必须是字典")
 
-channel_names = {channel.casefold() for channel in channels}
-seen_aliases = set()
+    channel_names = {channel.casefold() for channel in channels}
+    seen_aliases = set()
 
-for alias, canonical in aliases.items():
-    if (
-        not isinstance(alias, str)
-        or not alias.strip()
-        or not isinstance(canonical, str)
-        or canonical.casefold() not in channel_names
-    ):
-        raise ValueError(
-            f"settings.json 存在无效频道别名：{alias} -> {canonical}"
-        )
+    for alias, canonical in aliases.items():
+        if (
+            not isinstance(alias, str)
+            or not alias.strip()
+            or not isinstance(canonical, str)
+            or canonical.casefold() not in channel_names
+        ):
+            raise ValueError(
+                f"settings.json 存在无效频道别名：{alias} -> {canonical}"
+            )
 
-    alias_key = alias.casefold()
-    if alias_key in seen_aliases:
-        raise ValueError(f"settings.json 存在重复频道别名：{alias}")
+        alias_key = alias.casefold()
+        if alias_key in seen_aliases:
+            raise ValueError(f"settings.json 存在重复频道别名：{alias}")
 
-    seen_aliases.add(alias_key)
+        seen_aliases.add(alias_key)
 
     return {
         "channels": channels,
@@ -509,6 +509,10 @@ def _collection_stop_reason(
 
 def run_formal_flow(config: dict[str, Any]) -> int:
     settings = config["settings"]
+    aliases = settings.get("aliases", {})
+    if not isinstance(aliases, dict):
+        raise ValueError("settings.json aliases 必须是字典")
+
     limits = settings["collection"]
     channels = config["channels"]
 
