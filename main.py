@@ -580,7 +580,6 @@ def run_formal_flow(config: dict[str, Any]) -> int:
         return 1
 
     # 第8阶段：生成并检查订阅内容。
-    # 这里只生成内存内容，不写入正式 output 文件。
     try:
         subscriptions = publisher.build_subscriptions(
             accepted_routes,
@@ -612,14 +611,38 @@ def run_formal_flow(config: dict[str, Any]) -> int:
         "第8阶段处理完成：已执行正式准入、频道统计、"
         "M3U/TXT 生成及一致性检查。"
     )
+
+    # 第9阶段：执行正式订阅安全发布。
+    try:
+        publish_result = publisher.publish_subscriptions(
+            subscriptions,
+            channels,
+            output_dir=ROOT / "output",
+        )
+    except Exception as exc:
+        print(
+            f"第9阶段正式订阅发布失败：{exc}",
+            file=sys.stderr,
+        )
+        print(
+            "请检查发布保护和回滚结果；"
+            "本轮不能视为发布成功。",
+            file=sys.stderr,
+        )
+        return 1
+
     print(
-        "当前尚未执行第9阶段发布保护；"
-        "本次没有写入或覆盖 output/iptv.m3u、output/iptv.txt。"
+        "第9阶段正式订阅发布成功："
+        f"频道 {publish_result['channel_count']} 个；"
+        f"线路 {publish_result['route_count']} 条。"
     )
+    print(f"M3U 文件：{publish_result['m3u_path']}")
+    print(f"TXT 文件：{publish_result['txt_path']}")
 
-    # 不把尚未实施的正式发布伪装成成功。
-    return 2
+    if publish_result["first_publish"]:
+        print("本次属于首次发布。")
 
+    return 0
 
 # ----------------------------------------------------------------------
 # 阶段4：采集、下载、解析、索引专项测试
