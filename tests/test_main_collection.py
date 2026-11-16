@@ -339,5 +339,83 @@ class CollectionStopReasonTests(unittest.TestCase):
         self.assertIsNone(reason)
 
 
+class GlobalpingSummaryTests(unittest.TestCase):
+
+    def test_summary_excludes_not_submitted_candidates(self):
+        results = [
+            {
+                "channel": "CCTV-5",
+                "media_type": "HLS",
+                "normalized_url": "https://example.test/live.m3u8?token=secret",
+                "checks": {
+                    "ipv4": {"status": main.PASS},
+                    "http": {"status": main.PASS},
+                    "hls": {"status": main.PASS},
+                    "ts": {"status": main.PASS},
+                },
+                "globalping": {
+                    "status": main.INCOMPLETE,
+                    "error": "测量结果未能完成。",
+                    "probes": {
+                        "probe1": {
+                            "country": "CN",
+                            "city": "北京",
+                            "network": "China Mobile",
+                            "asn": 9808,
+                        }
+                    },
+                    "stages": {
+                        "main_playlist": {
+                            "measurement_id": "test-measurement-1",
+                            "status": main.INCOMPLETE,
+                            "reason": "测量结果未能完成。",
+                        }
+                    },
+                },
+            },
+            {
+                "channel": "CCTV-6",
+                "media_type": "HLS",
+                "normalized_url": "https://example.test/other.m3u8",
+                "checks": {
+                    "ipv4": {"status": main.FAIL},
+                    "http": {"status": main.INCOMPLETE},
+                    "hls": {"status": main.INCOMPLETE},
+                    "ts": {"status": main.INCOMPLETE},
+                },
+                "globalping": {
+                    "status": main.INCOMPLETE,
+                    "error": (
+                        "本地检测未全部通过，未提交 Globalping；"
+                        "不代表远程检测失败。"
+                    ),
+                    "probes": {},
+                    "stages": {},
+                },
+            },
+        ]
+
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            main._print_detection_summary(results)
+
+        report = output.getvalue()
+
+        self.assertIn("候选 2 条", report)
+        self.assertIn("本地全部通过 1 条", report)
+        self.assertIn("Globalping 已提交 1 条", report)
+        self.assertIn("未提交 1 条", report)
+        self.assertIn("实际远程结果 PASS 0 条", report)
+        self.assertIn("INCOMPLETE 1 条", report)
+
+        self.assertIn("北京", report)
+        self.assertIn("China Mobile", report)
+        self.assertIn("test-measurement-1", report)
+        self.assertIn("测量结果未能完成", report)
+
+        self.assertNotIn("token=secret", report)
+
+
 if __name__ == "__main__":
     unittest.main()
