@@ -95,7 +95,7 @@ jobs:
           python -m py_compile main.py checker.py globalping.py collector.py normalizer.py publisher.py
           python -m py_compile tests/test_checker.py tests/test_checker_limits.py
           python -m py_compile tests/test_globalping.py tests/test_main_globalping.py
-          python -m py_compile tests/test_publisher.py
+          python -m py_compile tests/test_publisher.py tests/test_main_collection.py
 
       - name: Run checker专项测试
         run: |
@@ -112,6 +112,10 @@ jobs:
       - name: Run publisher专项测试
         run: |
           python -m unittest discover -s tests -p "test_publisher.py" -v
+
+      - name: Run main来源批次与停止条件专项测试
+        run: |
+          python -m unittest discover -s tests -p "test_main_collection.py" -v
 
       - name: Run existing test flow
         run: python main.py --mode test
