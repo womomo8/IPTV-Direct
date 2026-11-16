@@ -235,14 +235,24 @@ def parse_source_content(
     errors = []
     pending = None
 
+    target_candidate_count = 0
+
     def add_candidate(candidate, error=None):
+        nonlocal target_candidate_count
+
         candidates.append(candidate)
 
         if error:
             errors.append(error)
 
-        # 多识别一条，仅用于确认是否超过上限。
-        return max_candidates is not None and len(candidates) > max_candidates
+        if candidate.get("channel") is not None:
+            target_candidate_count += 1
+
+        # 只有目标频道候选才占用数量上限。
+        return (
+            max_candidates is not None
+            and target_candidate_count > max_candidates
+        )
 
     for line in lines:
         if not line:
@@ -386,15 +396,24 @@ def normalize_source_content(
             "limit_reached": False,
         }
 
+    target_candidate_count = sum(
+        candidate["channel"] is not None
+        for candidate in parsed["candidates"]
+    )
+
     source_limited = (
-        len(parsed["candidates"]) > max_candidates_per_source
+        target_candidate_count > max_candidates_per_source
     )
     total_limited = (
         max_candidates_remaining is not None
-        and len(parsed["candidates"]) > max_candidates_remaining
+        and target_candidate_count > max_candidates_remaining
     )
 
-    selected = parsed["candidates"][:limit]
+    selected = [
+        candidate
+        for candidate in parsed["candidates"]
+        if candidate["channel"] is not None
+    ][:limit]
     retained = []
     duplicates = 0
     matched = 0
