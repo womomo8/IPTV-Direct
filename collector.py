@@ -1,4 +1,3 @@
-
 """IPTV-Direct：人工来源、自动来源采集及下载。"""
 
 from collections import Counter
@@ -404,16 +403,24 @@ class _LimitedRedirectHandler(HTTPRedirectHandler):
 
 
 def _set_response_timeout(response, deadline: float):
-    """将响应 socket 超时设置为剩余预算。"""
+    """通过连接对象保存的 socket 设置响应读取超时。"""
     remaining = _remaining_seconds(deadline)
 
-    buffered = getattr(response, "fp", None)
-    raw = getattr(buffered, "raw", None)
-    raw_socket = getattr(raw, "_sock", None)
+    connection = getattr(
+        response,
+        "_iptv_deadline_connection",
+        None,
+    )
+
+    raw_socket = getattr(
+        connection,
+        "_deadline_socket",
+        None,
+    )
 
     if raw_socket is None:
         raise SourceDownloadError(
-            "无法设置响应读取的总时间限制"
+            "无法获取响应连接的底层 socket"
         )
 
     raw_socket.settimeout(remaining)
