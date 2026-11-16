@@ -1377,6 +1377,9 @@ def _run_stage5_normalization_tests() -> None:
 
     limited = normalize(
         make_playlist([
+            ("无关频道A", "https://example.com/live/irrelevant-a.ts"),
+            ("无关频道B", "https://example.com/live/irrelevant-b.ts"),
+            ("无关频道C", "https://example.com/live/irrelevant-c.ts"),
             ("CCTV-5", "https://example.com/live/limit-one.ts"),
             ("CCTV-5", "https://example.com/live/limit-two.ts"),
         ]),
@@ -1407,6 +1410,9 @@ def _run_stage5_normalization_tests() -> None:
     # 8. 本轮剩余额度必须限制当前提取数量。
     remaining_limited = normalize(
         make_playlist([
+            ("无关频道A", "https://example.com/live/remaining-irrelevant-a.ts"),
+            ("无关频道B", "https://example.com/live/remaining-irrelevant-b.ts"),
+            ("无关频道C", "https://example.com/live/remaining-irrelevant-c.ts"),
             ("CCTV-5", "https://example.com/live/remaining-one.ts"),
             ("CCTV-5", "https://example.com/live/remaining-two.ts"),
         ]),
