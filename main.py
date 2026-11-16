@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """IPTV-Direct 总入口：采集、检测、线路准入及订阅生成。"""
@@ -6,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -325,21 +327,45 @@ def _print_detection_summary(results: list[dict[str, Any]]) -> None:
                     f"  阶段 {stage_name}："
                     f"{stage.get('status', '未知')}；"
                     f"测量ID {stage.get('measurement_id') or '无'}；"
-                    f"原因：{stage.get('reason') or '没有提供原因'}"
+                    f"原因：{_safe_diagnostic_text(stage.get('reason') or '没有提供原因')}"
                 )
         else:
             print("  阶段：没有取得阶段记录。")
 
         if remote.get("error"):
-            print(f"  远程异常/未完成原因：{remote['error']}")
+            print(
+                "  远程异常/未完成原因："
+                f"{_safe_diagnostic_text(remote['error'])}"
+            )
+
+
+def _safe_host_from_url(value: Any) -> str:
+    """从 URL 提取主机名，不输出路径、查询参数或凭据。"""
+    try:
+        return urlsplit(str(value or "")).hostname or "无法识别"
+    except ValueError:
+        return "无法识别"
 
 
 def _safe_host(candidate: dict[str, Any]) -> str:
     """只显示主机名，避免日志泄露 URL 参数或凭据。"""
-    try:
-        return urlsplit(str(candidate.get("normalized_url", ""))).hostname or "无法识别"
-    except ValueError:
-        return "无法识别"
+    return _safe_host_from_url(candidate.get("normalized_url", ""))
+
+
+def _safe_diagnostic_text(value: Any) -> str:
+    """保留错误原因，同时将其中的完整 URL 替换为主机名。"""
+    text = str(value).replace("\r", " ").replace("\n", " ")
+    pattern = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+
+    def hide_url(match: re.Match[str]) -> str:
+        raw = match.group(0)
+        suffix = ""
+        while raw and raw[-1] in ".,;)]}":
+            suffix = raw[-1] + suffix
+            raw = raw[:-1]
+        return _safe_host_from_url(raw) + suffix
+
+    return pattern.sub(hide_url, text)
 
 
 def _print_manual_source_details(
@@ -363,8 +389,7 @@ def _print_manual_source_details(
     )
 
     for error in normalized.get("errors", []):
-        # 解析错误可能包含完整 URL，只输出错误类型，不输出原始内容。
-        print(f"  解析提示：{str(error).split(':', 1)[0]}")
+        print(f"  解析/匹配提示：{_safe_diagnostic_text(error)}")
 
     admitted = {
         _identity(result.get("candidate", {})): result
@@ -393,12 +418,12 @@ def _print_manual_source_details(
                 print(
                     f"      {check_name.upper()}："
                     f"{detail.get('status', '未执行')}；"
-                    f"{detail.get('reason') or '无原因说明'}"
+                    f"{_safe_diagnostic_text(detail.get('reason') or '无原因说明')}"
                 )
         if isinstance(remote, dict):
             print(
                 f"      Globalping：{remote.get('status', '未执行')}；"
-                f"{remote.get('error') or '无异常说明'}"
+                f"{_safe_diagnostic_text(remote.get('error') or '无异常说明')}"
             )
             stages = remote.get("stages", {})
             if isinstance(stages, dict):
@@ -406,11 +431,11 @@ def _print_manual_source_details(
                     if isinstance(stage, dict):
                         print(
                             f"        {stage_name}：{stage.get('status', '未知')}；"
-                            f"{stage.get('reason') or '无原因说明'}"
+                            f"{_safe_diagnostic_text(stage.get('reason') or '无原因说明')}"
                         )
         print(
             f"      正式准入：{admission.get('status', '未进入准入')}；"
-            f"{admission.get('reason') or '无原因说明'}"
+            f"{_safe_diagnostic_text(admission.get('reason') or '无原因说明')}"
         )
 
 
@@ -492,25 +517,44 @@ def run_formal_flow(config: dict[str, Any]) -> int:
 
         if item.get("errors"):
             if source.get("source_type") == "manual":
-                print(
-                    f"人工来源下载失败：{source.get('name', '未命名来源')}；"
-                    f"错误 {len(item['errors'])} 项。"
+                for message in item["errors"]:
+                    print(
+                        f"人工来源下载失败：{source.get('name', '未命名来源')}；"
+                        f"原因：{_safe_diagnostic_text(message)}"
+                    )
+            else:
+                errors.extend(
+                    f"{label}：{message}" for message in item["errors"]
                 )
-            errors.extend(
-                f"{label}：{message}" for message in item["errors"]
-            )
             continue
 
         downloaded = item.get("download")
 
         if not isinstance(downloaded, dict):
-            errors.append(f"{label}：采集器未返回下载内容")
+            message = "采集器未返回下载内容"
+            if source.get("source_type") == "manual":
+                print(f"人工来源采集异常：{label}；原因：{message}")
+            else:
+                errors.append(f"{label}：{message}")
             continue
+
+        content = downloaded.get("content")
+        content_size = len(content) if isinstance(content, (bytes, str)) else 0
+        if source.get("source_type") == "manual":
+            print(
+                f"人工来源下载成功：{label}；"
+                f"HTTP {downloaded.get('http_status', '未知')}；"
+                f"内容 {content_size} 字节；"
+                f"类型 {downloaded.get('content_type') or '未提供'}；"
+                f"最终主机 {_safe_host_from_url(downloaded.get('final_url'))}。"
+            )
 
         remaining = limits["max_candidates_total"] - extracted_total
 
         if remaining <= 0:
             stopped = f"达到全部候选总上限 {limits['max_candidates_total']}"
+            if source.get("source_type") == "manual":
+                print(f"人工来源停止解析：{label}；原因：{stopped}。")
             break
 
         source_info = {
@@ -532,15 +576,20 @@ def run_formal_flow(config: dict[str, Any]) -> int:
                 max_candidates_remaining=remaining,
             )
         except Exception as exc:
-            errors.append(f"{label}：归一解析异常：{exc}")
+            safe_message = _safe_diagnostic_text(exc)
+            if source.get("source_type") == "manual":
+                print(f"人工来源解析异常：{label}；原因：{safe_message}")
+            else:
+                errors.append(f"{label}：归一解析异常：{safe_message}")
             continue
 
         if not normalized.get("recognized"):
             _print_manual_source_details(source, normalized, [], [])
-            errors.extend(
-                f"{label}：{error}"
-                for error in normalized.get("errors", [])
-            )
+            if source.get("source_type") != "manual":
+                errors.extend(
+                    f"{label}：{error}"
+                    for error in normalized.get("errors", [])
+                )
             continue
 
         extracted_total += normalized["extracted_candidates"]
