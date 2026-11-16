@@ -1,7 +1,6 @@
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""IPTV-Direct 总入口：采集、归一、本地检测及 Globalping 辅助检测。"""
+"""IPTV-Direct 总入口：采集、检测、线路准入及订阅生成。"""
 
 from __future__ import annotations
 
@@ -17,6 +16,8 @@ from urllib.parse import urlsplit
 
 import checker
 import globalping
+import publisher
+
 from collector import (
     SourceConfigError,
     SourceDownloadError,
@@ -97,6 +98,7 @@ def _check_settings(settings: dict[str, Any]) -> None:
 
         for key in keys:
             value = data.get(key)
+
             if key in ("timezone", "daily_time"):
                 if not isinstance(value, str) or not value.strip():
                     raise ValueError(
@@ -115,6 +117,7 @@ def _check_settings(settings: dict[str, Any]) -> None:
         raise ValueError("settings.json schedule.timezone 必须为 Asia/Shanghai")
 
     clock = settings["schedule"]["daily_time"]
+
     try:
         hour, minute = (int(part) for part in clock.split(":"))
     except (ValueError, AttributeError) as exc:
@@ -166,6 +169,7 @@ def load_configuration(
 
 def _local_pass(candidate: dict[str, Any]) -> bool:
     checks = candidate.get("checks")
+
     if not isinstance(checks, dict):
         return False
 
@@ -176,6 +180,7 @@ def _local_pass(candidate: dict[str, Any]) -> bool:
         required += ("hls",)
     elif media_type == "DIRECT_TS":
         hls_check = checks.get("hls")
+
         if not isinstance(hls_check, dict) or hls_check.get("status") != NA:
             return False
     else:
@@ -251,6 +256,7 @@ def run_detection_pipeline(
 
     except Exception as exc:
         reason = f"本地检测调用异常或结果校验失败：{exc}"
+
         local_results = [
             {
                 **item,
@@ -293,6 +299,7 @@ def run_detection_pipeline(
                     raise ValueError("Globalping 返回顺序或候选身份不匹配")
 
                 remote = result.get("globalping")
+
                 if (
                     not isinstance(remote, dict)
                     or remote.get("status") not in (PASS, FAIL, INCOMPLETE)
@@ -304,16 +311,19 @@ def run_detection_pipeline(
                     for index, item in enumerate(local_results)
                     if _identity(item) == _identity(eligible[position])
                 )
+
                 output[original_index] = result
 
         except Exception as exc:
             reason = f"Globalping 调用异常或结果校验失败：{exc}"
+
             for item in eligible:
                 original_index = next(
                     index
                     for index, local in enumerate(local_results)
                     if _identity(local) == _identity(item)
                 )
+
                 output[original_index] = _remote_incomplete(item, reason)
 
     return [
@@ -337,6 +347,7 @@ def _print_detection_summary(results: list[dict[str, Any]]) -> None:
 
     for item in results:
         state = item.get("globalping", {}).get("status")
+
         if state in remote_counts:
             remote_counts[state] += 1
 
@@ -351,21 +362,70 @@ def _print_detection_summary(results: list[dict[str, Any]]) -> None:
 
 
 # ----------------------------------------------------------------------
-# 正式流程：逐来源采集、归一、检测
+# publisher 交接与停止条件
+# ----------------------------------------------------------------------
+
+def process_admission_batch(
+    candidates: list[dict[str, Any]],
+    accepted_routes: list[dict[str, Any]],
+    channels: list[str],
+    settings: dict[str, Any],
+) -> dict[str, Any]:
+    """将本批完整检测结果交给 publisher 执行正式准入。"""
+
+    return publisher.process_batch(
+        candidates=candidates,
+        accepted_routes=accepted_routes,
+        channels=channels,
+        settings=settings,
+    )
+
+
+def _collection_stop_reason(
+    valid_sources: int,
+    extracted_total: int,
+    admission: dict[str, Any],
+    limits: dict[str, Any],
+) -> str | None:
+    """依据正式参数和 publisher 返回的频道统计判断是否停止。"""
+
+    if valid_sources >= limits["max_valid_sources"]:
+        return f"达到有效来源上限 {limits['max_valid_sources']}"
+
+    if extracted_total >= limits["max_candidates_total"]:
+        return f"达到全部候选总上限 {limits['max_candidates_total']}"
+
+    if admission.get("all_channels_reached"):
+        return "所有目标频道均已达到每频道 2 条有效线路目标"
+
+    return None
+
+
+# ----------------------------------------------------------------------
+# 正式流程：逐来源采集、检测、准入和订阅生成
 # ----------------------------------------------------------------------
 
 def run_formal_flow(config: dict[str, Any]) -> int:
     settings = config["settings"]
     limits = settings["collection"]
+    channels = config["channels"]
 
     seen_urls: set[str] = set()
     errors: list[str] = []
     detected: list[dict[str, Any]] = []
 
+    accepted_routes: list[dict[str, Any]] = []
+    admission = {
+        "accepted_routes": [],
+        "channel_counts": {channel: 0 for channel in channels},
+        "all_channels_reached": False,
+    }
+
     valid_sources = 0
     extracted_total = 0
     duplicate_total = 0
     stopped = "所有配置来源均已处理"
+    system_error = False
 
     stream = iter_source_contents(
         config["manual_sources"],
@@ -384,11 +444,13 @@ def run_formal_flow(config: dict[str, Any]) -> int:
             continue
 
         downloaded = item.get("download")
+
         if not isinstance(downloaded, dict):
             errors.append(f"{label}：采集器未返回下载内容")
             continue
 
         remaining = limits["max_candidates_total"] - extracted_total
+
         if remaining <= 0:
             stopped = f"达到全部候选总上限 {limits['max_candidates_total']}"
             break
@@ -402,7 +464,7 @@ def run_formal_flow(config: dict[str, Any]) -> int:
             normalized = normalize_source_content(
                 content=downloaded["content"],
                 source=source_info,
-                channels=config["channels"],
+                channels=channels,
                 max_candidates_per_source=limits["max_candidates_per_source"],
                 seen_urls=seen_urls,
                 content_type=downloaded["content_type"],
@@ -430,10 +492,51 @@ def run_formal_flow(config: dict[str, Any]) -> int:
         if normalized.get("matched_target_candidates", 0) > 0:
             valid_sources += 1
 
+        accepted_now = 0
+        rejected_now = 0
+
         if candidates:
             batch_results = run_detection_pipeline(candidates, settings)
             detected.extend(batch_results)
             _print_detection_summary(batch_results)
+
+            try:
+                admission = process_admission_batch(
+                    candidates=batch_results,
+                    accepted_routes=accepted_routes,
+                    channels=channels,
+                    settings=settings,
+                )
+            except publisher.PublisherError as exc:
+                errors.append(f"线路准入系统错误：{exc}")
+                stopped = "publisher 正式准入发生系统错误"
+                system_error = True
+                break
+
+            accepted_routes = admission["accepted_routes"]
+
+            accepted_now = sum(
+                result.get("status") == publisher.ACCEPTED
+                for result in admission["results"]
+            )
+            rejected_now = sum(
+                result.get("status") == publisher.REJECTED
+                for result in admission["results"]
+            )
+
+            print(
+                f"线路准入：本批准入 {accepted_now} 条；"
+                f"本批拒绝 {rejected_now} 条；"
+                f"累计保留 {len(accepted_routes)} 条。"
+            )
+
+            print(
+                "频道有效线路统计："
+                + "；".join(
+                    f"{channel} {count}/2"
+                    for channel, count in admission["channel_counts"].items()
+                )
+            )
 
         print(
             f"来源处理：{label}；"
@@ -443,12 +546,15 @@ def run_formal_flow(config: dict[str, Any]) -> int:
             f"进入检测 {len(candidates)}。"
         )
 
-        if valid_sources >= limits["max_valid_sources"]:
-            stopped = f"达到有效来源上限 {limits['max_valid_sources']}"
-            break
+        stop_reason = _collection_stop_reason(
+            valid_sources,
+            extracted_total,
+            admission,
+            limits,
+        )
 
-        if extracted_total >= limits["max_candidates_total"]:
-            stopped = f"达到全部候选总上限 {limits['max_candidates_total']}"
+        if stop_reason:
+            stopped = stop_reason
             break
 
     print(
@@ -465,10 +571,53 @@ def run_formal_flow(config: dict[str, Any]) -> int:
     if detected:
         _print_detection_summary(detected)
 
+    if system_error:
+        print(
+            "发生准入系统错误，停止后续处理；"
+            "正式订阅未修改。",
+            file=sys.stderr,
+        )
+        return 1
+
+    # 第8阶段：生成并检查订阅内容。
+    # 这里只生成内存内容，不写入正式 output 文件。
+    try:
+        subscriptions = publisher.build_subscriptions(
+            accepted_routes,
+            channels,
+        )
+    except publisher.PublisherError as exc:
+        print(
+            f"订阅生成或格式检查失败：{exc}",
+            file=sys.stderr,
+        )
+        print("正式订阅未修改。", file=sys.stderr)
+        return 1
+
     print(
-        "本阶段未实现 publisher.py：已完成检测结果交接，"
-        "但未执行正式准入、订阅生成或发布；正式订阅未修改。"
+        f"订阅内容生成并校验通过："
+        f"线路 {subscriptions['route_count']} 条；"
+        f"频道 {sum(count > 0 for count in subscriptions['channel_counts'].values())} 个。"
     )
+
+    print(
+        "本轮频道统计："
+        + "；".join(
+            f"{channel} {count}/2"
+            for channel, count in subscriptions["channel_counts"].items()
+        )
+    )
+
+    print(
+        "第8阶段处理完成：已执行正式准入、频道统计、"
+        "M3U/TXT 生成及一致性检查。"
+    )
+    print(
+        "当前尚未执行第9阶段发布保护；"
+        "本次没有写入或覆盖 output/iptv.m3u、output/iptv.txt。"
+    )
+
+    # 不把尚未实施的正式发布伪装成成功。
     return 2
 
 
@@ -498,10 +647,12 @@ def _run_stage4_collection_tests(config: dict[str, Any]) -> None:
         "IPTV-Direct 模拟测试频道\n"
         "http://example.invalid/live/test.ts\n"
     )
+
     txt = (
         "IPTV-Direct 模拟测试频道,"
         "http://example.invalid/live/txt.ts\n"
     )
+
     hls = (
         "#EXTM3U\n"
         "#EXT-X-VERSION:3\n"
@@ -541,10 +692,12 @@ def _run_stage4_collection_tests(config: dict[str, Any]) -> None:
         "sub/two.txt",
         "child.m3u",
     ]
+
     links.extend(
         f"sub/extra{number:02d}.m3u"
         for number in range(38)
     )
+
     links.extend(("child.html", "ftp://example.invalid/x.m3u"))
 
     routes["/index.html"] = make_response(
@@ -563,17 +716,21 @@ def _run_stage4_collection_tests(config: dict[str, Any]) -> None:
 
         def do_GET(self):
             path = urlsplit(self.path).path
+
             self.request_counts[path] = (
                 self.request_counts.get(path, 0) + 1
             )
 
             item = self.route_table.get(path)
+
             if item is None and path.startswith("/sub/"):
                 item = make_response(playlist, "audio/x-mpegurl")
+
             if item is None:
                 item = make_response("Not found", status=404)
 
             status, content_type, body, headers = item
+
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
@@ -582,6 +739,7 @@ def _run_stage4_collection_tests(config: dict[str, Any]) -> None:
                 self.send_header(name, value)
 
             self.end_headers()
+
             if body:
                 self.wfile.write(body)
 
@@ -590,6 +748,7 @@ def _run_stage4_collection_tests(config: dict[str, Any]) -> None:
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     server.daemon_threads = True
+
     thread = threading.Thread(
         target=server.serve_forever,
         daemon=True,
@@ -608,7 +767,14 @@ def _run_stage4_collection_tests(config: dict[str, Any]) -> None:
 
         # M3U 下载、MIME识别、频道解析。
         m3u_url = f"{base}/playlist.m3u"
-        m3u = download_url(m3u_url, 10, 1048576, 5, 1048576)
+
+        m3u = download_url(
+            m3u_url,
+            10,
+            1048576,
+            5,
+            1048576,
+        )
 
         parsed = normalize_source_content(
             content=m3u["content"],
@@ -632,12 +798,18 @@ def _run_stage4_collection_tests(config: dict[str, Any]) -> None:
             and parsed["candidates"][0]["channel"] == TEST_CHANNEL,
             "M3U 下载或 MIME/频道解析失败",
         )
+
         print("阶段4测试：M3U 下载、MIME识别和频道匹配 PASS")
 
         # TXT 下载和频道解析。
         txt_url = f"{base}/channels.txt"
+
         txt_download = download_url(
-            txt_url, 10, 1048576, 5, 1048576
+            txt_url,
+            10,
+            1048576,
+            5,
+            1048576,
         )
 
         txt_parsed = normalize_source_content(
@@ -661,12 +833,18 @@ def _run_stage4_collection_tests(config: dict[str, Any]) -> None:
             and txt_parsed["candidates"][0]["channel"] == TEST_CHANNEL,
             "TXT 下载或频道解析失败",
         )
+
         print("阶段4测试：TXT 下载和频道解析 PASS")
 
         # HLS 清单识别。
         hls_url = f"{base}/live.m3u8"
+
         hls_download = download_url(
-            hls_url, 10, 1048576, 5, 1048576
+            hls_url,
+            10,
+            1048576,
+            5,
+            1048576,
         )
 
         hls_parsed = normalize_source_content(
@@ -692,6 +870,7 @@ def _run_stage4_collection_tests(config: dict[str, Any]) -> None:
             and hls_parsed["candidates"] == [],
             "HLS 清单识别或频道处理错误",
         )
+
         print("阶段4测试：HLS M3U8 清单识别 PASS")
 
         manual_sources = [
@@ -824,6 +1003,7 @@ def _run_stage4_collection_tests(config: dict[str, Any]) -> None:
             and redirected["candidates"][0]["channel"] == TEST_CHANNEL,
             "重定向后的 TXT 内容未正确解析",
         )
+
         print("阶段4测试：人工优先、失败隔离、重定向、HTTP 206 PASS")
 
         # 索引链接：相对链接、去重、过滤、40条上限、不递归。
@@ -1158,6 +1338,7 @@ def _run_pipeline_mock_test(config: dict[str, Any]) -> None:
 
     def fake_local(items, settings):
         calls["local"] += 1
+
         return [
             {
                 **items[0],
@@ -1171,6 +1352,7 @@ def _run_pipeline_mock_test(config: dict[str, Any]) -> None:
 
     def fake_remote(items, settings):
         calls["remote"] += 1
+
         return [
             {
                 **items[0],
@@ -1235,6 +1417,164 @@ def _run_pipeline_mock_test(config: dict[str, Any]) -> None:
 
 
 # ----------------------------------------------------------------------
+# 主程序与 publisher 交接模拟测试
+# ----------------------------------------------------------------------
+
+def _run_publisher_mock_test(config: dict[str, Any]) -> None:
+    """模拟多批次准入、人工优先、频道统计及订阅生成。"""
+
+    channels = [TEST_CHANNEL]
+    settings = copy.deepcopy(config["settings"])
+
+    settings["selection"]["max_routes_per_channel"] = 2
+
+    automatic_candidates = [
+        {
+            "channel": TEST_CHANNEL,
+            "normalized_url": "https://example.invalid/auto-1.m3u8",
+            "priority": 1,
+            "source_order": 0,
+            "source_type": "automatic",
+        },
+        {
+            "channel": TEST_CHANNEL,
+            "normalized_url": "https://example.invalid/auto-2.m3u8",
+            "priority": 1,
+            "source_order": 1,
+            "source_type": "automatic",
+        },
+    ]
+
+    manual_candidate = {
+        "channel": TEST_CHANNEL,
+        "normalized_url": "https://example.invalid/manual.m3u8",
+        "priority": 0,
+        "source_order": 0,
+        "source_type": "manual",
+    }
+
+    def fake_local(items, detection_settings):
+        return [
+            {
+                **item,
+                "media_type": "HLS",
+                "checks": {
+                    key: {"status": PASS, "reason": "模拟本地检测通过"}
+                    for key in ("ipv4", "http", "hls", "ts")
+                },
+            }
+            for item in items
+        ]
+
+    def fake_remote(items, globalping_settings):
+        return [
+            {
+                **item,
+                "globalping": {
+                    "status": INCOMPLETE,
+                    "checks": {
+                        "ipv4": {"status": PASS},
+                        "http": {"status": INCOMPLETE},
+                        "hls": {"status": INCOMPLETE},
+                        "ts": {"status": PASS},
+                    },
+                    "stages": {},
+                    "probes": {},
+                    "measurements": [],
+                    "error": "模拟未完成",
+                },
+            }
+            for item in items
+        ]
+
+    # 第一批：两条自动来源线路。
+    first_detected = run_detection_pipeline(
+        automatic_candidates,
+        settings,
+        fake_local,
+        fake_remote,
+    )
+
+    first = process_admission_batch(
+        candidates=first_detected,
+        accepted_routes=[],
+        channels=channels,
+        settings=settings,
+    )
+
+    if (
+        len(first["accepted_routes"]) != 2
+        or first["channel_counts"][TEST_CHANNEL] != 2
+        or not first["all_channels_reached"]
+    ):
+        raise AssertionError("publisher 第一批准入或频道统计错误")
+
+    # 第二批：人工线路应优先于自动来源。
+    manual_detected = run_detection_pipeline(
+        [manual_candidate],
+        settings,
+        fake_local,
+        fake_remote,
+    )
+
+    second = process_admission_batch(
+        candidates=manual_detected,
+        accepted_routes=first["accepted_routes"],
+        channels=channels,
+        settings=settings,
+    )
+
+    retained_urls = [
+        route["normalized_url"]
+        for route in second["accepted_routes"]
+    ]
+
+    if (
+        len(second["accepted_routes"]) != 2
+        or manual_candidate["normalized_url"] not in retained_urls
+        or not second["all_channels_reached"]
+    ):
+        raise AssertionError("publisher 多批次累计或人工来源优先规则错误")
+
+    if any(
+        route.get("globalping", {}).get("status") != INCOMPLETE
+        for route in second["accepted_routes"]
+    ):
+        raise AssertionError("Globalping INCOMPLETE 状态未被正确保留")
+
+    if any(
+        route.get("domestic_verification", {}).get("status")
+        != "NOT_VERIFIED"
+        for route in second["accepted_routes"]
+    ):
+        raise AssertionError("国内实播未验证状态处理错误")
+
+    output = publisher.build_subscriptions(
+        second["accepted_routes"],
+        channels,
+    )
+
+    if (
+        output["route_count"] != 2
+        or not publisher.validate_subscriptions(
+            output["m3u"],
+            output["txt"],
+            channels,
+        )
+    ):
+        raise AssertionError("publisher M3U/TXT 生成或一致性检查失败")
+
+    if manual_candidate["normalized_url"] not in output["m3u"]:
+        raise AssertionError("最终 M3U 没有保留人工优先线路")
+
+    print(
+        "publisher 交接测试：多批次累计、人工来源优先、"
+        "每频道2条上限、Globalping降级状态、"
+        "国内实播状态及M3U/TXT检查全部 PASS。"
+    )
+
+
+# ----------------------------------------------------------------------
 # 命令入口
 # ----------------------------------------------------------------------
 
@@ -1242,12 +1582,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="IPTV-Direct 自动订阅系统"
     )
+
     parser.add_argument(
         "--mode",
         required=True,
         choices=("formal", "test"),
         help="formal 正式运行；test 隔离测试",
     )
+
     return parser.parse_args(argv)
 
 
@@ -1269,6 +1611,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     print(f"IPTV-Direct：{mode_name}")
+
     print(
         f"配置读取成功：目标频道 {len(config['channels'])} 个；"
         f"人工来源 {len(config['manual_sources'])} 条；"
@@ -1283,11 +1626,13 @@ def main(argv: list[str] | None = None) -> int:
             _run_stage4_collection_tests(config)
             _run_stage5_normalization_tests()
             _run_pipeline_mock_test(config)
+            _run_publisher_mock_test(config)
 
             print(
                 "测试运行通过。测试模式未调用真实 checker 网络检测、"
-                "Globalping API、正式准入或订阅发布。"
+                "Globalping API、正式线路准入或订阅发布。"
             )
+
             return 0
 
         except Exception as exc:
