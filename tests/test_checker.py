@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import Mock, patch
 
 from checker import (
+    Detector,
     IPv4HTTPSConnection,
     check_candidates,
 )
@@ -142,6 +143,9 @@ class MockHandler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        self.server.range_headers.append(
+            (self.path, self.headers.get("Range"))
+        )
         spec = self.server.routes.get(self.path)
 
         if spec is None:
@@ -222,6 +226,7 @@ class CheckerLocalTests(unittest.TestCase):
         )
         cls.server.daemon_threads = True
         cls.server.routes = {}
+        cls.server.range_headers = []
 
         cls.server_thread = threading.Thread(
             target=cls.server.serve_forever,
@@ -240,6 +245,7 @@ class CheckerLocalTests(unittest.TestCase):
         cls.server_thread.join(timeout=2)
 
     def setUp(self):
+        self.server.range_headers = []
         self.server.routes = {
             "/direct.ts": {
                 "status": 206,
@@ -248,6 +254,19 @@ class CheckerLocalTests(unittest.TestCase):
             "/direct-200.ts": {
                 "status": 200,
                 "body": VALID_TS,
+            },
+            "/large-direct.ts": {
+                "status": 206,
+                "body": VALID_TS * 100,
+            },
+            "/empty.ts": {
+                "status": 200,
+                "body": b"",
+            },
+            "/invalid-length.ts": {
+                "status": 200,
+                "body": VALID_TS,
+                "headers": {"Content-Length": "not-a-number"},
             },
             "/media.m3u8": {
                 "status": 200,
@@ -678,6 +697,77 @@ class CheckerLocalTests(unittest.TestCase):
         )
 
         self.assert_status(result, "http", "FAIL")
+
+    def test_connection_refused_is_reported_as_ipv4_and_http_failure(self):
+        """真实 IPv4 连接被拒绝时，不得仅因 DNS 成功而标记通过。"""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+
+        result = check_candidates(
+            [{
+                "normalized_url": (
+                    f"http://127.0.0.1:{port}/direct.ts"
+                )
+            }],
+            self.settings(),
+        )[0]
+
+        self.assert_status(result, "ipv4", "FAIL")
+        self.assert_status(result, "http", "FAIL")
+        self.assertIn(
+            "请求失败",
+            result["checks"]["http"]["reason"],
+        )
+
+    def test_empty_http_body_is_rejected(self):
+        """HTTP 200 但没有实际正文，不能标记 HTTP 通过。"""
+        result = self.check("/empty.ts")
+
+        self.assert_status(result, "ipv4", "PASS")
+        self.assert_status(result, "http", "FAIL")
+        self.assert_status(result, "ts", "INCOMPLETE")
+
+    def test_invalid_content_length_is_rejected(self):
+        """非法 Content-Length 必须作为无效 HTTP 响应处理。"""
+        result = self.check("/invalid-length.ts")
+
+        self.assert_status(result, "ipv4", "PASS")
+        self.assert_status(result, "http", "FAIL")
+        self.assertIn(
+            "Content-Length 无效",
+            result["checks"]["http"]["reason"],
+        )
+
+    def test_direct_ts_range_read_is_capped_at_64kb(self):
+        """直接 TS 检测必须把 Range 请求限制在 64 KB。"""
+        result = self.check("/large-direct.ts")
+
+        self.assertEqual(result["media_type"], "DIRECT_TS")
+        self.assert_status(result, "ipv4", "PASS")
+        self.assert_status(result, "http", "PASS")
+        self.assert_status(result, "ts", "PASS")
+        self.assertEqual(
+            self.server.range_headers[-1],
+            ("/large-direct.ts", "bytes=0-65535"),
+        )
+
+    def test_ts_requires_five_sync_bytes_at_188_byte_intervals(self):
+        """五个同步位置必须连续满足，四个同步位置不能通过。"""
+        valid = bytearray(188 * 5)
+        for index in range(5):
+            valid[index * 188] = 0x47
+
+        invalid = bytearray(valid)
+        invalid[4 * 188] = 0x00
+
+        offset_valid = bytearray(188 * 5)
+        for index in range(5):
+            offset_valid[187 + index * 188] = 0x47
+
+        self.assertTrue(Detector._ts_ok(bytes(valid)))
+        self.assertFalse(Detector._ts_ok(bytes(invalid)))
+        self.assertTrue(Detector._ts_ok(bytes(offset_valid)))
 
 
 if __name__ == "__main__":
