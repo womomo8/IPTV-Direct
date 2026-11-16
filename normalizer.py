@@ -189,7 +189,13 @@ def parse_source_content(
         for line in nonempty[:30]
     )
     is_ts = _looks_like_ts(raw)
-    is_media_type = media_type.startswith(("video/", "audio/"))
+
+    # M3U 播放列表的 MIME 类型可能以 audio/ 开头，
+    # 不能将其误判为普通音频媒体。
+    is_media_type = (
+        media_type.startswith(("video/", "audio/"))
+        and "mpegurl" not in media_type
+    )
 
     if is_hls or is_ts or is_media_type:
         fmt = "hls" if is_hls else "media"
