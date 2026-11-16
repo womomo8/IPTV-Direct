@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """IPTV-Direct Globalping 辅助检测模块。
@@ -31,7 +32,6 @@ REQUEST_TIMEOUT = 30
 POLL_INTERVAL = 0.8
 MAX_POLL_SECONDS = 120
 MAX_BODY_BYTES = 10 * 1024
-RANGE_HEADER = {"Range": "bytes=0-1023"}
 
 MOBILE_ASNS = {
     9808,
@@ -610,7 +610,7 @@ def _aggregate_http(
 
 
 def _raw_body_bytes(result: dict[str, Any]) -> bytes | None:
-    """只接受未截断且可通过 UTF-8 往返还原的正文；不把损坏二进制冒充 TS。"""
+    """只接受完整且可无损还原的 UTF-8 文本正文，供 HLS 清单解析使用。"""
     body = result.get("rawBody")
 
     if not isinstance(body, str) or result.get("truncated"):
@@ -628,19 +628,6 @@ def _raw_body_bytes(result: dict[str, Any]) -> bytes | None:
         return None
 
     return data
-
-
-def _ts_sync_ok(data: bytes | None) -> bool:
-    """检查任意合法包起始偏移处连续五个 188 字节同步点。"""
-    if data is None or len(data) < 4 * 188 + 1:
-        return False
-
-    last_offset = min(187, len(data) - (4 * 188 + 1))
-
-    return any(
-        all(data[offset + 188 * index] == 0x47 for index in range(5))
-        for offset in range(last_offset + 1)
-    )
 
 
 def _parse_playlist(body: bytes | None, base_url: str) -> dict[str, Any]:
@@ -848,111 +835,6 @@ def _select_hls_response(
     )
 
 
-def _range_ts_status(result: dict[str, Any]) -> dict[str, str]:
-    if result.get("status") != "finished":
-        return _status(
-            _failure_status(result),
-            "TS Range 测量未正常完成。",
-        )
-
-    if not _ipv4_ok(result):
-        return _status(
-            INCOMPLETE,
-            "TS Range 结果未确认 IPv4 目标地址。",
-        )
-
-    if not _http_ok(result):
-        try:
-            code = int(result.get("statusCode"))
-        except (TypeError, ValueError):
-            code = 0
-
-        return _status(
-            FAIL if code else INCOMPLETE,
-            f"TS Range HTTP 响应异常：{code or '无状态码'}。",
-        )
-
-    body = _raw_body_bytes(result)
-
-    if body is None:
-        return _status(
-            INCOMPLETE,
-            "TS 正文被截断或无法无损还原。",
-        )
-
-    try:
-        code = int(result.get("statusCode"))
-    except (TypeError, ValueError):
-        return _status(INCOMPLETE, "TS Range 缺少有效 HTTP 状态码。")
-
-    response_headers = _headers_lower(result.get("headers") or {})
-
-    if code == 206:
-        match = re.fullmatch(
-            r"bytes\s+0-(\d+)/(\d+|\*)",
-            response_headers.get("content-range", ""),
-            re.IGNORECASE,
-        )
-
-        if not match:
-            return _status(
-                FAIL,
-                "HTTP 206 缺少有效的 bytes 0-... Content-Range。",
-            )
-
-        end = int(match.group(1))
-
-        if end > 1023:
-            return _status(
-                FAIL,
-                "HTTP 206 返回范围超过本次 bytes=0-1023 请求范围。",
-            )
-
-        if end < 752 or len(body) < 753:
-            return _status(
-                INCOMPLETE,
-                "HTTP 206 返回的 TS 数据不足以检查五个同步位置。",
-            )
-
-        if len(body) != end + 1:
-            return _status(
-                INCOMPLETE,
-                "HTTP 206 的正文长度与 Content-Range 不一致。",
-            )
-
-    elif code == 200:
-        if result.get("truncated") or len(body) < 753:
-            return _status(
-                INCOMPLETE,
-                "服务器忽略 Range，且未取得足够完整的起始媒体数据。",
-            )
-
-        content_length = response_headers.get("content-length")
-
-        if content_length is not None:
-            try:
-                expected_length = int(content_length)
-            except ValueError:
-                return _status(FAIL, "HTTP 200 的 Content-Length 无效。")
-
-            if expected_length != len(body):
-                return _status(INCOMPLETE, "HTTP 200 正文未完整取得。")
-
-    else:
-        return _status(FAIL, f"TS Range 不支持 HTTP {code}。")
-
-    if not _ts_sync_ok(body):
-        return _status(
-            FAIL,
-            "TS 数据未通过连续五个 188 字节同步位置检查。",
-        )
-
-    return _status(
-        PASS,
-        "实际 TS Range 数据通过五个 188 字节同步位置检查。",
-    )
-
-
 def _run_hls(
     candidate: dict[str, Any],
     locations: list[dict[str, Any]],
@@ -1087,40 +969,17 @@ def _run_hls(
             "主清单及适用的媒体子清单均已完整读取并解析。",
         )
 
-        segment_url = media_parsed["segments"][0]
-
-        range_id, range_measurement = _stage(
-            segment_url,
-            media_id,
-            budget,
-            headers=RANGE_HEADER,
+        checks["ts"] = _status(
+            INCOMPLETE,
+            "Globalping HTTP rawBody 不提供可证明无损的 TS 二进制数据；"
+            "TS 数据有效性由本地 checker.py 检查。",
         )
-
-        measurements.append(range_id)
-        range_results = _result_map(range_measurement)
-        range_item = range_results.get(selected_key)
-
-        if range_item is None:
-            checks["ts"] = _status(
-                INCOMPLETE,
-                "TS Range 结果没有返回对应探针数据。",
-            )
-
-            stages["ts_range"] = _stage_record(
-                range_id,
-                INCOMPLETE,
-                checks["ts"]["reason"],
-            )
-
-        else:
-            checks["ts"] = _range_ts_status(range_item["result"])
-
-            stages["ts_range"] = _stage_record(
-                range_id,
-                checks["ts"]["status"],
-                checks["ts"]["reason"],
-                _probe_summary(range_item["probe"]),
-            )
+        stages["ts_binary"] = _stage_record(
+            None,
+            INCOMPLETE,
+            checks["ts"]["reason"],
+            _probe_summary(main_results[selected_key]["probe"]),
+        )
 
         return {
             "checks": checks,
@@ -1180,7 +1039,7 @@ def _run_direct_ts(
             url,
             locations,
             budget,
-            headers=RANGE_HEADER,
+            headers={"Range": "bytes=0-0"},
         )
 
         measurements.append(measurement_id)
@@ -1204,16 +1063,32 @@ def _run_direct_ts(
         if selected is None:
             checks["ts"] = _status(
                 INCOMPLETE,
-                "没有取得可检查的 IPv4 HTTP 媒体数据。",
+                "没有取得可用的 IPv4 HTTP 响应；"
+                "Globalping 不负责验证 TS 二进制数据。",
             )
-
+            stages["direct_ts_http"] = _stage_record(
+                measurement_id,
+                checks["http"]["status"],
+                checks["http"]["reason"],
+            )
         else:
             key, item = selected
-            checks["ts"] = _range_ts_status(item["result"])
-
-            stages["direct_ts_range"] = _stage_record(
+            checks["ts"] = _status(
+                INCOMPLETE,
+                "Globalping 已完成 IPv4/HTTP 检测，但其 rawBody "
+                "不具备可靠的 TS 二进制校验能力；"
+                "TS 数据有效性由本地 checker.py 检查。",
+            )
+            stages["direct_ts_http"] = _stage_record(
                 measurement_id,
-                checks["ts"]["status"],
+                PASS,
+                "已取得中国大陆探针的 IPv4 HTTP 2xx 响应；"
+                "不据此宣称 TS 数据有效。",
+                _probe_summary(item["probe"]),
+            )
+            stages["ts_binary"] = _stage_record(
+                None,
+                INCOMPLETE,
                 checks["ts"]["reason"],
                 _probe_summary(item["probe"]),
             )
@@ -1424,11 +1299,11 @@ def check_candidates(
             )
             continue
 
-        # HLS 最多三个阶段：主清单、媒体子清单、TS 分片。
-        # 启动前预留完整三阶段预算，避免测到一半额度耗尽。
-        # Direct TS 只需要一个阶段。
+        # HLS 最多两个阶段：主清单、媒体子清单；不再远程下载 TS 二进制。
+        # 启动前预留完整两阶段预算，避免 Master 清单检测到一半额度耗尽。
+        # Direct TS 只需要一个轻量 HTTP Range 阶段。
         if candidate["media_type"] == "HLS":
-            required_stages = 3
+            required_stages = 2
         else:
             required_stages = 1
 
