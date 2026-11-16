@@ -1,6 +1,7 @@
 
 # 人工来源：公开 IPTV 频道播放列表
 # 每行一个 HTTP 或 HTTPS 网址
+https://raw.githubusercontent.com/best-fan/iptv-sources/main/cn_cctv.m3u8
 https://raw.githubusercontent.com/hujingguang/ChinaIPTV/main/cnTV_AutoUpdate.m3u8
 https://raw.githubusercontent.com/womomo8/IPTV-Auto/main/output/iptv.m3u
 https://raw.githubusercontent.com/best-fan/iptv-sources/main/cn_province.m3u8
