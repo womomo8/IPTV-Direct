@@ -406,12 +406,19 @@ def _set_response_timeout(response, deadline: float):
     """通过连接对象保存的 socket 设置响应读取超时。"""
     remaining = _remaining_seconds(deadline)
 
-    response_file = getattr(response, "fp", response)
     connection = getattr(
-        response_file,
+        response,
         "_iptv_deadline_connection",
         None,
     )
+
+    if connection is None:
+        response_file = getattr(response, "fp", None)
+        connection = getattr(
+            response_file,
+            "_iptv_deadline_connection",
+            None,
+        )
 
     raw_socket = getattr(
         connection,
@@ -503,12 +510,19 @@ def download_url(
             request,
             timeout=timeout_seconds,
         ) as response:
-            response_file = getattr(response, "fp", response)
             connection = getattr(
-                response_file,
+                response,
                 "_iptv_deadline_connection",
                 None,
             )
+
+            if connection is None:
+                response_file = getattr(response, "fp", None)
+                connection = getattr(
+                    response_file,
+                    "_iptv_deadline_connection",
+                    None,
+                )
 
             try:
                 _remaining_seconds(deadline)
