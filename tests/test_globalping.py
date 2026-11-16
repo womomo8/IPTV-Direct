@@ -168,6 +168,38 @@ class UrlAndBodyTests(unittest.TestCase):
         self.assertEqual(parts["path"], "/live/index.m3u8")
         self.assertEqual(parts["query"], "token=x")
 
+    def test_ipv4_literal_measurement_omits_ip_version(self):
+        budget = {"remaining": 10, "probe_count": 1}
+        locations = [{"country": "CN", "asn": 9808, "limit": 1}]
+
+        with patch.object(gp, "_remaining_budget", return_value=10), \
+             patch.object(gp, "_api_request", return_value=(202, {"id": "m1", "probesCount": 1}, {})) as request:
+            measurement_id = gp._create_measurement(
+                "http://1.2.3.4/live.ts",
+                locations,
+                budget,
+            )
+
+        self.assertEqual(measurement_id, "m1")
+        payload = request.call_args.kwargs["payload"]
+        self.assertNotIn("ipVersion", payload["measurementOptions"])
+
+    def test_domain_measurement_keeps_ipv4_version(self):
+        budget = {"remaining": 10, "probe_count": 1}
+        locations = [{"country": "CN", "asn": 9808, "limit": 1}]
+
+        with patch.object(gp, "_remaining_budget", return_value=10), \
+             patch.object(gp, "_api_request", return_value=(202, {"id": "m1", "probesCount": 1}, {})) as request:
+            measurement_id = gp._create_measurement(
+                "http://example.test/live.ts",
+                locations,
+                budget,
+            )
+
+        self.assertEqual(measurement_id, "m1")
+        payload = request.call_args.kwargs["payload"]
+        self.assertEqual(payload["measurementOptions"]["ipVersion"], 4)
+
     def test_split_url_rejects_ipv6_literal(self):
         with self.assertRaises(gp.GlobalpingError):
             gp._split_url("http://[2001:db8::1]/live.ts")
