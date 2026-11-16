@@ -13,21 +13,21 @@ on:
         required: true
         type: choice
         options:
-          - 手动正式运行
-          - 手动测试运行
-          - 手动诊断
-        default: 手动正式运行
+          - 测试
+          - 正式
+          - 诊断
+        default: 正式
 
 permissions:
   contents: read
 
 jobs:
   formal:
-    name: 正式运行
+    name: 正式
     if: >-
       github.event_name == 'schedule' ||
       (github.event_name == 'workflow_dispatch' &&
-      inputs.mode == '手动正式运行')
+      inputs.mode == '正式')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -45,7 +45,7 @@ jobs:
           python-version: "3.x"
 
       - name: Show run mode
-        run: echo "运行模式：正式运行"
+        run: echo "运行模式：正式"
 
       - name: Run IPTV-Direct
         env:
@@ -71,10 +71,10 @@ jobs:
           git push
 
   test:
-    name: 手动测试运行
+    name: 测试
     if: >-
       github.event_name == 'workflow_dispatch' &&
-      inputs.mode == '手动测试运行'
+      inputs.mode == '测试'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -90,7 +90,7 @@ jobs:
           python-version: "3.x"
 
       - name: Show run mode
-        run: echo "运行模式：测试运行"
+        run: echo "运行模式：测试"
 
       - name: Check Python syntax
         run: |
@@ -100,27 +100,27 @@ jobs:
           python -m py_compile tests/test_publisher.py tests/test_publisher_release.py tests/test_main_collection.py
           python -m py_compile tests/test_main_failure.py
 
-      - name: Run checker专项测试
+      - name: Run checker tests
         run: |
           python -m unittest discover -s tests -p "test_checker*.py" -v
 
-      - name: Run Globalping专项测试
+      - name: Run Globalping tests
         run: |
           python -m unittest discover -s tests -p "test_globalping.py" -v
 
-      - name: Run main与Globalping交接测试
+      - name: Run main Globalping handoff tests
         run: |
           python -m unittest discover -s tests -p "test_main_globalping.py" -v
 
-      - name: Run publisher专项测试
+      - name: Run publisher tests
         run: |
           python -m unittest discover -s tests -p "test_publisher*.py" -v
 
-      - name: Run main来源批次与停止条件专项测试
+      - name: Run main collection tests
         run: |
           python -m unittest discover -s tests -p "test_main_collection.py" -v
 
-      - name: Run main正式流程异常退出专项测试
+      - name: Run main failure tests
         run: |
           python -m unittest discover -s tests -p "test_main_failure.py" -v
 
@@ -128,10 +128,10 @@ jobs:
         run: python main.py --mode test
 
   diagnostic:
-    name: 手动诊断 - Globalping 中国 IPv4 诊断
+    name: 诊断
     if: >-
       github.event_name == 'workflow_dispatch' &&
-      inputs.mode == '手动诊断'
+      inputs.mode == '诊断'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -147,7 +147,7 @@ jobs:
           python-version: "3.x"
 
       - name: Show run mode
-        run: echo "运行模式：手动诊断"
+        run: echo "运行模式：诊断"
 
       - name: Run Globalping API diagnostic
         env:
