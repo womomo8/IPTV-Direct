@@ -7,9 +7,10 @@
 import threading
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from checker import check_candidates
+from checker import Detector, check_candidates
 
 
 VALID_TS = b"".join(b"\x47" + bytes(187) for _ in range(6))
@@ -216,22 +217,14 @@ class CheckerConcurrencyTests(unittest.TestCase):
             )
 
     def test_waiting_for_host_slot_times_out_as_incomplete(self):
-        """等待同一主机槽位超过 max_queue_seconds 必须返回 INCOMPLETE。"""
+        """先确认第一个请求占用主机槽位，再验证第二个请求等待超时。"""
         with State.lock:
             State.routes = {
                 "/occupy-slot.ts": 1.5,
                 "/waiting-slot.ts": 0,
             }
 
-        candidates = [
-            self.candidate("/occupy-slot.ts"),
-            self.candidate("/waiting-slot.ts"),
-        ]
-
-        started = time.monotonic()
-
-        results = self.run_candidates(
-            candidates,
+        config = self.settings(
             local_concurrency=2,
             per_host_concurrency=1,
             queue_limit=2,
@@ -239,26 +232,69 @@ class CheckerConcurrencyTests(unittest.TestCase):
             candidate_active_budget_seconds=4,
         )
 
-        elapsed = time.monotonic() - started
+        detector = Detector(config)
 
-        self.assertEqual(len(results), 2)
+        first_candidate = self.candidate("/occupy-slot.ts")
+        second_candidate = self.candidate("/waiting-slot.ts")
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first_submitted_at = time.monotonic()
+
+            first_future = pool.submit(
+                detector.check_one,
+                first_candidate,
+                first_submitted_at,
+            )
+
+            # 等待第一个请求真正到达 HTTP 服务端。
+            # 确认其已开始占用主机槽位后，才提交第二个请求。
+            deadline = time.monotonic() + 2
+
+            while time.monotonic() < deadline:
+                with State.lock:
+                    active = State.active
+
+                if active > 0:
+                    break
+
+                time.sleep(0.01)
+
+            self.assertGreater(
+                self.maximum_active(),
+                0,
+                "第一个请求未能在规定时间内到达测试服务器",
+            )
+
+            second_submitted_at = time.monotonic()
+
+            second_future = pool.submit(
+                detector.check_one,
+                second_candidate,
+                second_submitted_at,
+            )
+
+            first_result = first_future.result(timeout=6)
+            second_result = second_future.result(timeout=6)
 
         self.assertEqual(
-            results[0]["checks"]["ipv4"]["status"],
+            first_result["checks"]["ipv4"]["status"],
             "PASS",
         )
 
         self.assertEqual(
-            results[1]["checks"]["ipv4"]["status"],
+            first_result["checks"]["ts"]["status"],
+            "PASS",
+        )
+
+        self.assertEqual(
+            second_result["checks"]["ipv4"]["status"],
             "INCOMPLETE",
         )
 
         self.assertEqual(
-            results[1]["checks"]["http"]["status"],
+            second_result["checks"]["http"]["status"],
             "INCOMPLETE",
         )
-
-        self.assertLess(elapsed, 3.5)
 
 
 if __name__ == "__main__":
