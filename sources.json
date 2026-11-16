@@ -1,3 +1,4 @@
+
 {
   "sources": [
     {
@@ -11,6 +12,13 @@
       "id": "source-002",
       "name": "PeterHchina Live IPTV",
       "url": "https://raw.githubusercontent.com/peterHchina/iptv/main/Live.m3u",
+      "enabled": true,
+      "mode": "playlist"
+    },
+    {
+      "id": "source-003",
+      "name": "IPTV-CN CCTV 中国频道补充",
+      "url": "https://raw.githubusercontent.com/IPTV-CN/IPTV/master/channels/cctv.m3u",
       "enabled": true,
       "mode": "playlist"
     }
