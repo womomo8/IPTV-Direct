@@ -1,4 +1,3 @@
-
 """IPTV-Direct 本地 IPv4、HTTP、HLS 与 MPEG-TS 检测。"""
 
 from __future__ import annotations
@@ -250,7 +249,91 @@ class Detector:
         limit,
         use_range=True,
         first_slot=None,
+        quality=None,
+        stage="request",
     ):
+        """执行一次请求，并记录不含 URL/主机信息的质量数据。"""
+        started = time.monotonic()
+        metrics = {}
+        result = None
+        error = None
+        try:
+            result = self._request_impl(
+                url,
+                deadline,
+                queue_deadline,
+                limit,
+                use_range=use_range,
+                first_slot=first_slot,
+                metrics=metrics,
+            )
+            return result
+        except Exception as exc:
+            error = exc
+            raise
+        finally:
+            elapsed = max(0.0, time.monotonic() - started)
+            read_seconds = max(0.0, metrics.get("read_seconds", 0.0))
+            data = result.get("data", b"") if result else b""
+            bytes_read = len(data) if result else metrics.get("bytes_read", 0)
+            outcome = PASS if result is not None else getattr(
+                error, "status", FAIL
+            )
+            if outcome not in (PASS, FAIL, INCOMPLETE):
+                outcome = FAIL
+            reason = str(error) if error is not None else ""
+            is_timeout = (
+                outcome == INCOMPLETE
+                and (
+                    isinstance(error, (socket.timeout, TimeoutError))
+                    or "超时" in reason
+                    or "超过" in reason
+                    or "timeout" in reason.lower()
+                )
+            )
+            sample = {
+                "stage": stage,
+                "status_code": (
+                    result.get("status")
+                    if result is not None
+                    else metrics.get("status_code")
+                ),
+                "elapsed_seconds": round(elapsed, 6),
+                "read_seconds": round(read_seconds, 6),
+                "bytes_read": bytes_read,
+                "bytes_per_second": (
+                    round(bytes_read / read_seconds, 2)
+                    if read_seconds > 0
+                    else None
+                ),
+                "outcome": outcome,
+                "redirect_count": metrics.get("redirect_count", 0),
+            }
+            if quality is not None:
+                quality["request_count"] += 1
+                quality["total_elapsed_seconds"] += elapsed
+                quality["total_read_seconds"] += read_seconds
+                quality["total_bytes_read"] += bytes_read
+                if result is not None:
+                    quality["request_success_count"] += 1
+                else:
+                    quality["request_failure_count"] += 1
+                if is_timeout:
+                    quality["timeout_count"] += 1
+                quality["request_samples"].append(sample)
+
+    def _request_impl(
+        self,
+        url,
+        deadline,
+        queue_deadline,
+        limit,
+        use_range=True,
+        first_slot=None,
+        metrics=None,
+    ):
+        if metrics is None:
+            metrics = {}
         current, redirects = url, 0
         held_slot = first_slot
 
@@ -262,6 +345,7 @@ class Detector:
             held_slot = None
             connected = False
 
+            metrics["redirect_count"] = redirects
             try:
                 parsed = urlsplit(current)
                 scheme = parsed.scheme.lower()
@@ -333,6 +417,7 @@ class Detector:
 
                 conn.request("GET", path, headers=headers)
                 response = conn.getresponse()
+                metrics["status_code"] = response.status
                 connected = bool(conn.ipv4_connected)
 
                 if response.status in (301, 302, 303, 307, 308):
@@ -385,9 +470,19 @@ class Detector:
                         else None
                     )
 
-                data = self._read(
-                    response, conn, limit, deadline, connected
-                )
+                read_started = time.monotonic()
+                try:
+                    data = self._read(
+                        response, conn, limit, deadline, connected
+                    )
+                finally:
+                    metrics["read_seconds"] = max(
+                        0.0, time.monotonic() - read_started
+                    )
+                    metrics["bytes_read"] = (
+                        len(data) if "data" in locals() else 0
+                    )
+                    metrics["redirect_count"] = redirects
                 if not data:
                     raise CheckError(
                         FAIL, "HTTP 响应没有实际内容", connected
@@ -438,6 +533,8 @@ class Detector:
                     ),
                     "complete": complete,
                     "connected": connected,
+                    "read_seconds": metrics.get("read_seconds", 0.0),
+                    "redirect_count": redirects,
                 }
 
             except CheckError as exc:
@@ -605,7 +702,8 @@ class Detector:
         return result["data"]
 
     def _manifest(
-        self, deadline, queue_deadline, first, candidate_result
+        self, deadline, queue_deadline, first, candidate_result,
+        quality=None,
     ):
         # 关键修正：在完整清单读取和大小检查之前，
         # 先根据首次读取到的实际内容确认是否具备 HLS 结构。
@@ -621,6 +719,8 @@ class Detector:
                 queue_deadline,
                 self.manifest_limit,
                 use_range=True,
+                quality=quality,
+                stage="main_playlist",
             )
 
         data = self._complete_manifest(result, "HLS 清单")
@@ -647,6 +747,8 @@ class Detector:
                 queue_deadline,
                 self.manifest_limit,
                 use_range=True,
+                quality=quality,
+                stage="media_playlist",
             )
             media_data = self._complete_manifest(
                 media, "媒体播放清单"
@@ -680,21 +782,32 @@ class Detector:
                 INCOMPLETE, "媒体清单不足两个分片"
             )
 
-        for segment in segments[:3]:
-            part = self._request(
-                segment,
-                deadline,
-                queue_deadline,
-                self.ts_limit,
-                use_range=True,
-            )
-            if not self._ts_ok(part["data"]):
-                raise CheckError(
-                    FAIL,
-                    "HLS 分片不是有效 MPEG-TS 数据",
-                    ts_status=FAIL,
-                    ts_reason="已读取实际 HLS 分片，但 TS 同步结构无效",
+        for index, segment in enumerate(segments[:3], start=1):
+            if quality is not None:
+                quality["segment_total"] += 1
+            try:
+                part = self._request(
+                    segment,
+                    deadline,
+                    queue_deadline,
+                    self.ts_limit,
+                    use_range=True,
+                    quality=quality,
+                    stage=f"segment_{index}",
                 )
+                if not self._ts_ok(part["data"]):
+                    raise CheckError(
+                        FAIL,
+                        "HLS 分片不是有效 MPEG-TS 数据",
+                        ts_status=FAIL,
+                        ts_reason="已读取实际 HLS 分片，但 TS 同步结构无效",
+                    )
+                if quality is not None:
+                    quality["segment_success_count"] += 1
+            except CheckError:
+                if quality is not None:
+                    quality["segment_failure_count"] += 1
+                raise
 
         return {
             "status": PASS,
@@ -707,6 +820,19 @@ class Detector:
         result = {
             **candidate,
             "media_type": "UNKNOWN",
+            "quality": {
+                "request_count": 0,
+                "request_success_count": 0,
+                "request_failure_count": 0,
+                "timeout_count": 0,
+                "total_bytes_read": 0,
+                "total_elapsed_seconds": 0.0,
+                "total_read_seconds": 0.0,
+                "segment_total": 0,
+                "segment_success_count": 0,
+                "segment_failure_count": 0,
+                "request_samples": [],
+            },
             "checks": {
                 key: {"status": INCOMPLETE, "reason": "尚未检测"}
                 for key in ("ipv4", "http", "hls", "ts")
@@ -764,6 +890,8 @@ class Detector:
                 self.ts_limit,
                 use_range=True,
                 first_slot=first_slot,
+                quality=result["quality"],
+                stage="initial_response",
             )
             result["checks"]["ipv4"] = {
                 "status": PASS,
@@ -782,11 +910,17 @@ class Detector:
 
             if probe.startswith(b"#EXTM3U"):
                 try:
+                    if self._mark_hls_type(first["data"], result):
+                        if result["quality"]["request_samples"]:
+                            result["quality"]["request_samples"][-1]["stage"] = (
+                                "main_playlist"
+                            )
                     hls = self._manifest(
                         deadline,
                         queue_deadline,
                         first,
                         result,
+                        quality=result["quality"],
                     )
                     result["checks"]["hls"] = hls
                     result["checks"]["ts"] = {
@@ -804,6 +938,10 @@ class Detector:
                     }
 
             elif self._ts_ok(first["data"]):
+                if result["quality"]["request_samples"]:
+                    result["quality"]["request_samples"][-1]["stage"] = (
+                        "direct_ts"
+                    )
                 result["media_type"] = "DIRECT_TS"
                 result["checks"]["ts"] = {
                     "status": PASS,
@@ -951,6 +1089,19 @@ def check_candidates(candidates, settings):
                     results.append({
                         **batch[index],
                         "media_type": "UNKNOWN",
+                        "quality": {
+                            "request_count": 0,
+                            "request_success_count": 0,
+                            "request_failure_count": 0,
+                            "timeout_count": 0,
+                            "total_bytes_read": 0,
+                            "total_elapsed_seconds": 0.0,
+                            "total_read_seconds": 0.0,
+                            "segment_total": 0,
+                            "segment_success_count": 0,
+                            "segment_failure_count": 0,
+                            "request_samples": [],
+                        },
                         "checks": {
                             key: {
                                 "status": INCOMPLETE,
