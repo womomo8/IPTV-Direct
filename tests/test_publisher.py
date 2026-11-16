@@ -301,6 +301,22 @@ class PublisherAdmissionTests(unittest.TestCase):
                 CHANNELS,
             )
 
+    def test_empty_subscription_generation_is_rejected(self):
+        """没有任何准入线路时，不得生成空订阅。"""
+
+        with self.assertRaises(publisher.PublisherError):
+            publisher.build_subscriptions([], CHANNELS)
+
+    def test_empty_subscription_content_is_rejected(self):
+        """M3U只有文件头、TXT为空时，必须拒绝。"""
+
+        with self.assertRaises(publisher.PublisherError):
+            publisher.validate_subscriptions(
+                "#EXTM3U\n",
+                "",
+                CHANNELS,
+            )
+
     def test_invalid_channel_limit_is_rejected(self):
         """每频道线路上限不得偏离正式标准 2。"""
 
