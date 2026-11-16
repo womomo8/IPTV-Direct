@@ -5,13 +5,19 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from collector import (
     SourceConfigError,
+    SourceDownloadError,
+    download_url,
     iter_source_contents,
     prepare_sources,
 )
@@ -170,7 +176,6 @@ def load_configuration(
     try:
         channels = load_channels(str(root / "channels.txt"))
     except ChannelConfigError as exc:
-        # 测试模式使用独立模拟频道，不要求用户配置真实频道。
         if test_mode and str(exc) == "channels.txt 没有配置目标频道":
             channels = []
         else:
@@ -328,16 +333,341 @@ def collect_and_parse(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _run_stage4_collection_tests(config: dict[str, Any]) -> None:
+    """通过本机模拟 HTTP 服务验收来源下载、解析和索引处理。"""
+
+    def require(condition: bool, message: str) -> None:
+        if not condition:
+            raise AssertionError(message)
+
+    def make_response(
+        body: str | bytes,
+        content_type: str = "text/plain; charset=utf-8",
+        status: int = 200,
+        headers: dict[str, str] | None = None,
+    ):
+        data = body.encode("utf-8") if isinstance(body, str) else body
+        return status, content_type, data, headers or {}
+
+    playlist = (
+        "#EXTM3U\n"
+        '#EXTINF:-1 tvg-name="IPTV-Direct 模拟测试频道",'
+        "IPTV-Direct 模拟测试频道\n"
+        "http://example.invalid/live/test.ts\n"
+    )
+    txt = (
+        "IPTV-Direct 模拟测试频道,"
+        "http://example.invalid/live/txt.ts\n"
+    )
+    hls = (
+        "#EXTM3U\n"
+        "#EXT-X-VERSION:3\n"
+        "#EXT-X-TARGETDURATION:10\n"
+        "#EXTINF:10,\n"
+        "segment.ts\n"
+        "#EXT-X-ENDLIST\n"
+    )
+
+    routes: dict[str, tuple] = {
+        "/bad.m3u": make_response("服务暂时不可用", status=503),
+        "/playlist.m3u": make_response(playlist, "audio/x-mpegurl"),
+        "/channels.txt": make_response(txt),
+        "/redirect.txt": make_response(
+            b"", status=302, headers={"Location": "/channels.txt"}
+        ),
+        "/partial.txt": make_response(
+            txt,
+            status=206,
+            headers={"Content-Range": "bytes 0-71/72"},
+        ),
+        "/live.m3u8": make_response(hls, "audio/x-mpegurl"),
+        "/child.m3u": make_response(
+            '<html><a href="sub/hidden.m3u">hidden</a></html>',
+            "text/html; charset=utf-8",
+        ),
+        "/large.txt": make_response("X" * 128),
+        "/oversized-hls.m3u8": make_response(
+            "#EXTM3U\n#EXT-X-VERSION:3\n" + ("X" * 96),
+            "audio/x-mpegurl",
+        ),
+    }
+
+    links = [
+        "sub/one.m3u",
+        "sub/one.m3u#duplicate",
+        "sub/two.txt",
+        "child.m3u",
+    ]
+    links.extend(f"sub/extra{number:02d}.m3u" for number in range(38))
+    links.extend(("child.html", "ftp://example.invalid/x.m3u"))
+    routes["/index.html"] = make_response(
+        "<html>" + "".join(
+            f'<a href="{link}">{link}</a>' for link in links
+        ) + "</html>",
+        "text/html; charset=utf-8",
+    )
+
+    class Handler(BaseHTTPRequestHandler):
+        route_table = routes
+        request_counts: dict[str, int] = {}
+
+        def do_GET(self):
+            path = urlsplit(self.path).path
+            self.request_counts[path] = self.request_counts.get(path, 0) + 1
+
+            item = self.route_table.get(path)
+            if item is None and path.startswith("/sub/"):
+                item = make_response(playlist, "audio/x-mpegurl")
+            if item is None:
+                item = make_response("Not found", status=404)
+
+            status, content_type, body, headers = item
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            for name, value in headers.items():
+                self.send_header(name, value)
+            self.end_headers()
+            if body:
+                self.wfile.write(body)
+
+        def log_message(self, format_string, *args):
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+
+    try:
+        settings = copy.deepcopy(config["settings"])
+        require(
+            settings["collection"]["max_index_links_per_page"] == 40,
+            "索引链接上限必须与 MASTER_PLAN.md 的40条标准一致",
+        )
+
+        m3u_url = f"{base}/playlist.m3u"
+        m3u = download_url(m3u_url, 10, 1048576, 5, 1048576)
+        parsed = normalize_source_content(
+            content=m3u["content"],
+            source={"url": m3u_url, "final_url": m3u["final_url"]},
+            channels=[TEST_CHANNEL],
+            max_candidates_per_source=1,
+            seen_urls=set(),
+            content_type=m3u["content_type"],
+            max_hls_manifest_bytes=1048576,
+            max_candidates_remaining=1,
+        )
+        require(
+            m3u["content_type"] == "audio/x-mpegurl"
+            and parsed["recognized"]
+            and parsed["format"] == "m3u"
+            and parsed["candidates"][0]["channel"] == TEST_CHANNEL,
+            "M3U 下载或 MIME/频道解析失败",
+        )
+        print("阶段4测试：M3U 下载、MIME识别和频道匹配 PASS")
+
+        txt_url = f"{base}/channels.txt"
+        txt_download = download_url(txt_url, 10, 1048576, 5, 1048576)
+        txt_parsed = normalize_source_content(
+            content=txt_download["content"],
+            source={"url": txt_url, "final_url": txt_download["final_url"]},
+            channels=[TEST_CHANNEL],
+            max_candidates_per_source=1,
+            seen_urls=set(),
+            content_type=txt_download["content_type"],
+            max_hls_manifest_bytes=1048576,
+            max_candidates_remaining=1,
+        )
+        require(
+            txt_parsed["recognized"]
+            and txt_parsed["format"] == "txt"
+            and txt_parsed["candidates"][0]["channel"] == TEST_CHANNEL,
+            "TXT 下载或频道解析失败",
+        )
+        print("阶段4测试：TXT 下载和频道解析 PASS")
+
+        hls_url = f"{base}/live.m3u8"
+        hls_download = download_url(hls_url, 10, 1048576, 5, 1048576)
+        hls_parsed = normalize_source_content(
+            content=hls_download["content"],
+            source={"url": hls_url, "final_url": hls_download["final_url"]},
+            channels=[TEST_CHANNEL],
+            max_candidates_per_source=1,
+            seen_urls=set(),
+            content_type=hls_download["content_type"],
+            max_hls_manifest_bytes=1048576,
+            max_candidates_remaining=1,
+        )
+        require(
+            hls_parsed["recognized"]
+            and hls_parsed["format"] == "hls"
+            and hls_parsed["candidates"][0]["channel"] is None,
+            "HLS 清单识别或频道处理错误",
+        )
+        print("阶段4测试：HLS M3U8 清单识别 PASS")
+
+        manual_sources = [
+            {
+                "name": "失败人工来源", "url": f"{base}/bad.m3u",
+                "source_type": "manual", "priority": 0, "order": 0,
+            },
+            {
+                "name": "人工 M3U", "url": m3u_url,
+                "source_type": "manual", "priority": 0, "order": 1,
+            },
+            {
+                "name": "重定向 TXT", "url": f"{base}/redirect.txt",
+                "source_type": "manual", "priority": 0, "order": 2,
+            },
+            {
+                "name": "HTTP 206 TXT", "url": f"{base}/partial.txt",
+                "source_type": "manual", "priority": 0, "order": 3,
+            },
+        ]
+        automatic_sources = [
+            {
+                "name": "自动 playlist", "url": hls_url,
+                "source_type": "automatic", "mode": "playlist",
+                "priority": 1, "order": 4,
+            },
+            {
+                "name": "自动 index", "url": f"{base}/index.html",
+                "source_type": "automatic", "mode": "index",
+                "priority": 1, "order": 5,
+            },
+        ]
+
+        items = list(iter_source_contents(
+            manual_sources, automatic_sources, settings
+        ))
+        require(len(items) == 45, f"采集条数错误：预期45，实际{len(items)}")
+        require(
+            [item["source"]["url"] for item in items[:4]]
+            == [source["url"] for source in manual_sources],
+            "人工来源没有优先按配置顺序处理",
+        )
+        require(
+            items[0]["download"] is None and items[0]["errors"],
+            "503 来源没有被隔离为单来源错误",
+        )
+        require(
+            items[1]["download"] is not None and not items[1]["errors"],
+            "首条来源失败后没有继续处理后续人工来源",
+        )
+        require(
+            items[2]["download"]["final_url"] == txt_url,
+            "HTTP 重定向 final_url 不正确",
+        )
+        require(
+            items[3]["download"]["http_status"] == 206,
+            "HTTP 206 未被接受",
+        )
+        require(
+            items[4]["source"]["url"] == hls_url
+            and items[4]["download"] is not None,
+            "自动 playlist 模式下载失败",
+        )
+        require(
+            all(
+                item["source"]["source_type"] == "automatic"
+                for item in items[5:]
+            ),
+            "自动来源处理顺序错误",
+        )
+
+        redirected = normalize_source_content(
+            content=items[2]["download"]["content"],
+            source={
+                **items[2]["source"],
+                "final_url": items[2]["download"]["final_url"],
+            },
+            channels=[TEST_CHANNEL],
+            max_candidates_per_source=1,
+            seen_urls=set(),
+            content_type=items[2]["download"]["content_type"],
+            max_hls_manifest_bytes=1048576,
+            max_candidates_remaining=1,
+        )
+        require(
+            redirected["recognized"]
+            and redirected["format"] == "txt"
+            and redirected["candidates"][0]["channel"] == TEST_CHANNEL,
+            "重定向后的 TXT 内容未正确解析",
+        )
+        print("阶段4测试：人工优先、失败隔离、重定向、HTTP 206 PASS")
+
+        index_items = items[5:]
+        require(
+            len(index_items) == 40,
+            f"索引页处理数量错误：预期40，实际{len(index_items)}",
+        )
+        found = [item["source"]["url"] for item in index_items]
+        require(
+            found[0] == f"{base}/sub/one.m3u"
+            and found[1] == f"{base}/sub/two.txt",
+            "索引相对链接解析或重复链接去重失败",
+        )
+        require(
+            Handler.request_counts.get("/sub/one.m3u", 0) == 1,
+            "相同 URL 的 fragment 变体被重复下载",
+        )
+        require(
+            Handler.request_counts.get("/sub/extra36.m3u", 0) == 1
+            and Handler.request_counts.get("/sub/extra37.m3u", 0) == 0,
+            "索引页40条上限没有正确生效",
+        )
+        require(
+            Handler.request_counts.get("/sub/hidden.m3u", 0) == 0,
+            "索引处理发生递归爬取",
+        )
+        require(
+            Handler.request_counts.get("/child.html", 0) == 0,
+            "索引未过滤不支持的 HTML 后缀",
+        )
+        print("阶段4测试：index相对链接、过滤、去重、40条上限、不递归 PASS")
+
+        try:
+            download_url(f"{base}/large.txt", 10, 64, 5, 1024)
+        except SourceDownloadError:
+            pass
+        else:
+            raise AssertionError("普通来源超过64字节却未触发大小限制")
+
+        try:
+            download_url(
+                f"{base}/oversized-hls.m3u8", 10, 1024, 5, 32
+            )
+        except SourceDownloadError:
+            pass
+        else:
+            raise AssertionError("HLS清单超过32字节却未触发大小限制")
+
+        print("阶段4测试：普通来源和 HLS 清单大小限制 PASS")
+        print("阶段4来源下载与解析测试：全部 PASS")
+
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def run_test_flow(config: dict[str, Any]) -> int:
     """
-    单条模拟 HLS 测试流程。
+    阶段4来源采集测试和模拟检测结果交接。
 
-    使用真实 normalizer 处理模拟输入；
-    检测结果为模拟数据，不调用 checker 的真实网络检测，
-    不调用 Globalping，不进入正式准入和发布流程。
+    不调用真实线路检测，不调用 Globalping，
+    不进入正式准入和订阅发布流程。
     """
 
-    print("测试流程：单条模拟 HLS")
+    print("测试流程：阶段4来源采集与解析 + 模拟检测结果交接")
+
+    try:
+        _run_stage4_collection_tests(config)
+    except Exception as exc:
+        print(f"阶段4来源采集与解析测试失败：{exc}", file=sys.stderr)
+        return 1
 
     source_url = "https://example.invalid/iptv-direct-test.m3u"
     stream_url = "https://example.invalid/live/test.m3u8"
@@ -396,8 +726,6 @@ def run_test_flow(config: dict[str, Any]) -> int:
         print("候选数量：1")
         print("媒体线路：HLS（模拟输入标记，不代表实际媒体识别）")
 
-        # 按 MASTER_PLAN.md 测试运行要求，检测结果使用模拟数据。
-        # 不调用 checker.py 的真实网络检测。
         simulated_detection = {
             **candidate,
             "media_type": "HLS",
