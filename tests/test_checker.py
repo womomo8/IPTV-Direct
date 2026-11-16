@@ -337,4 +337,72 @@ class CheckerLocalTests(unittest.TestCase):
         result = self.check("/subscription.m3u")
 
         self.assertEqual(result["media_type"], "UNKNOWN")
-        self.assert_s
+        self.assert_status(result, "ipv4", "PASS")
+        self.assert_status(result, "http", "PASS")
+        self.assert_status(result, "hls", "FAIL")
+        self.assert_status(result, "ts", "FAIL")
+
+    def test_unknown_content_is_rejected(self):
+        """无法识别的媒体内容不得获得通过状态。"""
+        result = self.check("/unknown.bin")
+
+        self.assertEqual(result["media_type"], "UNKNOWN")
+        self.assert_status(result, "ipv4", "PASS")
+        self.assert_status(result, "http", "PASS")
+        self.assert_status(result, "hls", "FAIL")
+        self.assert_status(result, "ts", "FAIL")
+
+    def test_redirect_to_direct_ts_uses_ipv4(self):
+        """重定向后的最终目标也必须成功建立 IPv4 连接。"""
+        result = self.check("/redirect")
+
+        self.assertEqual(result["media_type"], "DIRECT_TS")
+        self.assert_status(result, "ipv4", "PASS")
+        self.assert_status(result, "http", "PASS")
+        self.assert_status(result, "ts", "PASS")
+        self.assert_status(result, "hls", "N/A")
+
+    def test_redirect_loop_is_rejected(self):
+        """重定向循环不能无限执行。"""
+        result = self.check("/loop")
+
+        self.assert_status(result, "http", "FAIL")
+
+    def test_http_503_is_not_pass(self):
+        """HTTP 503 必须记录为未完成，不能因为连通而判定 HTTP 通过。"""
+        result = self.check("/unavailable")
+
+        self.assert_status(result, "ipv4", "PASS")
+        self.assert_status(result, "http", "INCOMPLETE")
+        self.assert_status(result, "hls", "INCOMPLETE")
+        self.assert_status(result, "ts", "INCOMPLETE")
+
+    def test_invalid_content_range_is_rejected(self):
+        """HTTP 206 的 Content-Range 不合法时必须拒绝。"""
+        result = self.check("/bad-range")
+
+        self.assert_status(result, "http", "FAIL")
+        self.assert_status(result, "ts", "INCOMPLETE")
+
+    def test_active_detection_budget_timeout(self):
+        """超过单候选主动检测时间预算时，不得判定通过。"""
+        result = self.check(
+            "/slow.ts",
+            candidate_active_budget_seconds=1,
+        )
+
+        self.assert_status(result, "http", "INCOMPLETE")
+        self.assert_status(result, "ts", "INCOMPLETE")
+
+    def test_max_redirect_limit_is_respected(self):
+        """超过配置的最大重定向次数时必须停止。"""
+        result = self.check(
+            "/loop",
+            max_redirects=2,
+        )
+
+        self.assert_status(result, "http", "FAIL")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
