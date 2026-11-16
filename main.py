@@ -337,83 +337,108 @@ def run_detection_pipeline(
     ]
 
 
+def _print_detection_summary(results: list[dict[str, Any]]) -> None:
+    """输出本地检测统计，以及真正提交给 Globalping 的检测明细。"""
 
-class GlobalpingSummaryTests(unittest.TestCase):
+    local_ok = sum(_local_pass(item) for item in results)
+    local_bad = len(results) - local_ok
 
-    def test_summary_excludes_not_submitted_candidates(self):
-        results = [
-            {
-                "channel": "CCTV-5",
-                "media_type": "HLS",
-                "normalized_url": "https://example.test/live.m3u8?token=secret",
-                "checks": {
-                    "ipv4": {"status": main.PASS},
-                    "http": {"status": main.PASS},
-                    "hls": {"status": main.PASS},
-                    "ts": {"status": main.PASS},
-                },
-                "globalping": {
-                    "status": main.INCOMPLETE,
-                    "error": "测量结果未能完成。",
-                    "probes": {
-                        "probe1": {
-                            "country": "CN",
-                            "city": "北京",
-                            "network": "China Mobile",
-                            "asn": 9808,
-                        }
-                    },
-                    "stages": {
-                        "main_playlist": {
-                            "measurement_id": "test-measurement-1",
-                            "status": main.INCOMPLETE,
-                            "reason": "测量结果未能完成。",
-                        }
-                    },
-                },
-            },
-            {
-                "channel": "CCTV-6",
-                "media_type": "HLS",
-                "normalized_url": "https://example.test/other.m3u8",
-                "checks": {
-                    "ipv4": {"status": main.FAIL},
-                    "http": {"status": main.INCOMPLETE},
-                    "hls": {"status": main.INCOMPLETE},
-                    "ts": {"status": main.INCOMPLETE},
-                },
-                "globalping": {
-                    "status": main.INCOMPLETE,
-                    "error": (
-                        "本地检测未全部通过，未提交 Globalping；"
-                        "不代表远程检测失败。"
-                    ),
-                    "probes": {},
-                    "stages": {},
-                },
-            },
-        ]
+    not_submitted_reason = "本地检测未全部通过，未提交 Globalping"
 
-        output = io.StringIO()
+    submitted_items = []
+    not_submitted = 0
 
-        with contextlib.redirect_stdout(output):
-            main._print_detection_summary(results)
+    for item in results:
+        remote = item.get("globalping", {})
+        error = remote.get("error", "") if isinstance(remote, dict) else ""
 
-        report = output.getvalue()
+        if isinstance(error, str) and error.startswith(not_submitted_reason):
+            not_submitted += 1
+        else:
+            submitted_items.append(item)
 
-        self.assertIn("候选 2 条", report)
-        self.assertIn("本地全部通过 1 条", report)
-        self.assertIn("Globalping 已提交 1 条", report)
-        self.assertIn("未提交 1 条", report)
-        self.assertIn("实际远程结果 PASS 0 条", report)
-        self.assertIn("INCOMPLETE 1 条", report)
+    remote_counts = {
+        state: 0 for state in (PASS, FAIL, INCOMPLETE)
+    }
 
-        self.assertIn("北京", report)
-        self.assertIn("China Mobile", report)
-        self.assertIn("test-measurement-1", report)
-        self.assertIn("测量结果未能完成", report)
+    for item in submitted_items:
+        remote = item.get("globalping", {})
+        if not isinstance(remote, dict):
+            continue
 
-        self.assertNotIn("token=secret", report)
+        state = remote.get("status")
+        if state in remote_counts:
+            remote_counts[state] += 1
+
+    print(
+        f"检测统计：候选 {len(results)} 条；"
+        f"本地全部通过 {local_ok} 条；"
+        f"本地未通过/未完成 {local_bad} 条；"
+        f"Globalping 已提交 {len(submitted_items)} 条、"
+        f"未提交 {not_submitted} 条；"
+        f"实际远程结果 PASS {remote_counts[PASS]} 条、"
+        f"FAIL {remote_counts[FAIL]} 条、"
+        f"INCOMPLETE {remote_counts[INCOMPLETE]} 条。"
+    )
+
+    for index, item in enumerate(submitted_items, 1):
+        remote = item.get("globalping", {})
+        if not isinstance(remote, dict):
+            continue
+
+        channel = item.get("channel", "未知频道")
+        media_type = item.get("media_type", "未知类型")
+        url = item.get("normalized_url", "")
+
+        try:
+            host = urlsplit(str(url)).hostname or "无法识别"
+        except ValueError:
+            host = "无法识别"
+
+        print(
+            f"Globalping 明细 {index}/{len(submitted_items)}："
+            f"频道 {channel}；类型 {media_type}；"
+            f"目标主机 {host}；"
+            f"总体状态 {remote.get('status', '未知')}。"
+        )
+
+        probes = remote.get("probes", {})
+        if isinstance(probes, dict) and probes:
+            for probe in probes.values():
+                if not isinstance(probe, dict):
+                    continue
+
+                print(
+                    "  探针："
+                    f"{probe.get('country', '未知地区')} "
+                    f"{probe.get('city', '未知城市')}；"
+                    f"网络 {probe.get('network', '未知网络')}；"
+                    f"ASN {probe.get('asn', '未知')}。"
+                )
+        else:
+            print("  探针：没有取得有效探针结果。")
+
+        stages = remote.get("stages", {})
+        if isinstance(stages, dict) and stages:
+            for stage_name, stage in stages.items():
+                if not isinstance(stage, dict):
+                    continue
+
+                measurement_id = stage.get("measurement_id") or "无"
+                reason = stage.get("reason") or "没有提供原因"
+
+                print(
+                    f"  阶段 {stage_name}："
+                    f"{stage.get('status', '未知')}；"
+                    f"测量ID {measurement_id}；"
+                    f"原因：{reason}"
+                )
+        else:
+            print("  阶段：没有取得阶段记录。")
+
+        error = remote.get("error")
+        if error:
+            print(f"  远程异常/未完成原因：{error}")
 
 
 
