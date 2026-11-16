@@ -97,7 +97,6 @@ jobs:
           python -m py_compile tests/test_globalping.py tests/test_main_globalping.py
           python -m py_compile tests/test_publisher.py tests/test_publisher_release.py tests/test_main_collection.py
           python -m py_compile tests/test_main_failure.py
-          python -m py_compile tests/test_collection_normalization.py
 
       - name: Run checker专项测试
         run: |
