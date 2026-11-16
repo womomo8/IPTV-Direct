@@ -37,6 +37,17 @@ MASTER_PLAYLIST = (
     "variant/index.m3u8\n"
 ).encode("utf-8")
 
+BUDGET_PLAYLIST = (
+    "#EXTM3U\n"
+    "#EXT-X-VERSION:3\n"
+    "#EXT-X-TARGETDURATION:10\n"
+    "#EXTINF:10,\n"
+    "budget-seg1.ts\n"
+    "#EXTINF:10,\n"
+    "budget-seg2.ts\n"
+    "#EXT-X-ENDLIST\n"
+).encode("utf-8")
+
 ENCRYPTED_PLAYLIST = (
     "#EXTM3U\n"
     "#EXT-X-VERSION:3\n"
@@ -266,6 +277,22 @@ class CheckerLocalTests(unittest.TestCase):
                 "body": VALID_TS,
                 "delay": 1.5,
             },
+            # 清单和第一个分片分别延迟 0.65 秒。
+            # 两次请求合计超过 1 秒预算，必须返回 INCOMPLETE。
+            "/budget.m3u8": {
+                "status": 200,
+                "body": BUDGET_PLAYLIST,
+                "delay": 0.65,
+            },
+            "/budget-seg1.ts": {
+                "status": 200,
+                "body": VALID_TS,
+                "delay": 0.65,
+            },
+            "/budget-seg2.ts": {
+                "status": 200,
+                "body": VALID_TS,
+            },
         }
 
     def settings(self, **overrides):
@@ -361,6 +388,27 @@ class CheckerLocalTests(unittest.TestCase):
         self.assertEqual(result["media_type"], "HLS")
         self.assert_status(result, "hls", "FAIL")
         self.assert_status(result, "ts", "FAIL")
+
+    def test_hls_uses_one_total_candidate_budget(self):
+        """HLS 清单和分片请求必须共用单候选总时间预算。"""
+        started = time.monotonic()
+
+        result = self.check(
+            "/budget.m3u8",
+            candidate_active_budget_seconds=1,
+        )
+
+        elapsed = time.monotonic() - started
+
+        self.assertEqual(result["media_type"], "HLS")
+        self.assert_status(result, "ipv4", "PASS")
+        self.assert_status(result, "http", "PASS")
+        self.assert_status(result, "hls", "INCOMPLETE")
+        self.assert_status(result, "ts", "INCOMPLETE")
+
+        # 给本机线程调度留出少量余量，但不能允许两次延迟请求
+        # 全部完成后仍被判定为 PASS。
+        self.assertLess(elapsed, 2.5)
 
     def test_encrypted_hls_is_rejected_without_ts_failure(self):
         """加密 HLS 应识别类型，但不能把未检测的 TS 标记为失败。"""
