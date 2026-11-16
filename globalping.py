@@ -896,7 +896,7 @@ def _overall_status(checks: dict[str, dict[str, str]]) -> str:
     return INCOMPLETE
 
 
-def _incomplete_result(candidate: dict[str, Any], reason: str) -> dict[str, Any]:
+def incomplete_result(candidate: dict[str, Any], reason: str) -> dict[str, Any]:
     media_type = candidate.get("media_type")
     checks = {
         "ipv4": _status(INCOMPLETE, reason),
