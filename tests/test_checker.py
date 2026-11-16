@@ -37,6 +37,30 @@ MASTER_PLAYLIST = (
     "variant/index.m3u8\n"
 ).encode("utf-8")
 
+ENCRYPTED_PLAYLIST = (
+    "#EXTM3U\n"
+    "#EXT-X-VERSION:3\n"
+    "#EXT-X-TARGETDURATION:10\n"
+    '#EXT-X-KEY:METHOD=AES-128,URI="key.bin"\n'
+    "#EXTINF:10,\n"
+    "seg1.ts\n"
+    "#EXTINF:10,\n"
+    "seg2.ts\n"
+    "#EXT-X-ENDLIST\n"
+).encode("utf-8")
+
+FMP4_PLAYLIST = (
+    "#EXTM3U\n"
+    "#EXT-X-VERSION:7\n"
+    "#EXT-X-TARGETDURATION:10\n"
+    '#EXT-X-MAP:URI="init.mp4"\n'
+    "#EXTINF:10,\n"
+    "seg1.m4s\n"
+    "#EXTINF:10,\n"
+    "seg2.m4s\n"
+    "#EXT-X-ENDLIST\n"
+).encode("utf-8")
+
 SUBSCRIPTION_M3U = (
     "#EXTM3U\n"
     '#EXTINF:-1 tvg-name="CCTV-5",CCTV-5\n'
@@ -50,7 +74,6 @@ class MockHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, format_string, *args):
-        # 测试期间不输出 HTTP 服务访问日志。
         pass
 
     def do_GET(self):
@@ -121,7 +144,6 @@ class MockHandler(BaseHTTPRequestHandler):
             self.wfile.write(response_body)
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
-            # 超时测试中，checker 可能提前关闭连接。
             pass
 
 
@@ -201,6 +223,14 @@ class CheckerLocalTests(unittest.TestCase):
             "/bad-seg2.ts": {
                 "status": 200,
                 "body": INVALID_TS,
+            },
+            "/encrypted.m3u8": {
+                "status": 200,
+                "body": ENCRYPTED_PLAYLIST,
+            },
+            "/fmp4.m3u8": {
+                "status": 200,
+                "body": FMP4_PLAYLIST,
             },
             "/subscription.m3u": {
                 "status": 200,
@@ -331,6 +361,26 @@ class CheckerLocalTests(unittest.TestCase):
         self.assertEqual(result["media_type"], "HLS")
         self.assert_status(result, "hls", "FAIL")
         self.assert_status(result, "ts", "FAIL")
+
+    def test_encrypted_hls_is_rejected_without_ts_failure(self):
+        """加密 HLS 应识别类型，但不能把未检测的 TS 标记为失败。"""
+        result = self.check("/encrypted.m3u8")
+
+        self.assertEqual(result["media_type"], "HLS")
+        self.assert_status(result, "ipv4", "PASS")
+        self.assert_status(result, "http", "PASS")
+        self.assert_status(result, "hls", "FAIL")
+        self.assert_status(result, "ts", "INCOMPLETE")
+
+    def test_fmp4_hls_is_rejected_without_ts_failure(self):
+        """fMP4 HLS 应识别类型，TS 未实际检测时保持 INCOMPLETE。"""
+        result = self.check("/fmp4.m3u8")
+
+        self.assertEqual(result["media_type"], "HLS")
+        self.assert_status(result, "ipv4", "PASS")
+        self.assert_status(result, "http", "PASS")
+        self.assert_status(result, "hls", "FAIL")
+        self.assert_status(result, "ts", "INCOMPLETE")
 
     def test_channel_subscription_m3u_is_not_hls(self):
         """频道订阅 M3U 不能仅凭 EXTM3U 被识别为 HLS。"""
