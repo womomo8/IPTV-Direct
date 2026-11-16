@@ -2,16 +2,12 @@
 
 from collections import Counter
 from html.parser import HTMLParser
+from http.client import HTTPException
 import time
 from typing import Any, Iterator
-from http.client import HTTPException
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlsplit, urlunsplit
-from urllib.request import (
-    HTTPRedirectHandler,
-    Request,
-    build_opener,
-)
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 class SourceConfigError(ValueError):
@@ -28,11 +24,13 @@ def _valid_http_url(value: Any) -> bool:
         return False
 
     value = value.strip()
+
     if not value or any(char.isspace() for char in value):
         return False
 
     try:
         parsed = urlsplit(value)
+
         if (
             parsed.scheme.lower() not in ("http", "https")
             or not parsed.hostname
@@ -41,9 +39,12 @@ def _valid_http_url(value: Any) -> bool:
             or parsed.netloc.endswith(":")
         ):
             return False
+
         port = parsed.port
+
         if port is not None and not 1 <= port <= 65535:
             return False
+
     except ValueError:
         return False
 
@@ -58,18 +59,26 @@ def _source_key(value: str) -> str:
     parsed = urlsplit(value.strip())
     scheme = parsed.scheme.lower()
     host = parsed.hostname.lower()
+
     if ":" in host:
         host = f"[{host}]"
 
     netloc = host
     port = parsed.port
+
     if port is not None and not (
         (scheme == "http" and port == 80)
         or (scheme == "https" and port == 443)
     ):
         netloc += f":{port}"
 
-    return urlunsplit((scheme, netloc, parsed.path or "/", parsed.query, ""))
+    return urlunsplit((
+        scheme,
+        netloc,
+        parsed.path or "/",
+        parsed.query,
+        "",
+    ))
 
 
 def prepare_sources(
@@ -79,10 +88,12 @@ def prepare_sources(
     """校验并整理人工来源和启用的自动来源。"""
     if not isinstance(manual_text, str):
         raise SourceConfigError("manual.txt 内容必须是文本")
+
     if not isinstance(sources_config, dict):
         raise SourceConfigError("sources.json 顶层必须是 JSON 对象")
 
     configured = sources_config.get("sources")
+
     if not isinstance(configured, list):
         raise SourceConfigError("sources.json 必须包含 sources 数组")
 
@@ -91,15 +102,22 @@ def prepare_sources(
     errors = []
     disabled_count = 0
 
-    for line_number, raw_line in enumerate(manual_text.splitlines(), start=1):
+    for line_number, raw_line in enumerate(
+        manual_text.splitlines(),
+        start=1,
+    ):
         url = raw_line.strip()
+
         if not url or url.startswith("#"):
             continue
+
         if not _valid_http_url(url):
             errors.append(
-                f"manual.txt 第 {line_number} 行：不是有效的 HTTP/HTTPS URL，已跳过"
+                f"manual.txt 第 {line_number} 行："
+                "不是有效的 HTTP/HTTPS URL，已跳过"
             )
             continue
+
         manual_sources.append({
             "url": url,
             "source_type": "manual",
@@ -112,15 +130,20 @@ def prepare_sources(
     ids = [
         item["id"].strip()
         for item in configured
-        if isinstance(item, dict)
-        and isinstance(item.get("id"), str)
-        and item["id"].strip()
+        if (
+            isinstance(item, dict)
+            and isinstance(item.get("id"), str)
+            and item["id"].strip()
+        )
     ]
     id_counts = Counter(ids)
 
     for index, item in enumerate(configured, start=1):
         if not isinstance(item, dict):
-            errors.append(f"sources.json 第 {index} 条：配置必须是 JSON 对象，已跳过")
+            errors.append(
+                f"sources.json 第 {index} 条："
+                "配置必须是 JSON 对象，已跳过"
+            )
             continue
 
         source_id = item.get("id")
@@ -134,20 +157,27 @@ def prepare_sources(
             item_errors.append("id 必须是非空文本")
         elif id_counts[source_id.strip()] > 1:
             item_errors.append(f"id 重复：{source_id}")
+
         if not isinstance(name, str) or not name.strip():
             item_errors.append("name 必须是非空文本")
+
         if not _valid_http_url(url):
             item_errors.append("url 必须是有效的 HTTP/HTTPS URL")
+
         if not isinstance(enabled, bool):
             item_errors.append("enabled 必须是布尔值")
+
         if mode not in ("playlist", "index"):
             item_errors.append("mode 只能是 playlist 或 index")
 
         if item_errors:
             errors.append(
-                f"sources.json 第 {index} 条：" + "；".join(item_errors) + "，已跳过"
+                f"sources.json 第 {index} 条："
+                + "；".join(item_errors)
+                + "，已跳过"
             )
             continue
+
         if not enabled:
             disabled_count += 1
             continue
@@ -171,28 +201,33 @@ def prepare_sources(
     }
 
 
-def _remaining_seconds(deadline: float) -> float:
-    """检查来源下载的总时间预算。"""
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        raise TimeoutError("来源下载超过总时间上限")
-    return remaining
-
-
 class _LimitedRedirectHandler(HTTPRedirectHandler):
     """限制重定向次数，并逐次校验跳转目标。"""
 
-    def __init__(self, maximum: int, deadline: float):
+    def __init__(self, maximum: int):
         super().__init__()
         self.maximum = maximum
-        self.deadline = deadline
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        _remaining_seconds(self.deadline)
+    def redirect_request(
+        self,
+        req,
+        fp,
+        code,
+        msg,
+        headers,
+        newurl,
+    ):
         count = getattr(req, "_iptv_redirect_count", 0)
 
         if count >= self.maximum:
-            raise HTTPError(req.full_url, code, "超过最大重定向次数", headers, fp)
+            raise HTTPError(
+                req.full_url,
+                code,
+                "超过最大重定向次数",
+                headers,
+                fp,
+            )
+
         if not _valid_http_url(newurl):
             raise HTTPError(
                 req.full_url,
@@ -202,31 +237,31 @@ class _LimitedRedirectHandler(HTTPRedirectHandler):
                 fp,
             )
 
-        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        redirected = super().redirect_request(
+            req,
+            fp,
+            code,
+            msg,
+            headers,
+            newurl,
+        )
+
         if redirected is not None:
             redirected._iptv_redirect_count = count + 1
+
         return redirected
-
-
-def _read_response(response, size: int, deadline: float) -> bytes:
-    """分段读取响应，并在每次阻塞读取前后检查总时间预算。
-
-    urllib 会在建立连接时为 socket 设置 timeout。这里不再访问
-    http.client 已可能主动关闭的 connection.sock，也不使用后台线程
-    强行关闭 socket，避免 HTTP/1.0 close-after-response 场景下操作失效句柄。
-    """
-    _remaining_seconds(deadline)
-    data = response.read1(size)
-    _remaining_seconds(deadline)
-    return data
 
 
 def _looks_like_ts(data: bytes) -> bool:
     """检查连续五个 188 字节 TS 同步位置。"""
     if len(data) < 188 * 4 + 1:
         return False
+
     return any(
-        all(data[offset + 188 * index] == 0x47 for index in range(5))
+        all(
+            data[offset + 188 * index] == 0x47
+            for index in range(5)
+        )
         for offset in range(min(188, len(data) - 188 * 4))
     )
 
@@ -238,7 +273,7 @@ def download_url(
     max_redirects: int,
     max_hls_manifest_bytes: int,
 ) -> dict[str, Any]:
-    """下载来源内容，限制超时、内容大小和重定向次数。"""
+    """下载来源内容；直接媒体只读取识别所需的开头数据。"""
     if not _valid_http_url(url):
         raise SourceDownloadError("来源 URL 无效")
 
@@ -247,8 +282,13 @@ def download_url(
         (max_bytes, "来源大小上限"),
         (max_hls_manifest_bytes, "HLS 清单大小上限"),
     ):
-        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        if (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or value <= 0
+        ):
             raise SourceDownloadError(f"{name}参数无效")
+
     if (
         not isinstance(max_redirects, int)
         or isinstance(max_redirects, bool)
@@ -256,7 +296,6 @@ def download_url(
     ):
         raise SourceDownloadError("重定向次数参数无效")
 
-    deadline = time.monotonic() + timeout_seconds
     request = Request(
         url,
         headers={
@@ -265,16 +304,21 @@ def download_url(
             "Accept-Encoding": "identity",
         },
     )
-    opener = build_opener(_LimitedRedirectHandler(max_redirects, deadline))
+
+    opener = build_opener(_LimitedRedirectHandler(max_redirects))
+    started_at = time.monotonic()
 
     try:
         with opener.open(request, timeout=timeout_seconds) as response:
-            _remaining_seconds(deadline)
             status = getattr(response, "status", response.getcode())
+
             if status not in (200, 206):
-                raise SourceDownloadError(f"HTTP 状态不符合要求：{status}")
+                raise SourceDownloadError(
+                    f"HTTP 状态不符合要求：{status}"
+                )
 
             final_url = response.geturl()
+
             if not _valid_http_url(final_url):
                 raise SourceDownloadError("重定向后的最终 URL 无效")
 
@@ -284,7 +328,14 @@ def download_url(
                 .strip()
                 .lower()
             )
-            first = _read_response(response, min(8192, max_bytes + 1), deadline)
+
+            first = response.read(min(8192, max_bytes + 1))
+
+            if time.monotonic() - started_at > timeout_seconds:
+                raise SourceDownloadError(
+                    f"来源下载超过 {timeout_seconds} 秒时间上限"
+                )
+
             if len(first) > max_bytes:
                 raise SourceDownloadError(
                     f"来源内容超过允许上限 {max_bytes} 字节"
@@ -294,6 +345,7 @@ def download_url(
                 content_type.startswith(("video/", "audio/"))
                 and "mpegurl" not in content_type
             )
+
             if _looks_like_ts(first) or is_media_type:
                 return {
                     "url": url,
@@ -308,15 +360,25 @@ def download_url(
 
             def is_hls_manifest(data: bytes) -> bool:
                 sample = data[:max_hls_manifest_bytes]
-                text = sample.decode("utf-8-sig", errors="ignore").upper()
-                return text.lstrip().startswith("#EXTM3U") and "#EXT-X-" in text
+                text = sample.decode(
+                    "utf-8-sig",
+                    errors="ignore",
+                ).upper()
+
+                return (
+                    text.lstrip().startswith("#EXTM3U")
+                    and "#EXT-X-" in text
+                )
 
             hls_detected = is_hls_manifest(content)
+
             while True:
-                _remaining_seconds(deadline)
                 content_limit = (
-                    max_hls_manifest_bytes if hls_detected else max_bytes
+                    max_hls_manifest_bytes
+                    if hls_detected
+                    else max_bytes
                 )
+
                 if len(content) > content_limit:
                     label = "HLS 播放清单" if hls_detected else "来源内容"
                     raise SourceDownloadError(
@@ -324,21 +386,34 @@ def download_url(
                     )
 
                 remaining = content_limit + 1 - len(content)
+
                 if remaining <= 0:
                     break
-                chunk = _read_response(response, min(8192, remaining), deadline)
+
+                chunk = response.read(min(8192, remaining))
+
+                if time.monotonic() - started_at > timeout_seconds:
+                    raise SourceDownloadError(
+                        f"来源下载超过 {timeout_seconds} 秒时间上限"
+                    )
+
                 if not chunk:
                     break
+
                 content.extend(chunk)
+
                 if not hls_detected:
                     hls_detected = is_hls_manifest(content)
 
-            _remaining_seconds(deadline)
-            content_limit = max_hls_manifest_bytes if hls_detected else max_bytes
-            if len(content) > content_limit:
+            if len(content) > (
+                max_hls_manifest_bytes if hls_detected else max_bytes
+            ):
                 label = "HLS 播放清单" if hls_detected else "来源内容"
+                limit = (
+                    max_hls_manifest_bytes if hls_detected else max_bytes
+                )
                 raise SourceDownloadError(
-                    f"{label}超过允许上限 {content_limit} 字节"
+                    f"{label}超过允许上限 {limit} 字节"
                 )
 
             return {
@@ -352,12 +427,22 @@ def download_url(
 
     except SourceDownloadError:
         raise
+
     except HTTPError as exc:
         raise SourceDownloadError(
             f"HTTP 请求失败：{exc.code} {exc.reason}"
         ) from exc
-    except (URLError, HTTPException, TimeoutError, OSError, ValueError) as exc:
-        raise SourceDownloadError(f"来源下载失败：{exc}") from exc
+
+    except (
+        URLError,
+        HTTPException,
+        TimeoutError,
+        OSError,
+        ValueError,
+    ) as exc:
+        raise SourceDownloadError(
+            f"来源下载失败：{exc}"
+        ) from exc
 
 
 class _PlaylistLinkParser(HTMLParser):
@@ -370,7 +455,9 @@ class _PlaylistLinkParser(HTMLParser):
     def handle_starttag(self, tag, attrs):
         if tag.lower() != "a":
             return
+
         href = dict(attrs).get("href")
+
         if isinstance(href, str) and href.strip():
             self.links.append(href.strip())
 
@@ -402,20 +489,29 @@ def extract_playlist_links(
 
     results = []
     seen = set()
+
     for href in parser.links:
         absolute = urljoin(index_url, href)
+
         if not _valid_http_url(absolute):
             continue
+
         path = urlsplit(absolute).path.lower()
+
         if not path.endswith((".txt", ".m3u", ".m3u8")):
             continue
+
         key = _source_key(absolute)
+
         if key in seen:
             continue
+
         seen.add(key)
         results.append(absolute)
+
         if len(results) >= maximum:
             break
+
     return results
 
 
@@ -427,45 +523,84 @@ def iter_source_contents(
     """按人工优先顺序逐条下载，供 main.py 逐条处理。"""
     detection = settings["detection"]
     collection = settings["collection"]
+
     timeout = detection["source_download_timeout_seconds"]
     max_bytes = detection["max_source_download_bytes"]
     max_redirects = detection["max_redirects"]
     max_hls_bytes = detection["max_hls_manifest_bytes"]
     max_index_links = collection["max_index_links_per_page"]
+
     seen_urls = set()
 
+    # 第一优先级：人工来源。
     for source in manual_sources:
         url = source["url"]
         key = _source_key(url)
+
         if key in seen_urls:
             continue
+
         seen_urls.add(key)
+
         try:
             downloaded = download_url(
-                url, timeout, max_bytes, max_redirects, max_hls_bytes
+                url,
+                timeout,
+                max_bytes,
+                max_redirects,
+                max_hls_bytes,
             )
-            seen_urls.add(_source_key(downloaded["final_url"]))
-            yield {"source": dict(source), "download": downloaded, "errors": []}
-        except SourceDownloadError as exc:
-            yield {"source": dict(source), "download": None, "errors": [str(exc)]}
 
+            seen_urls.add(_source_key(downloaded["final_url"]))
+
+            yield {
+                "source": dict(source),
+                "download": downloaded,
+                "errors": [],
+            }
+
+        except SourceDownloadError as exc:
+            yield {
+                "source": dict(source),
+                "download": None,
+                "errors": [str(exc)],
+            }
+
+    # 第二优先级：自动来源。
     for source in automatic_sources:
         url = source["url"]
         key = _source_key(url)
+
         if key in seen_urls:
             continue
+
         seen_urls.add(key)
+
         try:
             index_download = download_url(
-                url, timeout, max_bytes, max_redirects, max_hls_bytes
+                url,
+                timeout,
+                max_bytes,
+                max_redirects,
+                max_hls_bytes,
             )
+
             seen_urls.add(_source_key(index_download["final_url"]))
+
         except SourceDownloadError as exc:
-            yield {"source": dict(source), "download": None, "errors": [str(exc)]}
+            yield {
+                "source": dict(source),
+                "download": None,
+                "errors": [str(exc)],
+            }
             continue
 
         if source["mode"] == "playlist":
-            yield {"source": dict(source), "download": index_download, "errors": []}
+            yield {
+                "source": dict(source),
+                "download": index_download,
+                "errors": [],
+            }
             continue
 
         try:
@@ -474,6 +609,7 @@ def iter_source_contents(
                 index_download["final_url"],
                 max_index_links,
             )
+
         except (ValueError, TypeError) as exc:
             yield {
                 "source": dict(source),
@@ -492,9 +628,12 @@ def iter_source_contents(
 
         for link_index, playlist_url in enumerate(links, start=1):
             key = _source_key(playlist_url)
+
             if key in seen_urls:
                 continue
+
             seen_urls.add(key)
+
             discovered_source = {
                 **source,
                 "url": playlist_url,
@@ -502,16 +641,24 @@ def iter_source_contents(
                 "discovered_from": index_download["final_url"],
                 "discovered_order": link_index,
             }
+
             try:
                 downloaded = download_url(
-                    playlist_url, timeout, max_bytes, max_redirects, max_hls_bytes
+                    playlist_url,
+                    timeout,
+                    max_bytes,
+                    max_redirects,
+                    max_hls_bytes,
                 )
+
                 seen_urls.add(_source_key(downloaded["final_url"]))
+
                 yield {
                     "source": discovered_source,
                     "download": downloaded,
                     "errors": [],
                 }
+
             except SourceDownloadError as exc:
                 yield {
                     "source": discovered_source,
