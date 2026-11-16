@@ -21,6 +21,8 @@ class State:
     active = 0
     maximum = 0
     routes = {}
+    started_event = None
+    release_event = None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -34,9 +36,16 @@ class Handler(BaseHTTPRequestHandler):
             State.active += 1
             State.maximum = max(State.maximum, State.active)
             delay = State.routes.get(self.path, 0)
+            started_event = State.started_event
+            release_event = State.release_event
 
         try:
-            if delay:
+            if self.path == "/occupy-slot.ts":
+                if started_event is not None:
+                    started_event.set()
+                if release_event is not None:
+                    release_event.wait(timeout=5)
+            elif delay:
                 time.sleep(delay)
 
             self.send_response(200)
@@ -87,6 +96,8 @@ class CheckerConcurrencyTests(unittest.TestCase):
             State.active = 0
             State.maximum = 0
             State.routes = {}
+            State.started_event = None
+            State.release_event = None
 
     def settings(self, **overrides):
         config = {
@@ -217,19 +228,24 @@ class CheckerConcurrencyTests(unittest.TestCase):
             )
 
     def test_waiting_for_host_slot_times_out_as_incomplete(self):
-        """先确认第一个请求占用主机槽位，再验证第二个请求等待超时。"""
+        """用事件锁定第一个请求，再验证第二个请求等待槽位超时。"""
+        started_event = threading.Event()
+        release_event = threading.Event()
+
         with State.lock:
             State.routes = {
-                "/occupy-slot.ts": 1.5,
+                "/occupy-slot.ts": 0,
                 "/waiting-slot.ts": 0,
             }
+            State.started_event = started_event
+            State.release_event = release_event
 
         config = self.settings(
             local_concurrency=2,
             per_host_concurrency=1,
             queue_limit=2,
             max_queue_seconds=1,
-            candidate_active_budget_seconds=4,
+            candidate_active_budget_seconds=8,
         )
 
         detector = Detector(config)
@@ -238,62 +254,60 @@ class CheckerConcurrencyTests(unittest.TestCase):
         second_candidate = self.candidate("/waiting-slot.ts")
 
         with ThreadPoolExecutor(max_workers=2) as pool:
-            first_submitted_at = time.monotonic()
-
             first_future = pool.submit(
                 detector.check_one,
                 first_candidate,
-                first_submitted_at,
+                time.monotonic(),
             )
 
-            # 等待第一个请求真正到达 HTTP 服务端。
-            # 确认其已开始占用主机槽位后，才提交第二个请求。
-            deadline = time.monotonic() + 2
+            second_future = None
 
-            while time.monotonic() < deadline:
-                with State.lock:
-                    active = State.active
+            try:
+                # 只有服务器收到第一个指定请求，事件才会触发。
+                self.assertTrue(
+                    started_event.wait(timeout=3),
+                    "第一个指定请求未能到达测试服务器",
+                )
 
-                if active > 0:
-                    break
+                # 此时第一个请求仍被 release_event 暂停，
+                # 因此它必然仍占用同一主机的并发槽位。
+                second_future = pool.submit(
+                    detector.check_one,
+                    second_candidate,
+                    time.monotonic(),
+                )
 
-                time.sleep(0.01)
+                second_result = second_future.result(timeout=4)
 
-            self.assertGreater(
-                self.maximum_active(),
-                0,
-                "第一个请求未能在规定时间内到达测试服务器",
-            )
-
-            second_submitted_at = time.monotonic()
-
-            second_future = pool.submit(
-                detector.check_one,
-                second_candidate,
-                second_submitted_at,
-            )
+            finally:
+                # 无论断言是否成功，都释放第一个请求，
+                # 避免测试失败时留下阻塞中的服务线程。
+                release_event.set()
 
             first_result = first_future.result(timeout=6)
-            second_result = second_future.result(timeout=6)
 
         self.assertEqual(
             first_result["checks"]["ipv4"]["status"],
             "PASS",
+            msg=f"第一个请求结果异常：{first_result}",
         )
 
         self.assertEqual(
             first_result["checks"]["ts"]["status"],
             "PASS",
+            msg=f"第一个请求 TS 检测异常：{first_result}",
         )
 
         self.assertEqual(
             second_result["checks"]["ipv4"]["status"],
             "INCOMPLETE",
+            msg=f"第二个请求 IPv4 状态异常：{second_result}",
         )
 
         self.assertEqual(
             second_result["checks"]["http"]["status"],
             "INCOMPLETE",
+            msg=f"第二个请求 HTTP 状态异常：{second_result}",
         )
 
 
