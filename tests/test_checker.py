@@ -1,17 +1,24 @@
 
 """IPTV-Direct checker.py 专项测试。
 
-只使用本机 HTTP 模拟服务，不访问公网直播源，不调用 Globalping。
+只使用本机 HTTP 模拟服务和连接层模拟，不访问公网直播源，
+不调用 Globalping。
 运行方式：
     python -m unittest discover -s tests -p "test_checker.py" -v
 """
 
+import socket
+import ssl
 import threading
 import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from unittest.mock import Mock, patch
 
-from checker import check_candidates
+from checker import (
+    IPv4HTTPSConnection,
+    check_candidates,
+)
 
 
 VALID_TS = b"".join(b"\x47" + bytes(187) for _ in range(6))
@@ -92,6 +99,38 @@ OVERSIZED_MANIFEST = (
     + b"x" * (1048576 + 1024)
     + b"\n"
 )
+
+
+class FakeSocket:
+    """用于验证 HTTPS 连接层行为，不建立真实外部连接。"""
+
+    def __init__(self):
+        self.timeout = None
+        self.connected_address = None
+        self.closed = False
+
+    def settimeout(self, value):
+        self.timeout = value
+
+    def connect(self, address):
+        self.connected_address = address
+
+    def close(self):
+        self.closed = True
+
+    def shutdown(self, how):
+        pass
+
+
+class FakeTLSContext:
+    """记录 TLS 包装时传入的 SNI 主机名。"""
+
+    def __init__(self):
+        self.server_hostname = None
+
+    def wrap_socket(self, sock, server_hostname=None):
+        self.server_hostname = server_hostname
+        return sock
 
 
 class MockHandler(BaseHTTPRequestHandler):
@@ -270,6 +309,15 @@ class CheckerLocalTests(unittest.TestCase):
                 "status": 302,
                 "headers": {"Location": "/direct.ts"},
             },
+            "/redirect-other-host": {
+                "status": 302,
+                "headers": {
+                    "Location": (
+                        f"http://localhost:{self.server.server_port}"
+                        "/direct.ts"
+                    )
+                },
+            },
             "/loop": {
                 "status": 302,
                 "headers": {"Location": "/loop"},
@@ -306,12 +354,10 @@ class CheckerLocalTests(unittest.TestCase):
                 "status": 200,
                 "body": VALID_TS,
             },
-            # 大于64 KB但不超过1 MB，应该继续读取并完成检测。
             "/large-manifest.m3u8": {
                 "status": 206,
                 "body": LARGE_MANIFEST,
             },
-            # 超过1 MB，必须拒绝，不能截断后误判通过。
             "/oversized-manifest.m3u8": {
                 "status": 206,
                 "body": OVERSIZED_MANIFEST,
@@ -493,6 +539,109 @@ class CheckerLocalTests(unittest.TestCase):
         self.assert_status(result, "http", "PASS")
         self.assert_status(result, "ts", "PASS")
         self.assert_status(result, "hls", "N/A")
+
+    def test_cross_host_redirect_uses_ipv4_dns_on_each_hop(self):
+        """跨主机重定向的初始请求和后续请求都必须强制 IPv4。"""
+        original_getaddrinfo = socket.getaddrinfo
+        calls = []
+
+        def recording_getaddrinfo(
+            host,
+            port,
+            family=0,
+            type=0,
+            proto=0,
+            flags=0,
+        ):
+            calls.append((host, family))
+            return original_getaddrinfo(
+                host, port, family, type, proto, flags
+            )
+
+        with patch(
+            "checker.socket.getaddrinfo",
+            side_effect=recording_getaddrinfo,
+        ):
+            result = self.check("/redirect-other-host")
+
+        self.assertEqual(result["media_type"], "DIRECT_TS")
+        self.assert_status(result, "ipv4", "PASS")
+        self.assert_status(result, "http", "PASS")
+        self.assert_status(result, "ts", "PASS")
+
+        self.assertGreaterEqual(
+            len(calls),
+            2,
+            msg=f"预期至少发生两次 DNS 解析，实际记录：{calls}",
+        )
+        self.assertTrue(
+            all(family == socket.AF_INET for _, family in calls),
+            msg=f"发现非 IPv4 DNS 解析：{calls}",
+        )
+
+    def test_https_connection_uses_ipv4_socket_and_sni(self):
+        """HTTPS 连接必须使用 AF_INET，并将域名传给 TLS SNI。"""
+        fake_socket = FakeSocket()
+        fake_context = FakeTLSContext()
+
+        resolver = Mock()
+        resolver.resolve.return_value = [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("192.0.2.10", 443),
+            )
+        ]
+
+        with patch(
+            "checker.socket.socket",
+            return_value=fake_socket,
+        ) as socket_factory:
+            connection = IPv4HTTPSConnection(
+                "media.example",
+                443,
+                deadline=time.monotonic() + 3,
+                resolver=resolver,
+                context=fake_context,
+                timeout=3,
+            )
+            connection.connect()
+
+        self.assertTrue(connection.ipv4_connected)
+        self.assertEqual(
+            socket_factory.call_args.args[0],
+            socket.AF_INET,
+        )
+        self.assertEqual(
+            fake_context.server_hostname,
+            "media.example",
+        )
+        self.assertEqual(
+            fake_socket.connected_address,
+            ("192.0.2.10", 443),
+        )
+
+        connection.close()
+
+    def test_https_default_context_verifies_certificate_and_hostname(self):
+        """未显式传入 TLS 上下文时，必须启用证书和主机名验证。"""
+        resolver = Mock()
+
+        connection = IPv4HTTPSConnection(
+            "media.example",
+            443,
+            deadline=time.monotonic() + 3,
+            resolver=resolver,
+            timeout=3,
+        )
+
+        self.assertEqual(
+            connection.context.verify_mode,
+            ssl.CERT_REQUIRED,
+        )
+        self.assertTrue(connection.context.check_hostname)
 
     def test_redirect_loop_is_rejected(self):
         result = self.check("/loop")
