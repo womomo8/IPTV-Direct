@@ -1,4 +1,3 @@
-
 """main.py 来源批次调度、停止条件及 publisher 交接测试。
 
 全部使用模拟数据，不访问真实来源，不执行真实线路检测，
@@ -179,7 +178,9 @@ class MainCollectionFlowTests(unittest.TestCase):
             received_aliases.append(kwargs.get("aliases"))
             return make_normalized(kwargs["source"])
 
-        def admit(candidates, accepted_routes, channels, current_settings):
+        # main.py 以 settings=... 关键字调用准入函数，
+        # 因此模拟函数的参数名必须是 settings。
+        def admit(candidates, accepted_routes, channels, settings):
             return self.make_admission(accepted_routes)
 
         result, _, _, _, _ = self.run_flow(
