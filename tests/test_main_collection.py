@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import main
 import publisher
+from normalizer import _channel_match
 
 
 CHANNEL = "模拟测试频道"
@@ -36,6 +37,11 @@ def make_settings(
         },
         "selection": {
             "max_routes_per_channel": 2,
+        },
+        "aliases": {
+            "CCTV5": "CCTV-5",
+            "CCTV5+": "CCTV-5+",
+            "CCTV4中文国际": "CCTV-4",
         },
     }
 
@@ -85,6 +91,7 @@ class MainCollectionFlowTests(unittest.TestCase):
         source_stream,
         settings,
         admission_side_effect,
+        normalize_callback=None,
     ):
         config = {
             "settings": settings,
@@ -103,8 +110,10 @@ class MainCollectionFlowTests(unittest.TestCase):
             ),
             patch(
                 "main.normalize_source_content",
-                side_effect=lambda **kwargs: make_normalized(
-                    kwargs["source"]
+                side_effect=(
+                    normalize_callback
+                    if normalize_callback is not None
+                    else lambda **kwargs: make_normalized(kwargs["source"])
                 ),
             ),
             patch(
@@ -161,6 +170,27 @@ class MainCollectionFlowTests(unittest.TestCase):
             "all_channels_reached": all_channels_reached,
             "results": [],
         }
+
+    def test_aliases_are_passed_to_normalizer(self):
+        received_aliases = []
+        settings = make_settings()
+
+        def normalize_callback(**kwargs):
+            received_aliases.append(kwargs.get("aliases"))
+            return make_normalized(kwargs["source"])
+
+        def admit(candidates, accepted_routes, channels, current_settings):
+            return self.make_admission(accepted_routes)
+
+        result, _, _, _, _ = self.run_flow(
+            iter([make_source_item(0)]),
+            settings,
+            admit,
+            normalize_callback=normalize_callback,
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(received_aliases, [settings["aliases"]])
 
     def test_valid_source_limit_stops_before_next_source(self):
         consumed = []
@@ -279,6 +309,44 @@ class MainCollectionFlowTests(unittest.TestCase):
 
         self.assertIn("达到有效来源上限 2", output)
         build_mock.assert_called_once()
+
+
+class ChannelAliasTests(unittest.TestCase):
+
+    def test_cctv5_alias_matches_canonical_channel(self):
+        self.assertEqual(
+            _channel_match(["CCTV5"], ["CCTV-5"], {"CCTV5": "CCTV-5"}),
+            "CCTV-5",
+        )
+
+    def test_cctv5_plus_alias_matches_canonical_channel(self):
+        self.assertEqual(
+            _channel_match(
+                ["CCTV5+"],
+                ["CCTV-5+"],
+                {"CCTV5+": "CCTV-5+"},
+            ),
+            "CCTV-5+",
+        )
+
+    def test_cctv4_chinese_international_alias_matches_canonical_channel(self):
+        self.assertEqual(
+            _channel_match(
+                ["CCTV4中文国际"],
+                ["CCTV-4"],
+                {"CCTV4中文国际": "CCTV-4"},
+            ),
+            "CCTV-4",
+        )
+
+    def test_unknown_similar_name_does_not_fuzzy_match(self):
+        self.assertIsNone(
+            _channel_match(
+                ["CCTV5体育高清未知"],
+                ["CCTV-5"],
+                {"CCTV5": "CCTV-5"},
+            )
+        )
 
 
 class CollectionStopReasonTests(unittest.TestCase):
