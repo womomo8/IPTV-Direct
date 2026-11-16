@@ -337,28 +337,84 @@ def run_detection_pipeline(
     ]
 
 
-def _print_detection_summary(results: list[dict[str, Any]]) -> None:
-    local_ok = sum(_local_pass(item) for item in results)
-    local_bad = len(results) - local_ok
 
-    remote_counts = {
-        state: 0 for state in (PASS, FAIL, INCOMPLETE)
-    }
+class GlobalpingSummaryTests(unittest.TestCase):
 
-    for item in results:
-        state = item.get("globalping", {}).get("status")
+    def test_summary_excludes_not_submitted_candidates(self):
+        results = [
+            {
+                "channel": "CCTV-5",
+                "media_type": "HLS",
+                "normalized_url": "https://example.test/live.m3u8?token=secret",
+                "checks": {
+                    "ipv4": {"status": main.PASS},
+                    "http": {"status": main.PASS},
+                    "hls": {"status": main.PASS},
+                    "ts": {"status": main.PASS},
+                },
+                "globalping": {
+                    "status": main.INCOMPLETE,
+                    "error": "测量结果未能完成。",
+                    "probes": {
+                        "probe1": {
+                            "country": "CN",
+                            "city": "北京",
+                            "network": "China Mobile",
+                            "asn": 9808,
+                        }
+                    },
+                    "stages": {
+                        "main_playlist": {
+                            "measurement_id": "test-measurement-1",
+                            "status": main.INCOMPLETE,
+                            "reason": "测量结果未能完成。",
+                        }
+                    },
+                },
+            },
+            {
+                "channel": "CCTV-6",
+                "media_type": "HLS",
+                "normalized_url": "https://example.test/other.m3u8",
+                "checks": {
+                    "ipv4": {"status": main.FAIL},
+                    "http": {"status": main.INCOMPLETE},
+                    "hls": {"status": main.INCOMPLETE},
+                    "ts": {"status": main.INCOMPLETE},
+                },
+                "globalping": {
+                    "status": main.INCOMPLETE,
+                    "error": (
+                        "本地检测未全部通过，未提交 Globalping；"
+                        "不代表远程检测失败。"
+                    ),
+                    "probes": {},
+                    "stages": {},
+                },
+            },
+        ]
 
-        if state in remote_counts:
-            remote_counts[state] += 1
+        output = io.StringIO()
 
-    print(
-        f"检测统计：候选 {len(results)} 条；"
-        f"本地全部通过 {local_ok} 条；"
-        f"本地未通过/未完成 {local_bad} 条；"
-        f"Globalping PASS {remote_counts[PASS]} 条、"
-        f"FAIL {remote_counts[FAIL]} 条、"
-        f"INCOMPLETE {remote_counts[INCOMPLETE]} 条。"
-    )
+        with contextlib.redirect_stdout(output):
+            main._print_detection_summary(results)
+
+        report = output.getvalue()
+
+        self.assertIn("候选 2 条", report)
+        self.assertIn("本地全部通过 1 条", report)
+        self.assertIn("Globalping 已提交 1 条", report)
+        self.assertIn("未提交 1 条", report)
+        self.assertIn("实际远程结果 PASS 0 条", report)
+        self.assertIn("INCOMPLETE 1 条", report)
+
+        self.assertIn("北京", report)
+        self.assertIn("China Mobile", report)
+        self.assertIn("test-measurement-1", report)
+        self.assertIn("测量结果未能完成", report)
+
+        self.assertNotIn("token=secret", report)
+
 
 
 # ----------------------------------------------------------------------
