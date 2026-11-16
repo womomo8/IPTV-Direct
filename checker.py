@@ -15,6 +15,15 @@ from urllib.parse import urljoin, urlsplit
 
 PASS, FAIL, INCOMPLETE = "PASS", "FAIL", "INCOMPLETE"
 
+HLS_MARKERS = (
+    "#EXT-X-STREAM-INF:",
+    "#EXT-X-TARGETDURATION:",
+    "#EXT-X-MEDIA-SEQUENCE:",
+    "#EXT-X-PLAYLIST-TYPE:",
+    "#EXT-X-I-FRAMES-ONLY",
+    "#EXT-X-ENDLIST",
+)
+
 
 class CheckError(Exception):
     def __init__(
@@ -485,6 +494,36 @@ class Detector:
         )
 
     @staticmethod
+    def _mark_hls_type(data, candidate_result):
+        """从已读取的实际内容识别 HLS 结构，避免超限时类型仍为 UNKNOWN。"""
+        if candidate_result is None:
+            return False
+
+        probe = data.lstrip()
+        if probe.startswith(b"\xef\xbb\xbf"):
+            probe = probe[3:].lstrip()
+
+        try:
+            lines = [
+                line.strip()
+                for line in probe.decode(
+                    "utf-8-sig", errors="ignore"
+                ).splitlines()
+                if line.strip()
+            ]
+        except (UnicodeDecodeError, AttributeError):
+            return False
+
+        if not lines or lines[0] != "#EXTM3U":
+            return False
+
+        if not any(line.startswith(HLS_MARKERS) for line in lines):
+            return False
+
+        candidate_result["media_type"] = "HLS"
+        return True
+
+    @staticmethod
     def _playlist(data, candidate_result=None):
         """先识别 HLS 结构，再判断是否属于首期支持范围。"""
         try:
@@ -501,23 +540,11 @@ class Detector:
         if not lines or lines[0] != "#EXTM3U":
             raise CheckError(FAIL, "不是有效的 HLS 播放清单")
 
-        hls_markers = (
-            "#EXT-X-STREAM-INF:",
-            "#EXT-X-TARGETDURATION:",
-            "#EXT-X-MEDIA-SEQUENCE:",
-            "#EXT-X-PLAYLIST-TYPE:",
-            "#EXT-X-I-FRAMES-ONLY",
-            "#EXT-X-ENDLIST",
-        )
-        if not any(
-            line.startswith(hls_markers) for line in lines
-        ):
+        if not any(line.startswith(HLS_MARKERS) for line in lines):
             raise CheckError(
                 FAIL, "这是频道订阅 M3U，不是 HLS 播放清单"
             )
 
-        # 只要结构上已经确认是 HLS，就先记录类型。
-        # 后续加密、fMP4 等不支持原因不能把类型退回 UNKNOWN。
         if candidate_result is not None:
             candidate_result["media_type"] = "HLS"
 
@@ -579,6 +606,12 @@ class Detector:
     def _manifest(
         self, deadline, queue_deadline, first, candidate_result
     ):
+        # 关键修正：在完整清单读取和大小检查之前，
+        # 先根据首次读取到的实际内容确认是否具备 HLS 结构。
+        # 普通频道订阅 M3U 只有 #EXTM3U / #EXTINF，
+        # 不含 HLS_MARKERS，因此不会被误识别为 HLS。
+        self._mark_hls_type(first["data"], candidate_result)
+
         result = first
         if not first["complete"]:
             result = self._request(
