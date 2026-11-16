@@ -390,7 +390,8 @@ class CheckerLocalTests(unittest.TestCase):
         self.assert_status(result, "ipv4", "PASS")
         self.assert_status(result, "http", "PASS")
         self.assert_status(result, "hls", "FAIL")
-        self.assert_status(result, "ts", "FAIL")
+        # 未知频道订阅不是 TS；没有执行 TS 检测，不能伪称 TS 检测失败。
+        self.assert_status(result, "ts", "INCOMPLETE")
 
     def test_unknown_content_is_rejected(self):
         """无法识别的媒体内容不得获得通过状态。"""
