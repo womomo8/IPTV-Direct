@@ -90,7 +90,15 @@ jobs:
       - name: Show run mode
         run: echo "运行模式：测试运行"
 
-      - name: Run test mode
+      - name: Check Python syntax
+        run: |
+          python -m py_compile checker.py tests/test_checker.py
+
+      - name: Run checker专项测试
+        run: |
+          python -m unittest discover -s tests -p "test_checker.py" -v
+
+      - name: Run existing test flow
         run: python main.py --mode test
 
   diagnostic:
