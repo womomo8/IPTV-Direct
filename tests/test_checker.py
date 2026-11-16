@@ -769,6 +769,104 @@ class CheckerLocalTests(unittest.TestCase):
         self.assertFalse(Detector._ts_ok(bytes(invalid)))
         self.assertTrue(Detector._ts_ok(bytes(offset_valid)))
 
+    # 以下是新增的质量观测测试。
+
+    def test_quality_metrics_for_direct_ts(self):
+        """直接 TS 应记录初始响应、读取字节数和阶段结果。"""
+        result = self.check("/direct.ts")
+        quality = result["quality"]
+
+        self.assertEqual(quality["request_count"], 1)
+        self.assertEqual(quality["request_success_count"], 1)
+        self.assertEqual(quality["request_failure_count"], 0)
+        self.assertEqual(quality["segment_total"], 0)
+        self.assertEqual(len(quality["request_samples"]), 1)
+
+        sample = quality["request_samples"][0]
+        self.assertEqual(sample["stage"], "direct_ts")
+        self.assertEqual(sample["status_code"], 206)
+        self.assertEqual(sample["outcome"], "PASS")
+        self.assertEqual(sample["bytes_read"], len(VALID_TS))
+        self.assertGreaterEqual(sample["elapsed_seconds"], 0)
+        self.assertGreaterEqual(sample["read_seconds"], 0)
+        self.assertGreater(quality["total_bytes_read"], 0)
+        self.assertNotIn("url", sample)
+        self.assertNotIn("host", sample)
+
+    def test_quality_metrics_for_hls_media_playlist(self):
+        """HLS 应记录主清单和实际分片请求及其 TS 校验结果。"""
+        result = self.check("/media.m3u8")
+        quality = result["quality"]
+        samples = quality["request_samples"]
+
+        self.assertEqual(result["media_type"], "HLS")
+        self.assertEqual(quality["request_count"], 3)
+        self.assertEqual(quality["request_success_count"], 3)
+        self.assertEqual(quality["request_failure_count"], 0)
+        self.assertEqual(quality["segment_total"], 2)
+        self.assertEqual(quality["segment_success_count"], 2)
+        self.assertEqual(quality["segment_failure_count"], 0)
+        self.assertEqual(
+            [sample["stage"] for sample in samples],
+            ["main_playlist", "segment_1", "segment_2"],
+        )
+        self.assertTrue(
+            all(sample["outcome"] == "PASS" for sample in samples)
+        )
+
+    def test_quality_metrics_for_hls_master_playlist(self):
+        """主播放列表应区分主清单、媒体清单和分片阶段。"""
+        result = self.check("/master.m3u8")
+        quality = result["quality"]
+
+        self.assertEqual(result["media_type"], "HLS")
+        self.assertEqual(
+            [sample["stage"] for sample in quality["request_samples"]],
+            [
+                "main_playlist",
+                "media_playlist",
+                "segment_1",
+                "segment_2",
+            ],
+        )
+        self.assertEqual(quality["segment_total"], 2)
+        self.assertEqual(quality["segment_success_count"], 2)
+
+    def test_quality_metrics_record_failed_request(self):
+        """HTTP 503 必须保留真实 INCOMPLETE 结果并计为请求失败。"""
+        result = self.check("/unavailable")
+        quality = result["quality"]
+
+        self.assertEqual(quality["request_count"], 1)
+        self.assertEqual(quality["request_success_count"], 0)
+        self.assertEqual(quality["request_failure_count"], 1)
+        self.assertEqual(len(quality["request_samples"]), 1)
+        self.assertEqual(
+            quality["request_samples"][0]["status_code"],
+            503,
+        )
+        self.assertEqual(
+            quality["request_samples"][0]["outcome"],
+            "INCOMPLETE",
+        )
+
+    def test_quality_metrics_record_timeout(self):
+        """请求超过候选时间预算时应记录超时，不得记为成功。"""
+        result = self.check(
+            "/slow.ts",
+            candidate_active_budget_seconds=1,
+        )
+        quality = result["quality"]
+
+        self.assertEqual(quality["request_count"], 1)
+        self.assertEqual(quality["request_success_count"], 0)
+        self.assertEqual(quality["request_failure_count"], 1)
+        self.assertGreaterEqual(quality["timeout_count"], 1)
+        self.assertEqual(
+            quality["request_samples"][0]["outcome"],
+            "INCOMPLETE",
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
