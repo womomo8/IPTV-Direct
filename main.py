@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """IPTV-Direct 总入口：采集、检测、线路准入及订阅生成。"""
@@ -333,6 +332,84 @@ def _print_detection_summary(results: list[dict[str, Any]]) -> None:
 
         if remote.get("error"):
             print(f"  远程异常/未完成原因：{remote['error']}")
+            def _safe_host(candidate: dict[str, Any]) -> str:
+    """只显示主机名，避免日志泄露 URL 参数或凭据。"""
+    try:
+        return urlsplit(str(candidate.get("normalized_url", ""))).hostname or "无法识别"
+    except ValueError:
+        return "无法识别"
+
+
+def _print_manual_source_details(
+    source: dict[str, Any],
+    normalized: dict[str, Any],
+    detected: list[dict[str, Any]],
+    admission_results: list[dict[str, Any]],
+) -> None:
+    """仅输出 manual.txt 来源的逐条采集、检测和准入结果。"""
+    if source.get("source_type") != "manual":
+        return
+
+    candidates = normalized.get("candidates", [])
+    print(
+        f"人工来源诊断：{source.get('name', '未命名来源')}；"
+        f"格式 {normalized.get('format', '未知')}；"
+        f"提取 {normalized.get('extracted_candidates', 0)} 条；"
+        f"匹配目标频道 {normalized.get('matched_target_candidates', 0)} 条；"
+        f"重复 {normalized.get('duplicate_candidates', 0)} 条；"
+        f"进入检测 {len(detected)} 条。"
+    )
+
+    for error in normalized.get("errors", []):
+        # 解析错误可能包含完整 URL，只输出错误类型，不输出原始内容。
+        print(f"  解析提示：{str(error).split(':', 1)[0]}")
+
+    admitted = {
+        _identity(result.get("candidate", {})): result
+        for result in admission_results
+        if isinstance(result, dict) and isinstance(result.get("candidate"), dict)
+    }
+    detected_by_id = {
+        _identity(result): result
+        for result in detected
+        if isinstance(result, dict)
+    }
+
+    for number, candidate in enumerate(candidates, 1):
+        key = _identity(candidate)
+        checked = detected_by_id.get(key, {})
+        checks = checked.get("checks", {})
+        remote = checked.get("globalping", {})
+        admission = admitted.get(key, {})
+        print(
+            f"  [{number}] {candidate.get('channel', '未知频道')}；"
+            f"主机 {_safe_host(candidate)}"
+        )
+        for check_name in ("ipv4", "http", "hls", "ts"):
+            detail = checks.get(check_name, {})
+            if isinstance(detail, dict):
+                print(
+                    f"      {check_name.upper()}："
+                    f"{detail.get('status', '未执行')}；"
+                    f"{detail.get('reason') or '无原因说明'}"
+                )
+        if isinstance(remote, dict):
+            print(
+                f"      Globalping：{remote.get('status', '未执行')}；"
+                f"{remote.get('error') or '无异常说明'}"
+            )
+            stages = remote.get("stages", {})
+            if isinstance(stages, dict):
+                for stage_name, stage in stages.items():
+                    if isinstance(stage, dict):
+                        print(
+                            f"        {stage_name}：{stage.get('status', '未知')}；"
+                            f"{stage.get('reason') or '无原因说明'}"
+                        )
+        print(
+            f"      正式准入：{admission.get('status', '未进入准入')}；"
+            f"{admission.get('reason') or '无原因说明'}"
+        )
 
 
 # ----------------------------------------------------------------------
@@ -412,6 +489,11 @@ def run_formal_flow(config: dict[str, Any]) -> int:
         label = source.get("name", source.get("url", "来源"))
 
         if item.get("errors"):
+            if source.get("source_type") == "manual":
+                print(
+                    f"人工来源下载失败：{source.get('name', '未命名来源')}；"
+                    f"错误 {len(item['errors'])} 项。"
+                )
             errors.extend(
                 f"{label}：{message}" for message in item["errors"]
             )
@@ -452,6 +534,7 @@ def run_formal_flow(config: dict[str, Any]) -> int:
             continue
 
         if not normalized.get("recognized"):
+            _print_manual_source_details(source, normalized, [], [])
             errors.extend(
                 f"{label}：{error}"
                 for error in normalized.get("errors", [])
@@ -468,6 +551,8 @@ def run_formal_flow(config: dict[str, Any]) -> int:
 
         accepted_now = 0
         rejected_now = 0
+        batch_results: list[dict[str, Any]] = []
+        admission_results: list[dict[str, Any]] = []
 
         if candidates:
             batch_results = run_detection_pipeline(candidates, settings)
@@ -488,6 +573,7 @@ def run_formal_flow(config: dict[str, Any]) -> int:
                 break
 
             accepted_routes = admission["accepted_routes"]
+            admission_results = admission.get("results", [])
 
             accepted_now = sum(
                 result.get("status") == publisher.ACCEPTED
@@ -511,6 +597,10 @@ def run_formal_flow(config: dict[str, Any]) -> int:
                     for channel, count in admission["channel_counts"].items()
                 )
             )
+
+        _print_manual_source_details(
+            source, normalized, batch_results, admission_results
+        )
 
         print(
             f"来源处理：{label}；"
@@ -549,8 +639,7 @@ def run_formal_flow(config: dict[str, Any]) -> int:
             file=sys.stderr,
         )
         return 1
-
-    # 第8阶段：生成并检查订阅内容。
+            # 第8阶段：生成并检查订阅内容。
     try:
         subscriptions = publisher.build_subscriptions(
             accepted_routes,
