@@ -986,7 +986,7 @@ def check_candidates(
         locations = choose_probes(min(max_probes, limits["remaining"]))
     except GlobalpingError as exc:
         for index, candidate in eligible:
-            output[index] = _incomplete_result(candidate, str(exc))
+            output[index] = incomplete_result(candidate, str(exc))
         return [item for item in output if item is not None]
 
     probe_count = sum(int(item.get("limit", 1)) for item in locations)
@@ -998,7 +998,7 @@ def check_candidates(
 
     for index, candidate in eligible:
         if budget["halted"]:
-            output[index] = _incomplete_result(
+            output[index] = incomplete_result(
                 candidate,
                 "Globalping 返回 HTTP 429，已停止本轮后续测量创建。",
             )
