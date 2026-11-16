@@ -1421,32 +1421,27 @@ def _run_pipeline_mock_test(config: dict[str, Any]) -> None:
 # ----------------------------------------------------------------------
 
 def _run_publisher_mock_test(config: dict[str, Any]) -> None:
-    """模拟多批次准入、人工优先、频道统计及订阅生成。"""
+    """使用全部配置目标频道模拟准入和订阅生成。"""
 
-    channels = [TEST_CHANNEL]
+    channels = config["channels"] or [TEST_CHANNEL]
     settings = copy.deepcopy(config["settings"])
-
     settings["selection"]["max_routes_per_channel"] = 2
 
-    automatic_candidates = [
-        {
-            "channel": TEST_CHANNEL,
-            "normalized_url": "https://example.invalid/auto-1.m3u8",
-            "priority": 1,
-            "source_order": 0,
-            "source_type": "automatic",
-        },
-        {
-            "channel": TEST_CHANNEL,
-            "normalized_url": "https://example.invalid/auto-2.m3u8",
-            "priority": 1,
-            "source_order": 1,
-            "source_type": "automatic",
-        },
-    ]
+    automatic_candidates = []
+    for index, channel in enumerate(channels):
+        for route_index in range(2):
+            automatic_candidates.append({
+                "channel": channel,
+                "normalized_url": (
+                    f"https://example.invalid/auto-{index}-{route_index}.m3u8"
+                ),
+                "priority": 1,
+                "source_order": route_index,
+                "source_type": "automatic",
+            })
 
     manual_candidate = {
-        "channel": TEST_CHANNEL,
+        "channel": channels[0],
         "normalized_url": "https://example.invalid/manual.m3u8",
         "priority": 0,
         "source_order": 0,
@@ -1487,7 +1482,7 @@ def _run_publisher_mock_test(config: dict[str, Any]) -> None:
             for item in items
         ]
 
-    # 第一批：两条自动来源线路。
+    # 第一批：每个目标频道两条自动来源线路。
     first_detected = run_detection_pipeline(
         automatic_candidates,
         settings,
@@ -1503,13 +1498,13 @@ def _run_publisher_mock_test(config: dict[str, Any]) -> None:
     )
 
     if (
-        len(first["accepted_routes"]) != 2
-        or first["channel_counts"][TEST_CHANNEL] != 2
+        len(first["accepted_routes"]) != len(channels) * 2
+        or any(first["channel_counts"][channel] != 2 for channel in channels)
         or not first["all_channels_reached"]
     ):
-        raise AssertionError("publisher 第一批准入或频道统计错误")
+        raise AssertionError("全部目标频道第一批准入或数量统计错误")
 
-    # 第二批：人工线路应优先于自动来源。
+    # 第二批：第一频道加入人工线路，验证人工来源优先。
     manual_detected = run_detection_pipeline(
         [manual_candidate],
         settings,
@@ -1530,11 +1525,21 @@ def _run_publisher_mock_test(config: dict[str, Any]) -> None:
     ]
 
     if (
-        len(second["accepted_routes"]) != 2
+        len(second["accepted_routes"]) != len(channels) * 2
         or manual_candidate["normalized_url"] not in retained_urls
         or not second["all_channels_reached"]
     ):
-        raise AssertionError("publisher 多批次累计或人工来源优先规则错误")
+        raise AssertionError("多批次累计或人工来源优先规则错误")
+
+    for channel in channels:
+        count = sum(
+            route["channel"] == channel
+            for route in second["accepted_routes"]
+        )
+        if count != 2:
+            raise AssertionError(
+                f"频道 {channel} 最终线路数量错误：{count}"
+            )
 
     if any(
         route.get("globalping", {}).get("status") != INCOMPLETE
@@ -1554,25 +1559,28 @@ def _run_publisher_mock_test(config: dict[str, Any]) -> None:
         channels,
     )
 
+    expected_routes = len(channels) * 2
+
     if (
-        output["route_count"] != 2
+        output["route_count"] != expected_routes
         or not publisher.validate_subscriptions(
             output["m3u"],
             output["txt"],
             channels,
         )
     ):
-        raise AssertionError("publisher M3U/TXT 生成或一致性检查失败")
+        raise AssertionError("M3U/TXT生成或一致性检查失败")
 
     if manual_candidate["normalized_url"] not in output["m3u"]:
-        raise AssertionError("最终 M3U 没有保留人工优先线路")
+        raise AssertionError("最终M3U没有保留人工优先线路")
 
     print(
-        "publisher 交接测试：多批次累计、人工来源优先、"
-        "每频道2条上限、Globalping降级状态、"
-        "国内实播状态及M3U/TXT检查全部 PASS。"
+        f"publisher模拟测试通过：{len(channels)}个目标频道，"
+        f"{expected_routes}条模拟线路；"
+        "人工优先、每频道两条上限、"
+        "Globalping降级状态、国内验证状态、"
+        "M3U/TXT一致性全部 PASS。"
     )
-
 
 # ----------------------------------------------------------------------
 # 命令入口
