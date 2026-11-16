@@ -4,8 +4,7 @@
     "max_valid_sources": 40,
     "max_candidates_per_source": 100,
     "max_candidates_total": 1000,
-    "max_index_links_per_page": 40,
-    "max_runtime_seconds": 1500
+    "max_index_links_per_page": 40
   },
   "detection": {
     "local_concurrency": 20,
