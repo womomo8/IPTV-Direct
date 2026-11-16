@@ -92,11 +92,11 @@ jobs:
 
       - name: Check Python syntax
         run: |
-          python -m py_compile checker.py tests/test_checker.py
+          python -m py_compile checker.py tests/test_checker.py tests/test_checker_limits.py
 
       - name: Run checker专项测试
         run: |
-          python -m unittest discover -s tests -p "test_checker.py" -v
+          python -m unittest discover -s tests -p "test_checker*.py" -v
 
       - name: Run existing test flow
         run: python main.py --mode test
