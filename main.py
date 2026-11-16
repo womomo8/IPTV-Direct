@@ -30,6 +30,8 @@ CONFIG_FILES = (
     "settings.json",
 )
 
+TEST_CHANNEL = "IPTV-Direct 模拟测试频道"
+
 
 def _read_text_file(path: Path) -> str:
     try:
@@ -155,7 +157,10 @@ def _check_settings(settings: dict[str, Any]) -> None:
         )
 
 
-def load_configuration(root: Path = ROOT) -> dict[str, Any]:
+def load_configuration(
+    root: Path = ROOT,
+    test_mode: bool = False,
+) -> dict[str, Any]:
     """读取并检查四个根目录配置文件。"""
 
     for filename in CONFIG_FILES:
@@ -165,7 +170,11 @@ def load_configuration(root: Path = ROOT) -> dict[str, Any]:
     try:
         channels = load_channels(str(root / "channels.txt"))
     except ChannelConfigError as exc:
-        raise ValueError(str(exc)) from exc
+        # 测试模式使用独立模拟频道，不要求用户配置真实频道。
+        if test_mode and str(exc) == "channels.txt 没有配置目标频道":
+            channels = []
+        else:
+            raise ValueError(str(exc)) from exc
 
     manual_raw = _read_text_file(root / "manual.txt")
     sources_config = _read_json_file(root / "sources.json")
@@ -206,7 +215,6 @@ def collect_and_parse(config: dict[str, Any]) -> dict[str, Any]:
     duplicate_candidates = 0
     stopped_reason = "所有配置来源均已处理"
 
-    # 整轮共用，由 normalizer 负责 URL 归一和全局去重。
     seen_urls: set[str] = set()
 
     contents = iter_source_contents(
@@ -227,8 +235,6 @@ def collect_and_parse(config: dict[str, Any]) -> dict[str, Any]:
 
         downloaded = item["download"]
 
-        # 将下载后的最终地址交给 normalizer，
-        # 确保相对线路 URL 使用重定向后的地址解析。
         source = {
             **source,
             "final_url": downloaded["final_url"],
@@ -267,7 +273,6 @@ def collect_and_parse(config: dict[str, Any]) -> dict[str, Any]:
             )
             continue
 
-        # normalizer 同时执行单来源限制和全轮剩余额度限制。
         source_candidate_count = normalized["extracted_candidates"]
         candidates = normalized["candidates"]
 
@@ -299,7 +304,6 @@ def collect_and_parse(config: dict[str, Any]) -> dict[str, Any]:
             for error in normalized["errors"]
         )
 
-        # 有效来源必须至少含有一条匹配目标频道的候选。
         if matched_count > 0:
             valid_sources += 1
 
@@ -322,6 +326,144 @@ def collect_and_parse(config: dict[str, Any]) -> dict[str, Any]:
         ),
         "stopped_reason": stopped_reason,
     }
+
+
+def run_test_flow(config: dict[str, Any]) -> int:
+    """
+    单条模拟 HLS 测试流程。
+
+    使用真实 normalizer 处理模拟输入；
+    检测结果为模拟数据，不调用 checker 的真实网络检测，
+    不调用 Globalping，不进入正式准入和发布流程。
+    """
+
+    print("测试流程：单条模拟 HLS")
+
+    source_url = "https://example.invalid/iptv-direct-test.m3u"
+    stream_url = "https://example.invalid/live/test.m3u8"
+
+    simulated_source = {
+        "name": "IPTV-Direct 模拟测试来源",
+        "url": source_url,
+        "final_url": source_url,
+        "source_type": "manual",
+        "priority": 0,
+        "order": 0,
+    }
+
+    simulated_content = (
+        "#EXTM3U\n"
+        '#EXTINF:-1 tvg-id="IPTV-Direct-Test" '
+        'tvg-name="IPTV-Direct 模拟测试频道" '
+        'group-title="测试",IPTV-Direct 模拟测试频道\n'
+        f"{stream_url}\n"
+    )
+
+    try:
+        normalized = normalize_source_content(
+            content=simulated_content,
+            source=simulated_source,
+            channels=[TEST_CHANNEL],
+            max_candidates_per_source=1,
+            seen_urls=set(),
+            content_type="audio/x-mpegurl",
+            max_hls_manifest_bytes=(
+                config["settings"]["detection"]["max_hls_manifest_bytes"]
+            ),
+            max_candidates_remaining=1,
+        )
+
+        if not normalized["recognized"]:
+            raise ValueError("模拟来源未能被 normalizer 识别")
+
+        candidates = normalized["candidates"]
+
+        if len(candidates) != 1:
+            raise ValueError(
+                f"模拟候选数量错误：预期 1 条，实际 {len(candidates)} 条"
+            )
+
+        candidate = candidates[0]
+
+        if candidate["channel"] != TEST_CHANNEL:
+            raise ValueError("模拟频道匹配结果不正确")
+
+        if candidate["normalized_url"] != stream_url:
+            raise ValueError("模拟线路 URL 归一结果不正确")
+
+        print("来源解析：PASS（normalizer 实际执行）")
+        print("频道匹配：PASS（模拟测试频道）")
+        print("候选数量：1")
+        print("媒体线路：HLS（模拟输入标记，不代表实际媒体识别）")
+
+        # 按 MASTER_PLAN.md 测试运行要求，检测结果使用模拟数据。
+        # 不调用 checker.py 的真实网络检测。
+        simulated_detection = {
+            **candidate,
+            "media_type": "HLS",
+            "simulated": True,
+            "checks": {
+                "ipv4": {
+                    "status": "PASS",
+                    "reason": "模拟检测结果，未建立真实 IPv4 连接",
+                },
+                "http": {
+                    "status": "PASS",
+                    "reason": "模拟检测结果，未发送真实 HTTP 请求",
+                },
+                "hls": {
+                    "status": "PASS",
+                    "reason": "模拟检测结果，未读取真实 HLS 清单",
+                },
+                "ts": {
+                    "status": "PASS",
+                    "reason": "模拟检测结果，未读取真实 TS 分片",
+                },
+            },
+        }
+
+        expected_checks = ("ipv4", "http", "hls", "ts")
+
+        if simulated_detection["media_type"] != "HLS":
+            raise ValueError("模拟检测线路类型错误")
+
+        if not simulated_detection["simulated"]:
+            raise ValueError("模拟检测标记缺失")
+
+        for name in expected_checks:
+            check = simulated_detection["checks"].get(name)
+
+            if not isinstance(check, dict):
+                raise ValueError(f"模拟检测结果缺少项目：{name}")
+
+            if check.get("status") != "PASS":
+                raise ValueError(f"模拟检测项目状态错误：{name}")
+
+            if "模拟检测结果" not in check.get("reason", ""):
+                raise ValueError(f"模拟检测项目缺少模拟说明：{name}")
+
+        print("本地检测结果结构：PASS（模拟结果，非真实检测）")
+        print("Globalping：按测试规范跳过，未创建真实测量")
+        print("正式准入：未调用")
+        print("订阅发布：未调用，正式订阅未修改")
+        print("国内真实网络验证：未执行")
+
+        print(
+            "测试运行通过：模拟来源解析及模拟检测结果交接符合预期。"
+        )
+        print(
+            "注意：这不代表 checker.py 实际检测通过，"
+            "也不代表线路在中国移动网络中能够播放。"
+        )
+
+        return 0
+
+    except Exception as exc:
+        print(
+            f"测试运行失败：{exc}",
+            file=sys.stderr,
+        )
+        return 1
 
 
 def parse_args(
@@ -353,7 +495,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"IPTV-Direct：{mode_name}")
 
     try:
-        config = load_configuration()
+        config = load_configuration(test_mode=args.mode == "test")
     except ValueError as exc:
         print(
             f"配置检查失败：{exc}",
@@ -373,11 +515,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"来源配置警告：{error}", file=sys.stderr)
 
     if args.mode == "test":
-        print(
-            "测试运行流程尚未接入，"
-            "本次不会下载真实来源或修改正式订阅。"
-        )
-        return 2
+        return run_test_flow(config)
 
     result = collect_and_parse(config)
 
