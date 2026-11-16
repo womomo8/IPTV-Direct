@@ -14,7 +14,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from checker import check_candidates
 
 
-# 6 个 188 字节 TS 包，包含连续 5 个 0x47 同步位置。
 VALID_TS = b"".join(b"\x47" + bytes(187) for _ in range(6))
 INVALID_TS = bytes(len(VALID_TS))
 
@@ -77,6 +76,22 @@ SUBSCRIPTION_M3U = (
     '#EXTINF:-1 tvg-name="CCTV-5",CCTV-5\n'
     "http://example.invalid/live.ts\n"
 ).encode("utf-8")
+
+# 超过首次64 KB读取范围，但小于1 MB。
+LARGE_MANIFEST = (
+    MEDIA_PLAYLIST
+    + b"\n#"
+    + b"x" * (70 * 1024)
+    + b"\n"
+)
+
+# 超过正式1 MB清单上限。
+OVERSIZED_MANIFEST = (
+    MEDIA_PLAYLIST
+    + b"\n#"
+    + b"x" * (1048576 + 1024)
+    + b"\n"
+)
 
 
 class MockHandler(BaseHTTPRequestHandler):
@@ -277,8 +292,6 @@ class CheckerLocalTests(unittest.TestCase):
                 "body": VALID_TS,
                 "delay": 1.5,
             },
-            # 清单和第一个分片分别延迟 0.65 秒。
-            # 两次请求合计超过 1 秒预算，必须返回 INCOMPLETE。
             "/budget.m3u8": {
                 "status": 200,
                 "body": BUDGET_PLAYLIST,
@@ -292,6 +305,16 @@ class CheckerLocalTests(unittest.TestCase):
             "/budget-seg2.ts": {
                 "status": 200,
                 "body": VALID_TS,
+            },
+            # 大于64 KB但不超过1 MB，应该继续读取并完成检测。
+            "/large-manifest.m3u8": {
+                "status": 206,
+                "body": LARGE_MANIFEST,
+            },
+            # 超过1 MB，必须拒绝，不能截断后误判通过。
+            "/oversized-manifest.m3u8": {
+                "status": 206,
+                "body": OVERSIZED_MANIFEST,
             },
         }
 
@@ -336,7 +359,6 @@ class CheckerLocalTests(unittest.TestCase):
         )
 
     def test_direct_ts_http_206_passes(self):
-        """直接 TS：合法 HTTP 206、IPv4 和 TS 检测通过，HLS 为 N/A。"""
         result = self.check("/direct.ts")
 
         self.assertEqual(result["media_type"], "DIRECT_TS")
@@ -346,7 +368,6 @@ class CheckerLocalTests(unittest.TestCase):
         self.assert_status(result, "hls", "N/A")
 
     def test_direct_ts_http_200_ignoring_range_passes(self):
-        """服务器忽略 Range 并返回合法 HTTP 200 时，允许检测。"""
         result = self.check("/direct-200.ts")
 
         self.assertEqual(result["media_type"], "DIRECT_TS")
@@ -356,7 +377,6 @@ class CheckerLocalTests(unittest.TestCase):
         self.assert_status(result, "hls", "N/A")
 
     def test_hls_media_playlist_and_segments_pass(self):
-        """HLS 媒体清单必须解析并实际检查多个 TS 分片。"""
         result = self.check("/media.m3u8")
 
         self.assertEqual(result["media_type"], "HLS")
@@ -366,7 +386,6 @@ class CheckerLocalTests(unittest.TestCase):
         self.assert_status(result, "ts", "PASS")
 
     def test_hls_master_playlist_resolves_relative_urls(self):
-        """HLS 主清单应能解析媒体清单和相对分片地址。"""
         result = self.check("/master.m3u8")
 
         self.assertEqual(result["media_type"], "HLS")
@@ -374,7 +393,6 @@ class CheckerLocalTests(unittest.TestCase):
         self.assert_status(result, "ts", "PASS")
 
     def test_hls_invalid_ts_segments_do_not_pass(self):
-        """HLS 分片不符合 TS 同步结构时，不得通过。"""
         self.server.routes["/bad-hls.m3u8"]["body"] = (
             MEDIA_PLAYLIST.replace(
                 b"seg1.ts", b"bad-seg1.ts"
@@ -390,7 +408,6 @@ class CheckerLocalTests(unittest.TestCase):
         self.assert_status(result, "ts", "FAIL")
 
     def test_hls_uses_one_total_candidate_budget(self):
-        """HLS 清单和分片请求必须共用单候选总时间预算。"""
         started = time.monotonic()
 
         result = self.check(
@@ -405,13 +422,34 @@ class CheckerLocalTests(unittest.TestCase):
         self.assert_status(result, "http", "PASS")
         self.assert_status(result, "hls", "INCOMPLETE")
         self.assert_status(result, "ts", "INCOMPLETE")
-
-        # 给本机线程调度留出少量余量，但不能允许两次延迟请求
-        # 全部完成后仍被判定为 PASS。
         self.assertLess(elapsed, 2.5)
 
+    def test_hls_manifest_over_64kb_but_under_1mb_passes(self):
+        """超过首次读取范围的完整清单应继续读取，而不是误判超限。"""
+        self.assertGreater(len(LARGE_MANIFEST), 65536)
+        self.assertLessEqual(len(LARGE_MANIFEST), 1048576)
+
+        result = self.check("/large-manifest.m3u8")
+
+        self.assertEqual(result["media_type"], "HLS")
+        self.assert_status(result, "ipv4", "PASS")
+        self.assert_status(result, "http", "PASS")
+        self.assert_status(result, "hls", "PASS")
+        self.assert_status(result, "ts", "PASS")
+
+    def test_hls_manifest_over_1mb_is_rejected(self):
+        """超过1 MB的清单必须拒绝，且不能因截断内容而误判通过。"""
+        self.assertGreater(len(OVERSIZED_MANIFEST), 1048576)
+
+        result = self.check("/oversized-manifest.m3u8")
+
+        self.assertEqual(result["media_type"], "HLS")
+        self.assert_status(result, "ipv4", "PASS")
+        self.assert_status(result, "http", "PASS")
+        self.assert_status(result, "hls", "FAIL")
+        self.assert_status(result, "ts", "INCOMPLETE")
+
     def test_encrypted_hls_is_rejected_without_ts_failure(self):
-        """加密 HLS 应识别类型，但不能把未检测的 TS 标记为失败。"""
         result = self.check("/encrypted.m3u8")
 
         self.assertEqual(result["media_type"], "HLS")
@@ -421,7 +459,6 @@ class CheckerLocalTests(unittest.TestCase):
         self.assert_status(result, "ts", "INCOMPLETE")
 
     def test_fmp4_hls_is_rejected_without_ts_failure(self):
-        """fMP4 HLS 应识别类型，TS 未实际检测时保持 INCOMPLETE。"""
         result = self.check("/fmp4.m3u8")
 
         self.assertEqual(result["media_type"], "HLS")
@@ -431,18 +468,15 @@ class CheckerLocalTests(unittest.TestCase):
         self.assert_status(result, "ts", "INCOMPLETE")
 
     def test_channel_subscription_m3u_is_not_hls(self):
-        """频道订阅 M3U 不能仅凭 EXTM3U 被识别为 HLS。"""
         result = self.check("/subscription.m3u")
 
         self.assertEqual(result["media_type"], "UNKNOWN")
         self.assert_status(result, "ipv4", "PASS")
         self.assert_status(result, "http", "PASS")
         self.assert_status(result, "hls", "FAIL")
-        # 未知频道订阅不是 TS；没有执行 TS 检测，不能伪称 TS 检测失败。
         self.assert_status(result, "ts", "INCOMPLETE")
 
     def test_unknown_content_is_rejected(self):
-        """无法识别的媒体内容不得获得通过状态。"""
         result = self.check("/unknown.bin")
 
         self.assertEqual(result["media_type"], "UNKNOWN")
@@ -452,7 +486,6 @@ class CheckerLocalTests(unittest.TestCase):
         self.assert_status(result, "ts", "FAIL")
 
     def test_redirect_to_direct_ts_uses_ipv4(self):
-        """重定向后的最终目标也必须成功建立 IPv4 连接。"""
         result = self.check("/redirect")
 
         self.assertEqual(result["media_type"], "DIRECT_TS")
@@ -462,13 +495,11 @@ class CheckerLocalTests(unittest.TestCase):
         self.assert_status(result, "hls", "N/A")
 
     def test_redirect_loop_is_rejected(self):
-        """重定向循环不能无限执行。"""
         result = self.check("/loop")
 
         self.assert_status(result, "http", "FAIL")
 
     def test_http_503_is_not_pass(self):
-        """HTTP 503 必须记录为未完成，不能因为连通而判定 HTTP 通过。"""
         result = self.check("/unavailable")
 
         self.assert_status(result, "ipv4", "PASS")
@@ -477,14 +508,12 @@ class CheckerLocalTests(unittest.TestCase):
         self.assert_status(result, "ts", "INCOMPLETE")
 
     def test_invalid_content_range_is_rejected(self):
-        """HTTP 206 的 Content-Range 不合法时必须拒绝。"""
         result = self.check("/bad-range")
 
         self.assert_status(result, "http", "FAIL")
         self.assert_status(result, "ts", "INCOMPLETE")
 
     def test_active_detection_budget_timeout(self):
-        """超过单候选主动检测时间预算时，不得判定通过。"""
         result = self.check(
             "/slow.ts",
             candidate_active_budget_seconds=1,
@@ -494,7 +523,6 @@ class CheckerLocalTests(unittest.TestCase):
         self.assert_status(result, "ts", "INCOMPLETE")
 
     def test_max_redirect_limit_is_respected(self):
-        """超过配置的最大重定向次数时必须停止。"""
         result = self.check(
             "/loop",
             max_redirects=2,
