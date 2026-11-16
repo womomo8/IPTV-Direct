@@ -1,3 +1,4 @@
+
 """main.py 与 Globalping 的主程序交接测试。
 
 全部使用模拟检测函数，不访问真实线路，不调用 Globalping API，
@@ -50,7 +51,7 @@ def make_remote_result(candidate, status=PASS, media_type="HLS"):
     hls_status = NA if media_type == "DIRECT_TS" else status
 
     return {
-        **candidate,
+        **make_local_result(candidate, media_type, PASS),
         "globalping": {
             "status": status,
             "checks": {
@@ -377,3 +378,7 @@ class MainGlobalpingIntegrationTests(unittest.TestCase):
             [item["globalping"]["status"] for item in result],
             [PASS, FAIL, INCOMPLETE],
         )
+
+
+if __name__ == "__main__":
+    unittest.main()
