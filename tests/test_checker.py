@@ -318,7 +318,7 @@ class CheckerLocalTests(unittest.TestCase):
 
     def test_hls_invalid_ts_segments_do_not_pass(self):
         """HLS 分片不符合 TS 同步结构时，不得通过。"""
-        self.server.routes["bad-hls.m3u8"]["body"] = (
+        self.server.routes["/bad-hls.m3u8"]["body"] = (
             MEDIA_PLAYLIST.replace(
                 b"seg1.ts", b"bad-seg1.ts"
             ).replace(
