@@ -1,3 +1,4 @@
+
 # IPTV-Direct 人工来源
 # 每行一个 HTTP 或 HTTPS 播放列表地址
 
@@ -22,3 +23,19 @@ https://raw.githubusercontent.com/iptvjs/iptv/main/ew_ws.m3u
 
 # 咪咕来源
 https://raw.githubusercontent.com/YanG-1989/m3u/main/Migu.m3u
+
+# 福建移动六个频道：内嵌 M3U，作为一个来源批量解析
+#EXTM3U
+#EXTINF:-1 tvg-id="CCTV1" tvg-name="CCTV-1" group-title="福建移动",CCTV-1
+http://cmhiott.hvs.fj.chinamobile.com/PLTV/88888888/224/3221225829/index.m3u8?servicetype=1
+#EXTINF:-1 tvg-id="CCTV2" tvg-name="CCTV-2" group-title="福建移动",CCTV-2
+http://cmhiott.hvs.fj.chinamobile.com/PLTV/88888888/224/3221225800/index.m3u8?servicetype=1
+#EXTINF:-1 tvg-id="CCTV5" tvg-name="CCTV-5" group-title="福建移动",CCTV-5
+http://cmhiott.hvs.fj.chinamobile.com/PLTV/88888888/224/3221227283/index.m3u8?servicetype=1
+#EXTINF:-1 tvg-id="CCTV5PLUS" tvg-name="CCTV-5+" group-title="福建移动",CCTV-5+
+http://cmhiott.hvs.fj.chinamobile.com/PLTV/88888888/224/3221225821/index.m3u8?servicetype=1
+#EXTINF:-1 tvg-id="CCTV7" tvg-name="CCTV-7" group-title="福建移动",CCTV-7
+http://cmhiott.hvs.fj.chinamobile.com/PLTV/88888888/224/3221225805/index.m3u8?servicetype=1
+#EXTINF:-1 tvg-id="CCTV9" tvg-name="CCTV-9" group-title="福建移动",CCTV-9
+http://cmhiott.hvs.fj.chinamobile.com/PLTV/88888888/224/3221225820/index.m3u8?servicetype=1
+#END-M3U
