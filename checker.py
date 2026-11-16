@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urljoin, urlsplit
 
 PASS, FAIL, INCOMPLETE = "PASS", "FAIL", "INCOMPLETE"
+NA = "N/A"
 
 HLS_MARKERS = (
     "#EXT-X-STREAM-INF:",
@@ -811,7 +812,7 @@ class Detector:
                     ),
                 }
                 result["checks"]["hls"] = {
-                    "status": "N/A",
+                    "status": NA,
                     "reason": (
                         "已识别为直接 TS，HLS 检测不适用"
                     ),
@@ -865,6 +866,34 @@ class Detector:
                 slot.release()
 
         return result
+
+
+def local_checks_passed(candidate):
+    """判断本地适用的检测项目是否全部通过。"""
+    if not isinstance(candidate, dict):
+        return False
+
+    checks = candidate.get("checks")
+    if not isinstance(checks, dict):
+        return False
+
+    media_type = candidate.get("media_type")
+    required = ("ipv4", "http", "ts")
+
+    if media_type == "HLS":
+        required += ("hls",)
+    elif media_type == "DIRECT_TS":
+        hls_check = checks.get("hls")
+        if not isinstance(hls_check, dict) or hls_check.get("status") != NA:
+            return False
+    else:
+        return False
+
+    return all(
+        isinstance(checks.get(name), dict)
+        and checks[name].get("status") == PASS
+        for name in required
+    )
 
 
 def check_candidates(candidates, settings):
