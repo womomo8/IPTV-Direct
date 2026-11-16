@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """IPTV-Direct 总入口与统一调度。"""
 
@@ -24,6 +25,7 @@ from normalizer import (
     ChannelConfigError,
     load_channels,
     normalize_source_content,
+    normalize_url,
 )
 
 ROOT = Path(__file__).resolve().parent
@@ -663,20 +665,240 @@ def _run_stage4_collection_tests(config: dict[str, Any]) -> None:
         thread.join(timeout=5)
 
 
+def _run_stage5_normalization_tests() -> None:
+    """验收频道匹配、URL归一、全局去重和候选上限。"""
+
+    def require(condition: bool, message: str) -> None:
+        if not condition:
+            raise AssertionError(message)
+
+    channels = ["CCTV-5"]
+
+    def make_playlist(entries: list[tuple[str, str]]) -> str:
+        lines = ["#EXTM3U"]
+
+        for name, url in entries:
+            lines.extend([
+                f'#EXTINF:-1 tvg-name="{name}",{name}',
+                url,
+            ])
+
+        return "\n".join(lines) + "\n"
+
+    def normalize(
+        playlist: str,
+        source_name: str,
+        seen_urls: set[str],
+        max_per_source: int = 10,
+        remaining: int | None = None,
+        aliases: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        source_url = f"https://example.com/{source_name}.m3u"
+
+        return normalize_source_content(
+            content=playlist,
+            source={
+                "name": source_name,
+                "url": source_url,
+                "final_url": source_url,
+                "source_type": "manual",
+                "priority": 0,
+                "order": 0,
+            },
+            channels=channels,
+            max_candidates_per_source=max_per_source,
+            seen_urls=seen_urls,
+            content_type="application/x-mpegurl",
+            aliases=aliases,
+            max_candidates_remaining=remaining,
+        )
+
+    # 1. 标准频道名称必须精确匹配。
+    exact = normalize(
+        make_playlist([
+            ("CCTV-5", "https://example.com/live/one.ts"),
+        ]),
+        "exact",
+        set(),
+    )
+    require(
+        len(exact["candidates"]) == 1
+        and exact["candidates"][0]["channel"] == "CCTV-5",
+        "标准频道名称精确匹配失败",
+    )
+
+    # 2. 只允许明确提供的别名映射。
+    alias = normalize(
+        make_playlist([
+            ("中央五套", "https://example.com/live/two.ts"),
+        ]),
+        "alias",
+        set(),
+        aliases={"中央五套": "CCTV-5"},
+    )
+    require(
+        len(alias["candidates"]) == 1
+        and alias["candidates"][0]["channel"] == "CCTV-5",
+        "明确别名映射失败",
+    )
+
+    # 3. 相似名称不能被模糊匹配。
+    fuzzy = normalize(
+        make_playlist([
+            ("CCTV-5+", "https://example.com/live/three.ts"),
+        ]),
+        "fuzzy",
+        set(),
+    )
+    require(
+        fuzzy["candidates"] == [],
+        "相似频道名称被错误匹配",
+    )
+
+    print("阶段5测试：标准频道精确匹配、明确别名和拒绝模糊匹配 PASS")
+
+    # 4. URL协议、主机名、默认端口和片段归一。
+    normalized_url = normalize_url(
+        "HTTPS://Example.COM:443/live/index.m3u8?token=1#fragment"
+    )
+    require(
+        normalized_url
+        == "https://example.com/live/index.m3u8?token=1",
+        f"URL归一结果错误：{normalized_url}",
+    )
+
+    print("阶段5测试：URL大小写、默认端口、片段和查询参数处理 PASS")
+
+    # 5. 不同来源的相同URL只能保留一条。
+    shared_seen: set[str] = set()
+
+    first = normalize(
+        make_playlist([
+            (
+                "CCTV-5",
+                "HTTPS://Example.COM:443/live/shared.ts?token=1#first",
+            ),
+        ]),
+        "first",
+        shared_seen,
+    )
+
+    second = normalize(
+        make_playlist([
+            (
+                "CCTV-5",
+                "https://example.com/live/shared.ts?token=1#second",
+            ),
+        ]),
+        "second",
+        shared_seen,
+    )
+
+    require(
+        len(first["candidates"]) == 1
+        and second["candidates"] == []
+        and second["duplicate_candidates"] == 1,
+        "跨来源全局URL去重失败",
+    )
+
+    print("阶段5测试：跨来源全局URL去重 PASS")
+
+    # 6. 无效URL和未匹配频道不得进入候选结果。
+    invalid_and_unmatched = normalize(
+        make_playlist([
+            ("CCTV-5", "http://example.com:bad/live.ts"),
+            ("不在目标列表的频道", "https://example.com/live/other.ts"),
+        ]),
+        "invalid-and-unmatched",
+        set(),
+    )
+
+    require(
+        invalid_and_unmatched["candidates"] == []
+        and invalid_and_unmatched["retained_candidates"] == 0
+        and any(
+            "无效线路 URL" in error
+            for error in invalid_and_unmatched["errors"]
+        ),
+        "无效URL或未匹配频道过滤失败",
+    )
+
+    print("阶段5测试：无效URL和未匹配频道过滤 PASS")
+
+    # 7. 单来源达到上限，只限制当前来源。
+    source_seen: set[str] = set()
+
+    limited = normalize(
+        make_playlist([
+            ("CCTV-5", "https://example.com/live/limit-one.ts"),
+            ("CCTV-5", "https://example.com/live/limit-two.ts"),
+        ]),
+        "limited",
+        source_seen,
+        max_per_source=1,
+    )
+
+    next_source = normalize(
+        make_playlist([
+            ("CCTV-5", "https://example.com/live/next-source.ts"),
+        ]),
+        "next-source",
+        source_seen,
+        max_per_source=1,
+    )
+
+    require(
+        limited["extracted_candidates"] == 1
+        and limited["limit_reached"]
+        and len(limited["candidates"]) == 1
+        and len(next_source["candidates"]) == 1,
+        "单来源候选上限错误影响其他来源",
+    )
+
+    print("阶段5测试：单来源候选上限及其他来源继续处理 PASS")
+
+    # 8. 本轮剩余额度必须限制当前提取数量。
+    remaining_limited = normalize(
+        make_playlist([
+            ("CCTV-5", "https://example.com/live/remaining-one.ts"),
+            ("CCTV-5", "https://example.com/live/remaining-two.ts"),
+        ]),
+        "remaining",
+        set(),
+        max_per_source=10,
+        remaining=1,
+    )
+
+    require(
+        remaining_limited["extracted_candidates"] == 1
+        and remaining_limited["retained_candidates"] == 1,
+        "本轮剩余候选额度执行错误",
+    )
+
+    print("阶段5测试：本轮剩余候选额度 PASS")
+    print("阶段5线路归一和去重专项测试：全部 PASS")
+
+
 def run_test_flow(config: dict[str, Any]) -> int:
     """
-    阶段4来源采集测试和模拟检测结果交接。
+    阶段4来源采集、阶段5线路归一测试和模拟检测结果交接。
 
     不调用真实线路检测，不调用 Globalping，
     不进入正式准入和订阅发布流程。
     """
 
-    print("测试流程：阶段4来源采集与解析 + 模拟检测结果交接")
+    print("测试流程：阶段4来源采集与解析 + 阶段5线路归一和去重 + 模拟检测结果交接")
 
     try:
         _run_stage4_collection_tests(config)
     except Exception as exc:
         print(f"阶段4来源采集与解析测试失败：{exc}", file=sys.stderr)
+        return 1
+
+    try:
+        _run_stage5_normalization_tests()
+    except Exception as exc:
+        print(f"阶段5线路归一和去重测试失败：{exc}", file=sys.stderr)
         return 1
 
     source_url = "https://example.invalid/iptv-direct-test.m3u"
