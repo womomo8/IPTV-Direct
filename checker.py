@@ -272,7 +272,8 @@ class Detector:
             error = exc
             raise
         finally:
-            elapsed = max(0.0, time.monotonic() - started)
+            finished = time.monotonic()
+            elapsed = max(0.0, finished - started)
             read_seconds = max(0.0, metrics.get("read_seconds", 0.0))
             data = result.get("data", b"") if result else b""
             bytes_read = len(data) if result else metrics.get("bytes_read", 0)
@@ -281,7 +282,13 @@ class Detector:
             )
             if outcome not in (PASS, FAIL, INCOMPLETE):
                 outcome = FAIL
+
             reason = str(error) if error is not None else ""
+
+            # 除了识别异常文字，也检查请求是否已经接近候选检测期限。
+            # 这样即使底层 socket 被期限定时器中断，异常文字没有出现
+            # “timeout/超时”，也不会漏记超时质量数据。
+            deadline_exhausted = finished >= deadline - 0.1
             is_timeout = (
                 outcome == INCOMPLETE
                 and (
@@ -289,8 +296,10 @@ class Detector:
                     or "超时" in reason
                     or "超过" in reason
                     or "timeout" in reason.lower()
+                    or deadline_exhausted
                 )
             )
+
             sample = {
                 "stage": stage,
                 "status_code": (
