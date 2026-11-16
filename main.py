@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """IPTV-Direct 总入口与统一调度。"""
 
@@ -463,6 +462,7 @@ def _run_stage4_collection_tests(config: dict[str, Any]) -> None:
             m3u["content_type"] == "audio/x-mpegurl"
             and parsed["recognized"]
             and parsed["format"] == "m3u"
+            and len(parsed["candidates"]) == 1
             and parsed["candidates"][0]["channel"] == TEST_CHANNEL,
             "M3U 下载或 MIME/频道解析失败",
         )
@@ -483,6 +483,7 @@ def _run_stage4_collection_tests(config: dict[str, Any]) -> None:
         require(
             txt_parsed["recognized"]
             and txt_parsed["format"] == "txt"
+            and len(txt_parsed["candidates"]) == 1
             and txt_parsed["candidates"][0]["channel"] == TEST_CHANNEL,
             "TXT 下载或频道解析失败",
         )
@@ -503,7 +504,10 @@ def _run_stage4_collection_tests(config: dict[str, Any]) -> None:
         require(
             hls_parsed["recognized"]
             and hls_parsed["format"] == "hls"
-            and hls_parsed["candidates"][0]["channel"] is None,
+            and hls_parsed["extracted_candidates"] == 1
+            and hls_parsed["matched_target_candidates"] == 0
+            and hls_parsed["retained_candidates"] == 0
+            and hls_parsed["candidates"] == [],
             "HLS 清单识别或频道处理错误",
         )
         print("阶段4测试：HLS M3U8 清单识别 PASS")
@@ -557,16 +561,21 @@ def _run_stage4_collection_tests(config: dict[str, Any]) -> None:
             "首条来源失败后没有继续处理后续人工来源",
         )
         require(
-            items[2]["download"]["final_url"] == txt_url,
+            items[2]["download"] is not None
+            and not items[2]["errors"]
+            and items[2]["download"]["final_url"] == txt_url,
             "HTTP 重定向 final_url 不正确",
         )
         require(
-            items[3]["download"]["http_status"] == 206,
+            items[3]["download"] is not None
+            and not items[3]["errors"]
+            and items[3]["download"]["http_status"] == 206,
             "HTTP 206 未被接受",
         )
         require(
             items[4]["source"]["url"] == hls_url
-            and items[4]["download"] is not None,
+            and items[4]["download"] is not None
+            and not items[4]["errors"],
             "自动 playlist 模式下载失败",
         )
         require(
@@ -593,6 +602,7 @@ def _run_stage4_collection_tests(config: dict[str, Any]) -> None:
         require(
             redirected["recognized"]
             and redirected["format"] == "txt"
+            and len(redirected["candidates"]) == 1
             and redirected["candidates"][0]["channel"] == TEST_CHANNEL,
             "重定向后的 TXT 内容未正确解析",
         )
