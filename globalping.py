@@ -347,17 +347,23 @@ def _create_measurement(
     if parts["query"]:
         request_options["query"] = parts["query"]
 
+    measurement_options: dict[str, Any] = {
+        "protocol": parts["protocol"],
+        "port": parts["port"],
+        "request": request_options,
+    }
+
+    try:
+        ipaddress.ip_address(parts["target"])
+    except ValueError:
+        measurement_options["ipVersion"] = 4
+
     payload = {
         "type": "http",
         "target": parts["target"],
         "locations": locations,
         "timeout": 20,
-        "measurementOptions": {
-            "protocol": parts["protocol"],
-            "port": parts["port"],
-            "ipVersion": 4,
-            "request": request_options,
-        },
+        "measurementOptions": measurement_options,
     }
 
     try:
