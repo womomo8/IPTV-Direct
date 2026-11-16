@@ -18,16 +18,8 @@ import checker
 import globalping
 import publisher
 
-from collector import (
-    SourceConfigError,
-    iter_source_contents,
-    prepare_sources,
-)
-from normalizer import (
-    ChannelConfigError,
-    load_channels,
-    normalize_source_content,
-)
+from collector import SourceConfigError, iter_source_contents, prepare_sources
+from normalizer import ChannelConfigError, load_channels, normalize_source_content
 
 ROOT = Path(__file__).resolve().parent
 CONFIG_FILES = ("channels.txt", "manual.txt", "sources.json", "settings.json")
@@ -38,7 +30,7 @@ INCOMPLETE = "INCOMPLETE"
 
 
 # ----------------------------------------------------------------------
-# 配置读取与校验
+# 配置读取
 # ----------------------------------------------------------------------
 
 def _read_text(path: Path) -> str:
@@ -195,7 +187,7 @@ def load_configuration(
 
 
 # ----------------------------------------------------------------------
-# 候选身份与质量比较
+# 候选身份与质量优选
 # ----------------------------------------------------------------------
 
 def _identity(item: dict[str, Any]) -> tuple[Any, Any]:
@@ -229,10 +221,8 @@ def _candidate_quality_key(
     candidate: dict[str, Any],
 ) -> tuple[Any, ...]:
     """
-    按真实观测数据分层比较。
-
-    不计算综合分数，不改变 checker 的检测结论。
-    本函数只在同频道、同媒体类型的候选组内使用。
+    使用 checker 已记录的真实质量数据分层比较。
+    不计算综合分数，也不改变任何 PASS/FAIL/INCOMPLETE 结果。
     """
     quality = candidate.get("quality")
 
@@ -242,24 +232,12 @@ def _candidate_quality_key(
     media_type = candidate.get("media_type")
 
     request_count = _quality_number(quality, "request_count")
-    success_count = _quality_number(
-        quality,
-        "request_success_count",
-    )
+    success_count = _quality_number(quality, "request_success_count")
     timeout_count = _quality_number(quality, "timeout_count")
 
-    total_elapsed = _quality_number(
-        quality,
-        "total_elapsed_seconds",
-    )
-    total_read = _quality_number(
-        quality,
-        "total_read_seconds",
-    )
-    total_bytes = _quality_number(
-        quality,
-        "total_bytes_read",
-    )
+    total_elapsed = _quality_number(quality, "total_elapsed_seconds")
+    total_read = _quality_number(quality, "total_read_seconds")
+    total_bytes = _quality_number(quality, "total_bytes_read")
 
     success_ratio = None
     if (
@@ -295,12 +273,9 @@ def _candidate_quality_key(
 
     parts: list[tuple[int, float]] = []
 
-    # HLS 才比较实际媒体分片成功情况。
+    # HLS 比较实际媒体分片成功情况；直接 TS 不使用此指标。
     if media_type == "HLS":
-        segment_total = _quality_number(
-            quality,
-            "segment_total",
-        )
+        segment_total = _quality_number(quality, "segment_total")
         segment_success = _quality_number(
             quality,
             "segment_success_count",
@@ -318,13 +293,8 @@ def _candidate_quality_key(
         parts.append(_known_first(segment_ratio, reverse=True))
         parts.append(_known_first(segment_success, reverse=True))
 
-    # 同媒体类型内比较超时数量。
     parts.append(_known_first(timeout_count))
-
-    # 请求成功率：没有有效样本时按缺失处理。
     parts.append(_known_first(success_ratio, reverse=True))
-
-    # 真实耗时与吞吐，仅用于同类候选的后续比较。
     parts.append(_known_first(average_elapsed))
     parts.append(_known_first(average_read))
     parts.append(_known_first(throughput, reverse=True))
@@ -337,9 +307,9 @@ def rank_candidates_for_globalping(
     channels: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """
-    同频道、同媒体类型内优选，并在不同候选组之间轮流交接。
+    同频道、同媒体类型内优选。
 
-    这样既不混排 HLS 与直接 TS，也避免某个频道的候选
+    各频道/媒体类型组轮流交接，避免某个频道的候选
     一次性占满 Globalping 额度。
     """
     if not candidates:
@@ -359,16 +329,20 @@ def rank_candidates_for_globalping(
         channel = str(candidate.get("channel", ""))
         media_type = str(candidate.get("media_type", "UNKNOWN"))
         key = (channel, media_type)
-
         groups.setdefault(key, []).append((index, candidate))
 
-    group_keys = list(groups)
+    # 先固定每组首次出现顺序，再排序；不在排序过程中反查列表。
+    original_group_order = {
+        key: index
+        for index, key in enumerate(groups.keys())
+    }
 
-    group_keys.sort(
+    group_keys = sorted(
+        groups.keys(),
         key=lambda key: (
             channel_order.get(key[0], len(channel_order)),
-            group_keys.index(key),
-        )
+            original_group_order[key],
+        ),
     )
 
     queues: list[list[dict[str, Any]]] = []
@@ -388,7 +362,6 @@ def rank_candidates_for_globalping(
             for _, candidate in indexed
         ])
 
-    # 轮流取每个频道/媒体类型组的第一名、第二名……
     ranked: list[dict[str, Any]] = []
     depth = 0
 
@@ -420,10 +393,10 @@ def run_detection_pipeline(
     channels: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """
-    对全部来源候选统一执行本地检测。
+    全部候选统一执行本地检测。
 
-    本地全部通过后，才按质量优先顺序交给 Globalping。
-    最终返回仍保持候选池原始顺序，避免改变 publisher 的来源政策。
+    本地适用检测全部 PASS 后，才按质量优先顺序交给 Globalping。
+    返回结果恢复候选池原始顺序，不改变 publisher 的来源政策。
     """
     if not candidates:
         return []
@@ -489,7 +462,6 @@ def run_detection_pipeline(
         None
     ] * len(local_results)
 
-    # 本地未全部通过的候选不提交 Globalping。
     for index, item in enumerate(local_results):
         if index not in eligible_set:
             output[index] = globalping.incomplete_result(
@@ -520,7 +492,6 @@ def run_detection_pipeline(
                     "Globalping 返回数量与输入候选数量不一致"
                 )
 
-            # Globalping 必须按交接顺序返回，并保持候选身份。
             for position, result in enumerate(remote_results):
                 if (
                     not isinstance(result, dict)
@@ -541,7 +512,6 @@ def run_detection_pipeline(
                         "Globalping 缺少有效总体状态"
                     )
 
-            # 将远程结果放回原候选位置，不改变 publisher 输入顺序。
             remote_by_identity = {
                 _identity(result): result
                 for result in remote_results
@@ -557,11 +527,9 @@ def run_detection_pipeline(
             )
 
             for original_index in eligible_indices:
-                output[original_index] = (
-                    globalping.incomplete_result(
-                        local_results[original_index],
-                        reason,
-                    )
+                output[original_index] = globalping.incomplete_result(
+                    local_results[original_index],
+                    reason,
                 )
 
     return [
@@ -580,7 +548,6 @@ def run_detection_pipeline(
 # ----------------------------------------------------------------------
 
 def _safe_host_from_url(value: Any) -> str:
-    """从 URL 提取主机名，不输出路径、查询参数或凭据。"""
     try:
         return urlsplit(str(value or "")).hostname or "无法识别"
     except ValueError:
@@ -594,7 +561,6 @@ def _safe_host(candidate: dict[str, Any]) -> str:
 
 
 def _safe_diagnostic_text(value: Any) -> str:
-    """保留错误原因，同时将完整 URL 替换为主机名。"""
     text = str(value).replace("\r", " ").replace("\n", " ")
     pattern = re.compile(
         r"https?://[^\s<>\"']+",
@@ -617,7 +583,6 @@ def _safe_diagnostic_text(value: Any) -> str:
 def _print_detection_summary(
     results: list[dict[str, Any]],
 ) -> None:
-    """汇总本地检测结果及真正提交给 Globalping 的候选。"""
     local_ok = sum(
         checker.local_checks_passed(item)
         for item in results
@@ -662,14 +627,11 @@ def _print_detection_summary(
         if not isinstance(remote, dict):
             continue
 
-        channel = item.get("channel", "未知频道")
-        media_type = item.get("media_type", "未知类型")
-        host = _safe_host(item)
-
         print(
             f"Globalping 明细 {index}/{len(submitted_items)}："
-            f"频道 {channel}；类型 {media_type}；"
-            f"目标主机 {host}；"
+            f"频道 {item.get('channel', '未知频道')}；"
+            f"类型 {item.get('media_type', '未知类型')}；"
+            f"目标主机 {_safe_host(item)}；"
             f"总体状态 {remote.get('status', '未知')}。"
         )
 
@@ -717,7 +679,6 @@ def _print_manual_source_details(
     detected: list[dict[str, Any]],
     admission_results: list[dict[str, Any]],
 ) -> None:
-    """输出人工来源的逐条采集、检测和准入结果。"""
     if source.get("source_type") != "manual":
         return
 
@@ -798,7 +759,7 @@ def _print_manual_source_details(
 
 
 # ----------------------------------------------------------------------
-# publisher 交接与停止条件
+# publisher 交接
 # ----------------------------------------------------------------------
 
 def process_admission_batch(
@@ -807,7 +768,6 @@ def process_admission_batch(
     channels: list[str],
     settings: dict[str, Any],
 ) -> dict[str, Any]:
-    """将完整检测结果交给 publisher 执行唯一正式准入。"""
     return publisher.process_batch(
         candidates=candidates,
         accepted_routes=accepted_routes,
@@ -822,7 +782,6 @@ def _collection_stop_reason(
     admission: dict[str, Any],
     limits: dict[str, Any],
 ) -> str | None:
-    """依据来源、候选上限和 publisher 统计判断停止条件。"""
     if valid_sources >= limits["max_valid_sources"]:
         return (
             f"达到有效来源上限 "
@@ -842,7 +801,7 @@ def _collection_stop_reason(
 
 
 # ----------------------------------------------------------------------
-# 正式流程：全部来源汇集后统一检测
+# 正式流程：先汇集全部来源，再统一检测、优选和准入
 # ----------------------------------------------------------------------
 
 def run_formal_flow(config: dict[str, Any]) -> int:
@@ -875,8 +834,8 @@ def run_formal_flow(config: dict[str, Any]) -> int:
         settings,
     )
 
-    # 第一阶段：只采集、解析、归一、去重。
-    # 这里绝不调用 checker、Globalping 或 publisher。
+    # 第一阶段：只采集、解析、归一和去重。
+    # 此阶段不调用 checker、Globalping 或 publisher。
     for item in stream:
         source = item["source"]
         label = source.get(
@@ -1073,7 +1032,7 @@ def run_formal_flow(config: dict[str, Any]) -> int:
     _print_detection_summary(detected)
 
     # 第三阶段：整轮只调用一次 publisher。
-    # publisher 自己执行人工来源优先、正式准入和每频道最多两条规则。
+    # 人工优先和每频道最多两条仍由 publisher 独占执行。
     try:
         admission = process_admission_batch(
             candidates=detected,
