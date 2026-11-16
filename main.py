@@ -332,7 +332,9 @@ def _print_detection_summary(results: list[dict[str, Any]]) -> None:
 
         if remote.get("error"):
             print(f"  远程异常/未完成原因：{remote['error']}")
-            def _safe_host(candidate: dict[str, Any]) -> str:
+
+
+def _safe_host(candidate: dict[str, Any]) -> str:
     """只显示主机名，避免日志泄露 URL 参数或凭据。"""
     try:
         return urlsplit(str(candidate.get("normalized_url", ""))).hostname or "无法识别"
@@ -639,7 +641,8 @@ def run_formal_flow(config: dict[str, Any]) -> int:
             file=sys.stderr,
         )
         return 1
-            # 第8阶段：生成并检查订阅内容。
+
+    # 第8阶段：生成并检查订阅内容。
     try:
         subscriptions = publisher.build_subscriptions(
             accepted_routes,
