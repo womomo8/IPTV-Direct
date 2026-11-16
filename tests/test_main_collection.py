@@ -125,12 +125,29 @@ class MainCollectionFlowTests(unittest.TestCase):
                     "txt": "",
                 },
             ) as build_mock,
+            patch(
+                "main.publisher.publish_subscriptions",
+                return_value={
+                    "published": True,
+                    "channel_count": 0,
+                    "route_count": 0,
+                    "m3u_path": "模拟路径/iptv.m3u",
+                    "txt_path": "模拟路径/iptv.txt",
+                    "first_publish": True,
+                },
+            ),
             contextlib.redirect_stdout(output),
             contextlib.redirect_stderr(errors),
         ):
             result = main.run_formal_flow(config)
 
-        return result, output.getvalue(), errors.getvalue(), admission_mock, build_mock
+        return (
+            result,
+            output.getvalue(),
+            errors.getvalue(),
+            admission_mock,
+            build_mock,
+        )
 
     @staticmethod
     def make_admission(
@@ -165,7 +182,7 @@ class MainCollectionFlowTests(unittest.TestCase):
             admit,
         )
 
-        self.assertEqual(result, 2)
+        self.assertEqual(result, 0)
         self.assertEqual(consumed, [0])
         self.assertEqual(admission_mock.call_count, 1)
         self.assertIn("达到有效来源上限 1", output)
@@ -188,7 +205,7 @@ class MainCollectionFlowTests(unittest.TestCase):
             admit,
         )
 
-        self.assertEqual(result, 2)
+        self.assertEqual(result, 0)
         self.assertEqual(consumed, [0])
         self.assertEqual(admission_mock.call_count, 1)
         self.assertIn("达到全部候选总上限 1", output)
@@ -215,7 +232,7 @@ class MainCollectionFlowTests(unittest.TestCase):
             admit,
         )
 
-        self.assertEqual(result, 2)
+        self.assertEqual(result, 0)
         self.assertEqual(consumed, [0])
         self.assertEqual(admission_mock.call_count, 1)
         self.assertIn("所有目标频道均已达到", output)
@@ -248,7 +265,7 @@ class MainCollectionFlowTests(unittest.TestCase):
             admit,
         )
 
-        self.assertEqual(result, 2)
+        self.assertEqual(result, 0)
         self.assertEqual(consumed, [0, 1])
         self.assertEqual(admission_mock.call_count, 2)
 
