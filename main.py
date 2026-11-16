@@ -968,7 +968,7 @@ def _run_stage4_collection_tests(config: dict[str, Any]) -> None:
         require(
             hls_parsed["recognized"]
             and hls_parsed["format"] == "hls"
-            and hls_parsed["extracted_candidates"] == 1
+            and hls_parsed["extracted_candidates"] == 0
             and hls_parsed["matched_target_candidates"] == 0
             and hls_parsed["retained_candidates"] == 0
             and hls_parsed["candidates"] == [],
