@@ -507,7 +507,7 @@ def build_subscriptions(
 
         for key, attribute in (
             ("tvg_id", "tvg-id"),
-            ("tvg_name", "tvg-name"),
+            ("channel", "tvg-name"),
             ("category", "group-title"),
         ):
             value = _safe_m3u_attribute(route.get(key))
