@@ -68,7 +68,25 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "更新 IPTV 订阅"
-          git push
+
+          for attempt in 1 2 3; do
+            echo "同步远程分支并尝试推送：第 ${attempt} 次"
+            git fetch origin main
+            git rebase origin/main
+
+            if git push origin HEAD:main; then
+              echo "订阅更新已成功推送。"
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 3 ]; then
+              echo "推送未成功，将重新同步后重试。"
+              sleep 2
+            fi
+          done
+
+          echo "错误：重试 3 次后仍无法推送订阅。"
+          exit 1
 
   test:
     name: 测试
