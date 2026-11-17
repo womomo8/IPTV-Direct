@@ -1001,7 +1001,15 @@ def publish_subscriptions(
             "旧订阅只有一份存在有效内容，阻止发布"
         )
 
-    first_publish = not has_m3u and not has_txt
+    both_old_files_empty = (
+        old_data[0] == b""
+        and old_data[1] == b""
+    )
+
+    first_publish = (
+        (not has_m3u and not has_txt)
+        or both_old_files_empty
+    )
 
     if not first_publish:
         try:
