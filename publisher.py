@@ -425,9 +425,7 @@ def _channel_counts(
             counts[channel] += 1
 
     return counts
-
-
-def process_batch(
+    def process_batch(
     candidates: list[dict[str, Any]],
     accepted_routes: list[dict[str, Any]],
     channels: list[str],
@@ -606,6 +604,8 @@ def process_batch(
         "accepted_count": accepted_count,
         "rejected_count": rejected_count,
     }
+
+
 def _safe_m3u_attribute(value: Any) -> str:
     """清理 M3U 属性值，避免破坏格式。"""
     if not isinstance(value, str):
@@ -837,9 +837,7 @@ def validate_subscriptions(
         raise PublisherError("订阅超过每频道 2 条线路上限")
 
     return True
-
-
-def _subscription_snapshot(m3u_text, txt_text):
+    def _subscription_snapshot(m3u_text, txt_text):
     """从旧订阅自身提取频道和线路数量，并检查两份文件一致性。"""
     if not isinstance(m3u_text, str) or not isinstance(txt_text, str):
         raise PublisherError("旧订阅不是有效文本")
@@ -1017,4 +1015,104 @@ def publish_subscriptions(
 
         except (UnicodeDecodeError, PublisherError) as exc:
             raise PublisherError(
-                f"旧订阅损坏，阻止覆盖：{e
+                f"旧订阅损坏，阻止覆盖：{exc}"
+            ) from exc
+
+        if (
+            new_snapshot["channel_count"] * 2
+            < old_snapshot["channel_count"]
+        ):
+            raise PublisherError(
+                "频道数量下降超过50%，阻止发布"
+            )
+
+        if (
+            new_snapshot["route_count"] * 2
+            < old_snapshot["route_count"]
+        ):
+            raise PublisherError(
+                "线路数量下降超过50%，阻止发布"
+            )
+
+    new_data = [
+        m3u_text.encode("utf-8"),
+        txt_text.encode("utf-8"),
+    ]
+
+    staged = []
+
+    try:
+        # 先准备好两份临时文件。
+        for target, data in zip(targets, new_data):
+            staged.append(
+                _write_temp_file(
+                    directory,
+                    f".{target.name}.stage-",
+                    data,
+                )
+            )
+
+        try:
+            # 依次替换正式文件。
+            for temp_file, target in zip(staged, targets):
+                os.replace(temp_file, target)
+
+            # 重新读取正式文件。
+            actual_m3u = targets[0].read_text(
+                encoding="utf-8-sig"
+            )
+
+            actual_txt = targets[1].read_text(
+                encoding="utf-8-sig"
+            )
+
+            validate_subscriptions(
+                actual_m3u,
+                actual_txt,
+                channels,
+            )
+
+            if actual_m3u != m3u_text or actual_txt != txt_text:
+                raise PublisherError(
+                    "正式文件内容与预期不一致"
+                )
+
+            actual_snapshot = _subscription_snapshot(
+                actual_m3u,
+                actual_txt,
+            )
+
+            if actual_snapshot != new_snapshot:
+                raise PublisherError(
+                    "正式文件数量核验失败"
+                )
+
+        except Exception as publish_error:
+            rollback_errors = _restore_subscription_files(
+                targets,
+                old_data,
+                directory,
+            )
+
+            if rollback_errors:
+                raise PublisherError(
+                    f"发布失败：{publish_error}；"
+                    f"回滚失败：{'；'.join(rollback_errors)}"
+                ) from publish_error
+
+            raise PublisherError(
+                f"发布失败，旧文件已恢复：{publish_error}"
+            ) from publish_error
+
+    finally:
+        for temp_file in staged:
+            temp_file.unlink(missing_ok=True)
+
+    return {
+        "published": True,
+        "channel_count": new_snapshot["channel_count"],
+        "route_count": new_snapshot["route_count"],
+        "m3u_path": str(targets[0]),
+        "txt_path": str(targets[1]),
+        "first_publish": first_publish,
+    }
