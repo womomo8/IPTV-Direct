@@ -1,3 +1,4 @@
+
 """main.py 跨来源候选池、统一检测和优选测试。
 
 全部使用模拟数据：
@@ -12,7 +13,7 @@ from unittest.mock import patch
 
 import main
 
-from normalizer import _channel_match
+from normalizer import _channel_match, normalize_source_content
 
 
 CHANNEL = "模拟测试频道"
@@ -577,6 +578,68 @@ class ChannelAliasTests(unittest.TestCase):
                 {"CCTV5": "CCTV-5"},
             )
         )
+
+    def test_real_configuration_accepts_unselected_channel_aliases(self):
+        config = main.load_configuration(root=main.ROOT)
+
+        self.assertIn("13873", config["settings"]["aliases"])
+        self.assertEqual(
+            config["settings"]["aliases"]["13873"],
+            "安徽卫视",
+        )
+        self.assertNotIn("安徽卫视", config["channels"])
+
+    def test_selected_channel_alias_matches_and_enters_candidate_pool(self):
+        result = normalize_source_content(
+            content=(
+                '#EXTM3U\n'
+                '#EXTINF:-1 tvg-name="13873",13873\n'
+                'https://example.com/anhui.m3u8\n'
+            ),
+            source={
+                "url": "https://source.example/list.m3u",
+                "final_url": "https://source.example/list.m3u",
+                "source_type": "automatic",
+                "priority": 1,
+                "order": 0,
+            },
+            channels=["安徽卫视"],
+            max_candidates_per_source=10,
+            seen_urls=set(),
+            aliases={"13873": "安徽卫视"},
+        )
+
+        self.assertEqual(len(result["candidates"]), 1)
+        self.assertEqual(
+            result["candidates"][0]["channel"],
+            "安徽卫视",
+        )
+
+    def test_unselected_channel_alias_is_excluded_from_candidate_pool(self):
+        seen_urls = set()
+
+        result = normalize_source_content(
+            content=(
+                '#EXTM3U\n'
+                '#EXTINF:-1 tvg-name="13873",13873\n'
+                'https://example.com/anhui.m3u8\n'
+            ),
+            source={
+                "url": "https://source.example/list.m3u",
+                "final_url": "https://source.example/list.m3u",
+                "source_type": "automatic",
+                "priority": 1,
+                "order": 0,
+            },
+            channels=["CCTV-1"],
+            max_candidates_per_source=10,
+            seen_urls=seen_urls,
+            aliases={"13873": "安徽卫视"},
+        )
+
+        self.assertEqual(result["candidates"], [])
+        self.assertEqual(result["matched_target_candidates"], 0)
+        self.assertEqual(seen_urls, set())
 
 
 class CollectionStopReasonTests(unittest.TestCase):
