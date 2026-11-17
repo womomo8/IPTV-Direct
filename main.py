@@ -805,8 +805,6 @@ def _collection_stop_reason(
 # ----------------------------------------------------------------------
 
 def run_formal_flow(config: dict[str, Any]) -> int:
-
-def run_formal_flow(config: dict[str, Any]) -> int:
     settings = config["settings"]
     aliases = settings.get("aliases", {})
 
@@ -1057,8 +1055,15 @@ def run_formal_flow(config: dict[str, Any]) -> int:
     accepted_routes = admission["accepted_routes"]
     admission_results = admission.get("results", [])
 
-    accepted_count = admission["accepted_count"]
-    rejected_count = admission["rejected_count"]
+    accepted_count = sum(
+        result.get("status") == publisher.ACCEPTED
+        for result in admission_results
+    )
+
+    rejected_count = sum(
+        result.get("status") == publisher.REJECTED
+        for result in admission_results
+    )
 
     print(
         f"正式准入汇总：候选 {len(detected)} 条；"
