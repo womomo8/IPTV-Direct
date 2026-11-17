@@ -1,4 +1,3 @@
-
 """IPTV-Direct：线路正式准入、频道统计和订阅内容生成。"""
 
 from __future__ import annotations
@@ -170,7 +169,7 @@ def _globalping_admission_reason(
 def _candidate_order(
     candidate: dict[str, Any],
 ) -> tuple[int, int]:
-    """读取来源优先级和来源内原始顺序。"""
+    """校验并读取来源优先级和来源内原始顺序元数据。"""
     priority = candidate.get("priority")
     order = candidate.get("source_order")
 
@@ -189,6 +188,169 @@ def _candidate_order(
         raise PublisherError("候选线路缺少有效来源顺序")
 
     return priority, order
+
+
+def _quality_number(
+    quality: dict[str, Any],
+    key: str,
+) -> float | None:
+    """读取有效质量数值，排除布尔值和无效类型。"""
+    value = quality.get(key)
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+
+    return float(value)
+
+
+def _known_first(
+    value: float | None,
+    reverse: bool = False,
+) -> tuple[int, float]:
+    """已测数据优先；缺失数据不伪装为 0 或最好值。"""
+    if value is None:
+        return (1, 0.0)
+
+    return (0, -value if reverse else value)
+
+
+def _candidate_quality_key(
+    candidate: dict[str, Any],
+) -> tuple[Any, ...]:
+    """
+    使用 checker 已记录的真实质量数据分层比较。
+
+    与 main.py 的质量比较规则保持一致：
+    不计算综合分数，不改变 PASS/FAIL/INCOMPLETE 结果。
+    """
+    quality = candidate.get("quality")
+
+    if not isinstance(quality, dict):
+        quality = {}
+
+    media_type = candidate.get("media_type")
+
+    request_count = _quality_number(quality, "request_count")
+    success_count = _quality_number(quality, "request_success_count")
+    timeout_count = _quality_number(quality, "timeout_count")
+
+    total_elapsed = _quality_number(quality, "total_elapsed_seconds")
+    total_read = _quality_number(quality, "total_read_seconds")
+    total_bytes = _quality_number(quality, "total_bytes_read")
+
+    success_ratio = None
+    if (
+        request_count is not None
+        and request_count > 0
+        and success_count is not None
+    ):
+        success_ratio = success_count / request_count
+
+    average_elapsed = None
+    if (
+        request_count is not None
+        and request_count > 0
+        and total_elapsed is not None
+    ):
+        average_elapsed = total_elapsed / request_count
+
+    average_read = None
+    if (
+        request_count is not None
+        and request_count > 0
+        and total_read is not None
+    ):
+        average_read = total_read / request_count
+
+    throughput = None
+    if (
+        total_read is not None
+        and total_read > 0
+        and total_bytes is not None
+    ):
+        throughput = total_bytes / total_read
+
+    parts: list[tuple[int, float]] = []
+
+    # HLS 比较实际媒体分片成功情况；直接 TS 不使用此指标。
+    if media_type == "HLS":
+        segment_total = _quality_number(quality, "segment_total")
+        segment_success = _quality_number(
+            quality,
+            "segment_success_count",
+        )
+
+        segment_ratio = None
+
+        if (
+            segment_total is not None
+            and segment_total > 0
+            and segment_success is not None
+        ):
+            segment_ratio = segment_success / segment_total
+
+        parts.append(_known_first(segment_ratio, reverse=True))
+        parts.append(_known_first(segment_success, reverse=True))
+
+    parts.append(_known_first(timeout_count))
+    parts.append(_known_first(success_ratio, reverse=True))
+    parts.append(_known_first(average_elapsed))
+    parts.append(_known_first(average_read))
+    parts.append(_known_first(throughput, reverse=True))
+
+    return tuple(parts)
+
+
+def _rank_routes(
+    routes: list[dict[str, Any]],
+    channels: list[str],
+) -> list[dict[str, Any]]:
+    """
+    publisher 最终质量排序。
+
+    只在同频道、同媒体类型内部比较质量。
+    不同媒体类型不互相比较。
+    质量相同或缺失时，稳定保持原始候选顺序。
+    """
+    channel_routes = {
+        channel: []
+        for channel in channels
+    }
+
+    for route in routes:
+        channel = route.get("channel")
+
+        if channel in channel_routes:
+            channel_routes[channel].append(route)
+
+    ranked = []
+
+    for channel in channels:
+        current = channel_routes[channel]
+
+        positions_by_type: dict[Any, list[int]] = {}
+
+        for index, route in enumerate(current):
+            media_type = route.get("media_type")
+            positions_by_type.setdefault(media_type, []).append(index)
+
+        reordered = list(current)
+
+        for positions in positions_by_type.values():
+            same_type_routes = [
+                current[index]
+                for index in positions
+            ]
+
+            # Python 稳定排序：质量相同时保留原始候选顺序。
+            same_type_routes.sort(key=_candidate_quality_key)
+
+            for index, route in zip(positions, same_type_routes):
+                reordered[index] = route
+
+        ranked.extend(reordered)
+
+    return ranked
 
 
 def _prepare_candidate(
@@ -337,24 +499,9 @@ def process_batch(
     prepared = []
     results = []
 
-    # 本批按人工优先级、来源原始顺序处理。
-    indexed = list(enumerate(candidates))
-
-    def sort_key(item):
-        index, candidate = item
-
-        if not isinstance(candidate, dict):
-            return (999999, 999999, index)
-
-        try:
-            priority, order = _candidate_order(candidate)
-            return (priority, order, index)
-        except PublisherError:
-            return (999999, 999999, index)
-
-    indexed.sort(key=sort_key)
-
-    for _, candidate in indexed:
+    # 保持 main.py 交来的候选池原始顺序。
+    # priority 和 source_order 仅作为来源元数据，不参与最终质量排序。
+    for candidate in candidates:
         route, reason = _prepare_candidate(candidate, channels)
 
         if route is None:
@@ -378,19 +525,10 @@ def process_batch(
         seen_urls.add(url)
         prepared.append(route)
 
-    # 合并历史累计线路和本批候选，再按正式优先级整理。
-    combined = existing + prepared
-
-    channel_index = {
-        channel: index
-        for index, channel in enumerate(channels)
-    }
-
-    combined.sort(
-        key=lambda route: (
-            channel_index.get(route.get("channel"), len(channels)),
-            *_candidate_order(route),
-        )
+    # 历史准入线路和本批新候选统一参与质量竞争。
+    combined = _rank_routes(
+        existing + prepared,
+        channels,
     )
 
     retained = []
@@ -414,15 +552,18 @@ def process_batch(
         retained_urls.add(url)
         counts[channel] += 1
 
+    existing_urls = {
+        old.get("normalized_url")
+        for old in existing
+    }
+
     retained_new_urls = {
         route["normalized_url"]
         for route in retained
-        if route["normalized_url"] not in {
-            old.get("normalized_url") for old in existing
-        }
+        if route["normalized_url"] not in existing_urls
     }
 
-    # 为本批每条候选生成明确结果。
+    # 为本批每条候选生成明确结果，保持本批原始候选顺序。
     for item in prepared:
         url = item["normalized_url"]
 
@@ -444,7 +585,6 @@ def process_batch(
         for channel in channels
     )
 
-
     accepted_count = sum(
         result.get("status") == ACCEPTED
         for result in results
@@ -463,6 +603,7 @@ def process_batch(
         "accepted_count": accepted_count,
         "rejected_count": rejected_count,
     }
+
 
 def _safe_m3u_attribute(value: Any) -> str:
     """清理 M3U 属性值，避免破坏格式。"""
@@ -527,11 +668,9 @@ def build_subscriptions(
         for index, channel in enumerate(channels)
     }
 
+    # 只按频道配置顺序排列；稳定排序保留 publisher 已确定的频道内顺序。
     ordered.sort(
-        key=lambda route: (
-            channel_index[route["channel"]],
-            *_candidate_order(route),
-        )
+        key=lambda route: channel_index[route["channel"]]
     )
 
     counts = _channel_counts(ordered, channels)
