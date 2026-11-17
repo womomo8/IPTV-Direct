@@ -158,7 +158,7 @@ def load_configuration(
     if not isinstance(aliases, dict):
         raise ValueError("settings.json aliases 必须是字典")
 
-        seen_aliases = set()
+    seen_aliases = set()
 
     for alias, canonical in aliases.items():
         if (
