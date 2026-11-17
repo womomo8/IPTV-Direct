@@ -600,22 +600,44 @@ def _print_detection_summary(
         for state in (PASS, FAIL, INCOMPLETE)
     }
 
+    measurement_count = 0
+    measurement_candidate_count = 0
+
     for item in submitted_items:
         remote = item.get("globalping", {})
 
-        if (
-            isinstance(remote, dict)
-            and remote.get("status") in remote_counts
-        ):
+        if not isinstance(remote, dict):
+            continue
+
+        if remote.get("status") in remote_counts:
             remote_counts[remote["status"]] += 1
+
+        measurements = remote.get("measurements", [])
+
+        if isinstance(measurements, list):
+            valid_measurements = [
+                measurement_id
+                for measurement_id in measurements
+                if isinstance(measurement_id, str)
+                and measurement_id
+            ]
+
+            measurement_count += len(valid_measurements)
+
+            if valid_measurements:
+                measurement_candidate_count += 1
 
     print(
         f"检测统计：候选 {len(results)} 条；"
         f"本地全部通过 {local_ok} 条；"
         f"本地未通过/未完成 {local_bad} 条；"
-        f"Globalping 已提交 {len(submitted_items)} 条、"
-        f"未提交 {local_bad} 条；"
-        f"实际远程结果 PASS {remote_counts[PASS]} 条、"
+        f"交给 Globalping {len(submitted_items)} 条候选；"
+        f"返回结果记录测量 {measurement_count} 次；"
+        f"有测量记录的候选 {measurement_candidate_count} 条；"
+        f"无测量记录的远程候选 "
+        f"{len(submitted_items) - measurement_candidate_count} 条；"
+        f"本地未通过、未提交远程 {local_bad} 条；"
+        f"Globalping 状态 PASS {remote_counts[PASS]} 条、"
         f"FAIL {remote_counts[FAIL]} 条、"
         f"INCOMPLETE {remote_counts[INCOMPLETE]} 条。"
     )
