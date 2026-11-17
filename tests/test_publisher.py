@@ -145,6 +145,34 @@ class PublisherAdmissionTests(unittest.TestCase):
             "INCOMPLETE",
         )
 
+    def test_globalping_pass_with_incomplete_check_is_rejected(self):
+        """总体 PASS 但适用分项 INCOMPLETE，必须拒绝。"""
+
+        candidate = make_candidate(global_status="PASS")
+        candidate["globalping"]["checks"]["http"]["status"] = "INCOMPLETE"
+
+        result = self.process([candidate])
+
+        self.assertEqual(len(result["accepted_routes"]), 0)
+        self.assertEqual(
+            result["results"][0]["status"],
+            publisher.REJECTED,
+        )
+
+    def test_globalping_incomplete_with_failed_check_is_rejected(self):
+        """总体 INCOMPLETE 但适用分项 FAIL，必须拒绝。"""
+
+        candidate = make_candidate(global_status="INCOMPLETE")
+        candidate["globalping"]["checks"]["http"]["status"] = "FAIL"
+
+        result = self.process([candidate])
+
+        self.assertEqual(len(result["accepted_routes"]), 0)
+        self.assertEqual(
+            result["results"][0]["status"],
+            publisher.REJECTED,
+        )
+
     def test_unknown_media_type_is_rejected(self):
         """未知媒体类型不得进入正式订阅。"""
 
