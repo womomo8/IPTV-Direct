@@ -187,6 +187,8 @@ class MainCollectionFlowTests(unittest.TestCase):
             "accepted_routes": accepted_routes,
             "channel_counts": {CHANNEL: count},
             "all_channels_reached": all_channels_reached,
+            "accepted_count": 0,
+            "rejected_count": 0,
             "results": [],
         }
 
