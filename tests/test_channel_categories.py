@@ -1,39 +1,29 @@
-
-"""六大频道分类、来源分类隔离及订阅输出专项测试。"""
+"""频道分类配置动态读取、来源分类隔离及订阅输出测试。"""
 
 import tempfile
 import unittest
 from pathlib import Path
 
 import publisher
-from normalizer import CATEGORY_ORDER, ChannelConfigError, load_channels, normalize_source_content
+from normalizer import (
+    ChannelConfigError,
+    load_channels,
+    normalize_source_content,
+)
 
 
 CATEGORY_TEXT = """\
-# 央视频道
-CCTV-1
-CCTV-5
-CCTV-5+
-CCTV-6
+# 新闻综合频道
+新闻一
+新闻二
 
-# 卫视频道
-湖南卫视
-广东卫视
+# 空分类
 
-# 港澳台
-翡翠台
+# 体育赛事
+篮球赛事
 
-# 体育频道
-广东体育
-五星体育
-
-# 国外频道
-NBA TV
+# 海外频道
 ESPN
-Eurosport 1
-
-# 其他频道
-地方综合频道
 """
 
 
@@ -51,95 +41,118 @@ class ChannelCategoryTests(unittest.TestCase):
     def write_config(self, content):
         self.path.write_text(content, encoding="utf-8")
 
-    def test_six_categories_and_order(self):
+    def test_category_names_and_order_are_read_from_file(self):
         self.assertEqual(
-            CATEGORY_ORDER,
-            ("央视频道", "卫视频道", "港澳台", "体育频道", "国外频道", "其他频道"),
+            self.channels.category_order,
+            ("新闻综合频道", "空分类", "体育赛事", "海外频道"),
         )
 
-    def test_all_cctv_channels_are_central(self):
-        for channel in ("CCTV-1", "CCTV-5", "CCTV-5+", "CCTV-6"):
-            self.assertEqual(
-                self.channels.category_by_channel[channel],
-                "央视频道",
-            )
-
-    def test_satellite_channels(self):
-        for channel in ("湖南卫视", "广东卫视"):
-            self.assertEqual(
-                self.channels.category_by_channel[channel],
-                "卫视频道",
-            )
-
-    def test_hong_kong_macao_taiwan(self):
+    def test_channel_category_mapping(self):
         self.assertEqual(
-            self.channels.category_by_channel["翡翠台"],
-            "港澳台",
+            self.channels.category_by_channel,
+            {
+                "新闻一": "新闻综合频道",
+                "新闻二": "新闻综合频道",
+                "篮球赛事": "体育赛事",
+                "ESPN": "海外频道",
+            },
         )
 
-    def test_domestic_sports(self):
-        for channel in ("广东体育", "五星体育"):
-            self.assertEqual(
-                self.channels.category_by_channel[channel],
-                "体育频道",
+    def test_empty_category_is_allowed(self):
+        self.assertIn("空分类", self.channels.category_order)
+        self.assertFalse(
+            any(
+                category == "空分类"
+                for category in self.channels.category_by_channel.values()
             )
+        )
 
-    def test_foreign_sports_belong_to_foreign_category(self):
-        for channel in ("NBA TV", "ESPN", "Eurosport 1"):
-            self.assertEqual(
-                self.channels.category_by_channel[channel],
-                "国外频道",
-            )
+    def test_category_count_names_and_order_can_change(self):
+        content = """\
+# 新分类
+频道甲
 
-    def test_empty_other_category_is_allowed(self):
-        self.write_config(CATEGORY_TEXT.replace("地方综合频道\n", ""))
+# 第二分类
+频道乙
+
+# 新增空分类
+"""
+        self.write_config(content)
         channels = load_channels(self.path)
-        self.assertNotIn("地方综合频道", channels)
 
-    def test_missing_category_is_rejected(self):
-        self.write_config(CATEGORY_TEXT.replace("# 港澳台\n翡翠台\n\n", ""))
-        with self.assertRaises(ChannelConfigError):
-            load_channels(self.path)
+        self.assertEqual(
+            channels.category_order,
+            ("新分类", "第二分类", "新增空分类"),
+        )
+        self.assertEqual(
+            channels.category_by_channel,
+            {
+                "频道甲": "新分类",
+                "频道乙": "第二分类",
+            },
+        )
 
     def test_duplicate_category_is_rejected(self):
-        self.write_config(
-            CATEGORY_TEXT.replace(
-                "# 国外频道\n",
-                "# 国外频道\n# 国外频道\n",
-            )
-        )
-        with self.assertRaisesRegex(ChannelConfigError, "分类标题重复"):
-            load_channels(self.path)
-
-    def test_unknown_category_is_rejected(self):
-        self.write_config(
-            CATEGORY_TEXT.replace("# 港澳台\n", "# 港澳台频道\n")
-        )
-        with self.assertRaisesRegex(ChannelConfigError, "未知分类标题"):
-            load_channels(self.path)
-
-    def test_wrong_category_order_is_rejected(self):
-        content = CATEGORY_TEXT.replace(
-            "# 港澳台\n翡翠台\n\n# 体育频道\n广东体育\n五星体育",
-            "# 体育频道\n广东体育\n五星体育\n\n# 港澳台\n翡翠台",
-        )
+        content = CATEGORY_TEXT + "\n# 新闻综合频道\n"
         self.write_config(content)
-        with self.assertRaises(ChannelConfigError):
+
+        with self.assertRaisesRegex(
+            ChannelConfigError,
+            "分类标题重复",
+        ):
+            load_channels(self.path)
+
+    def test_case_insensitive_duplicate_category_is_rejected(self):
+        self.write_config(
+            "# Sports\n频道甲\n# SPORTS\n频道乙\n"
+        )
+
+        with self.assertRaisesRegex(
+            ChannelConfigError,
+            "分类标题重复",
+        ):
+            load_channels(self.path)
+
+    def test_empty_category_heading_is_rejected(self):
+        self.write_config("# 新闻综合频道\n频道甲\n#   \n")
+
+        with self.assertRaisesRegex(
+            ChannelConfigError,
+            "空分类标题",
+        ):
             load_channels(self.path)
 
     def test_duplicate_channel_assignment_is_rejected(self):
         self.write_config(
-            CATEGORY_TEXT.replace(
-                "# 卫视频道\n",
-                "# 卫视频道\nCCTV-5\n",
-            )
+            "# 新闻综合频道\n频道甲\n"
+            "# 体育赛事\n频道甲\n"
         )
-        with self.assertRaisesRegex(ChannelConfigError, "频道重复配置"):
+
+        with self.assertRaisesRegex(
+            ChannelConfigError,
+            "频道重复配置",
+        ):
             load_channels(self.path)
 
     def test_channel_before_first_category_is_rejected(self):
-        self.write_config("CCTV-1\n" + CATEGORY_TEXT)
+        self.write_config("频道甲\n# 新闻综合频道\n频道乙\n")
+
         with self.assertRaises(ChannelConfigError):
+            load_channels(self.path)
+
+    def test_missing_category_heading_is_rejected(self):
+        self.write_config("频道甲\n频道乙\n")
+
+        with self.assertRaises(ChannelConfigError):
+            load_channels(self.path)
+
+    def test_empty_channel_list_is_rejected(self):
+        self.write_config("# 空分类一\n# 空分类二\n")
+
+        with self.assertRaisesRegex(
+            ChannelConfigError,
+            "没有配置目标频道",
+        ):
             load_channels(self.path)
 
     def test_source_group_title_cannot_override_config(self):
@@ -150,11 +163,13 @@ class ChannelCategoryTests(unittest.TestCase):
             "priority": 1,
             "order": 0,
         }
+
         content = (
             "#EXTM3U\n"
-            '#EXTINF:-1 group-title="国外体育",CCTV-5\n'
-            "https://example.com/cctv5.m3u8\n"
+            '#EXTINF:-1 group-title="海外频道",新闻一\n'
+            "https://example.com/news.m3u8\n"
         )
+
         result = normalize_source_content(
             content,
             source,
@@ -163,8 +178,12 @@ class ChannelCategoryTests(unittest.TestCase):
             set(),
             content_type="application/vnd.apple.mpegurl",
         )
+
         self.assertEqual(len(result["candidates"]), 1)
-        self.assertEqual(result["candidates"][0]["category"], "央视频道")
+        self.assertEqual(
+            result["candidates"][0]["category"],
+            "新闻综合频道",
+        )
 
     @staticmethod
     def make_route(channel, url, category, order):
@@ -174,62 +193,56 @@ class ChannelCategoryTests(unittest.TestCase):
             "category": category,
             "priority": 1,
             "source_order": order,
-            "selection": {"status": publisher.ACCEPTED},
+            "selection": {
+                "status": publisher.ACCEPTED,
+            },
         }
 
     def test_publisher_uses_configured_category_and_order(self):
         routes = [
             self.make_route(
-                "Eurosport 1",
-                "https://example.com/eurosport.m3u8",
-                "国外频道",
+                "ESPN",
+                "https://example.com/espn.m3u8",
+                "海外频道",
                 0,
             ),
             self.make_route(
-                "广东体育",
-                "https://example.com/sports.m3u8",
-                "体育频道",
+                "篮球赛事",
+                "https://example.com/basketball.m3u8",
+                "体育赛事",
                 1,
             ),
             self.make_route(
-                "CCTV-6",
-                "https://example.com/cctv6.m3u8",
-                "央视频道",
+                "新闻二",
+                "https://example.com/news2.m3u8",
+                "新闻综合频道",
                 2,
-            ),
-            self.make_route(
-                "翡翠台",
-                "https://example.com/jade.m3u8",
-                "港澳台",
-                3,
-            ),
-            self.make_route(
-                "湖南卫视",
-                "https://example.com/hunan.m3u8",
-                "卫视频道",
-                4,
             ),
         ]
 
-        output = publisher.build_subscriptions(routes, self.channels)
+        output = publisher.build_subscriptions(
+            routes,
+            self.channels,
+        )
 
         entries = []
         lines = output["m3u"].splitlines()
 
         for index, line in enumerate(lines):
             if line.startswith("#EXTINF:"):
-                group = line.split('group-title="', 1)[1].split('"', 1)[0]
+                group = (
+                    line.split('group-title="', 1)[1]
+                    .split('"', 1)[0]
+                )
                 channel = line.split(",", 1)[1]
                 entries.append((group, channel, lines[index + 1]))
 
         self.assertEqual(
             [(group, channel) for group, channel, _ in entries],
             [
-                ("央视频道", "CCTV-6"),
-                ("卫视频道", "湖南卫视"),
-                ("港澳台", "翡翠台"),
-                ("体育频道", "广东体育"),
-                ("国外频道", "Eurosport 1"),
+                ("新闻综合频道", "新闻二"),
+                ("体育赛事", "篮球赛事"),
+                ("海外频道", "ESPN"),
             ],
         )
 
@@ -244,24 +257,32 @@ class ChannelCategoryTests(unittest.TestCase):
     def test_wrong_m3u_group_title_is_rejected(self):
         m3u = (
             "#EXTM3U\n"
-            '#EXTINF:-1 group-title="体育频道",CCTV-5\n'
-            "https://example.com/cctv5.m3u8\n"
+            '#EXTINF:-1 group-title="体育赛事",新闻一\n'
+            "https://example.com/news.m3u8\n"
         )
-        txt = "CCTV-5,https://example.com/cctv5.m3u8\n"
+        txt = "新闻一,https://example.com/news.m3u8\n"
 
         with self.assertRaises(publisher.PublisherError):
-            publisher.validate_subscriptions(m3u, txt, self.channels)
+            publisher.validate_subscriptions(
+                m3u,
+                txt,
+                self.channels,
+            )
 
-    def test_m3u_and_txt_order_must_match(self):
+    def test_m3u_and_txt_channel_must_match(self):
         m3u = (
             "#EXTM3U\n"
-            '#EXTINF:-1 group-title="央视频道",CCTV-5\n'
-            "https://example.com/cctv5.m3u8\n"
+            '#EXTINF:-1 group-title="新闻综合频道",新闻一\n'
+            "https://example.com/news.m3u8\n"
         )
-        txt = "CCTV-6,https://example.com/cctv5.m3u8\n"
+        txt = "新闻二,https://example.com/news.m3u8\n"
 
         with self.assertRaises(publisher.PublisherError):
-            publisher.validate_subscriptions(m3u, txt, self.channels)
+            publisher.validate_subscriptions(
+                m3u,
+                txt,
+                self.channels,
+            )
 
 
 if __name__ == "__main__":
