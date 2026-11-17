@@ -186,6 +186,52 @@ class PublisherAdmissionTests(unittest.TestCase):
         self.assertEqual(len(result["accepted_routes"]), 1)
         self.assertEqual(result["channel_counts"]["CCTV-1"], 1)
 
+    def test_results_preserve_original_candidate_order(self):
+        invalid = make_candidate(
+            url="https://example.com/invalid.m3u8",
+            local_status="FAIL",
+        )
+        first = make_candidate(
+            url="https://example.com/first.m3u8",
+        )
+        duplicate = make_candidate(
+            url="https://example.com/first.m3u8",
+            source_order=1,
+        )
+        second = make_candidate(
+            url="https://example.com/second.m3u8",
+            source_order=2,
+        )
+
+        result = self.process([
+            invalid,
+            first,
+            duplicate,
+            second,
+        ])
+
+        self.assertEqual(
+            [
+                item["candidate"]["normalized_url"]
+                for item in result["results"]
+            ],
+            [
+                "https://example.com/invalid.m3u8",
+                "https://example.com/first.m3u8",
+                "https://example.com/first.m3u8",
+                "https://example.com/second.m3u8",
+            ],
+        )
+        self.assertEqual(
+            [item["status"] for item in result["results"]],
+            [
+                publisher.REJECTED,
+                publisher.ACCEPTED,
+                publisher.REJECTED,
+                publisher.ACCEPTED,
+            ],
+        )
+
     def test_channel_keeps_at_most_two_routes(self):
         candidates = [
             make_candidate(
@@ -247,8 +293,7 @@ class PublisherAdmissionTests(unittest.TestCase):
                 "https://example.com/manual.m3u8",
             ],
         )
-
-    def test_better_automatic_route_beats_manual_route(self):
+            def test_better_automatic_route_beats_manual_route(self):
         candidates = [
             make_candidate(
                 url="https://example.com/manual-slow.m3u8",
@@ -326,31 +371,59 @@ class PublisherAdmissionTests(unittest.TestCase):
             "https://example.com/manual-fast.m3u8",
         )
 
-    def test_hls_segment_quality_does_not_compare_with_direct_ts(self):
+    def test_hls_and_direct_ts_are_ranked_independently(self):
         candidates = [
             make_candidate(
-                url="https://example.com/hls.m3u8",
+                url="https://example.com/hls-low-segment.m3u8",
                 media_type="HLS",
                 quality={
                     "request_count": 3,
                     "request_success_count": 3,
                     "timeout_count": 0,
-                    "total_elapsed_seconds": 3.0,
-                    "total_read_seconds": 1.5,
+                    "total_elapsed_seconds": 1.0,
+                    "total_read_seconds": 0.5,
                     "total_bytes_read": 3000,
+                    "segment_total": 3,
+                    "segment_success_count": 1,
+                },
+            ),
+            make_candidate(
+                url="https://example.com/direct-slow.ts",
+                media_type="DIRECT_TS",
+                quality={
+                    "request_count": 3,
+                    "request_success_count": 2,
+                    "timeout_count": 1,
+                    "total_elapsed_seconds": 9.0,
+                    "total_read_seconds": 6.0,
+                    "total_bytes_read": 1000,
+                    "segment_total": 0,
+                    "segment_success_count": 0,
+                },
+            ),
+            make_candidate(
+                url="https://example.com/hls-high-segment.m3u8",
+                media_type="HLS",
+                quality={
+                    "request_count": 3,
+                    "request_success_count": 2,
+                    "timeout_count": 1,
+                    "total_elapsed_seconds": 9.0,
+                    "total_read_seconds": 6.0,
+                    "total_bytes_read": 1000,
                     "segment_total": 3,
                     "segment_success_count": 3,
                 },
             ),
             make_candidate(
-                url="https://example.com/direct.ts",
+                url="https://example.com/direct-fast.ts",
                 media_type="DIRECT_TS",
                 quality={
                     "request_count": 3,
                     "request_success_count": 3,
                     "timeout_count": 0,
-                    "total_elapsed_seconds": 2.0,
-                    "total_read_seconds": 1.0,
+                    "total_elapsed_seconds": 1.0,
+                    "total_read_seconds": 0.5,
                     "total_bytes_read": 3000,
                     "segment_total": 0,
                     "segment_success_count": 0,
@@ -365,30 +438,49 @@ class PublisherAdmissionTests(unittest.TestCase):
             for item in result["accepted_routes"]
         ]
 
-        # 两种媒体类型各自排序，不跨类型交换位置。
+        # HLS 只在 HLS 的原位置槽内按分片质量排序。
+        # DIRECT_TS 只在 DIRECT_TS 的原位置槽内按通用质量排序。
+        # 两种媒体类型不互相交换位置。
         self.assertEqual(
             urls,
             [
-                "https://example.com/hls.m3u8",
-                "https://example.com/direct.ts",
+                "https://example.com/hls-high-segment.m3u8",
+                "https://example.com/direct-fast.ts",
+                "https://example.com/hls-low-segment.m3u8",
+                "https://example.com/direct-slow.ts",
             ],
         )
 
-    def test_existing_route_competes_with_new_candidate_by_quality(self):
-        old_route = make_candidate(
-            url="https://example.com/old-slow.m3u8",
+    def test_existing_routes_compete_with_new_candidate_by_quality(self):
+        old_slowest = make_candidate(
+            url="https://example.com/old-slowest.m3u8",
             quality={
                 "request_count": 3,
-                "request_success_count": 2,
-                "timeout_count": 1,
-                "total_elapsed_seconds": 12.0,
-                "total_read_seconds": 9.0,
-                "total_bytes_read": 1000,
+                "request_success_count": 1,
+                "timeout_count": 2,
+                "total_elapsed_seconds": 15.0,
+                "total_read_seconds": 12.0,
+                "total_bytes_read": 500,
                 "segment_total": 3,
                 "segment_success_count": 1,
             },
         )
-        old_route["selection"] = {"status": publisher.ACCEPTED}
+        old_slowest["selection"] = {"status": publisher.ACCEPTED}
+
+        old_middle = make_candidate(
+            url="https://example.com/old-middle.m3u8",
+            quality={
+                "request_count": 3,
+                "request_success_count": 2,
+                "timeout_count": 1,
+                "total_elapsed_seconds": 8.0,
+                "total_read_seconds": 5.0,
+                "total_bytes_read": 1500,
+                "segment_total": 3,
+                "segment_success_count": 2,
+            },
+        )
+        old_middle["selection"] = {"status": publisher.ACCEPTED}
 
         new_route = make_candidate(
             url="https://example.com/new-fast.m3u8",
@@ -406,16 +498,21 @@ class PublisherAdmissionTests(unittest.TestCase):
 
         result = self.process(
             [new_route],
-            accepted_routes=[old_route],
+            accepted_routes=[old_slowest, old_middle],
         )
 
+        # 每频道最多两条：新快线路挤掉历史最差线路，保留历史次优线路。
         self.assertEqual(
             [
                 item["normalized_url"]
                 for item in result["accepted_routes"]
             ],
-            ["https://example.com/new-fast.m3u8"],
+            [
+                "https://example.com/new-fast.m3u8",
+                "https://example.com/old-middle.m3u8",
+            ],
         )
+        self.assertEqual(result["channel_counts"]["CCTV-1"], 2)
 
     def test_domestic_verification_is_not_fabricated(self):
         result = self.process([make_candidate()])
@@ -531,9 +628,7 @@ class PublisherAdmissionTests(unittest.TestCase):
             result["results"][0]["status"],
             publisher.REJECTED,
         )
-
-
-class MainPublisherHandoffIntegrationTests(unittest.TestCase):
+        class MainPublisherHandoffIntegrationTests(unittest.TestCase):
     """验证 main 优选、Globalping 结果和真实 publisher 的完整交接。"""
 
     @staticmethod
