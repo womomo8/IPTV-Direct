@@ -589,7 +589,8 @@ class ChannelAliasTests(unittest.TestCase):
         )
         self.assertNotIn("安徽卫视", config["channels"])
 
-        def test_verified_real_source_aliases_match_configured_channels(self):
+
+    def test_verified_real_source_aliases_match_configured_channels(self):
         config = main.load_configuration(root=main.ROOT)
         aliases = config["settings"]["aliases"]
 
@@ -615,7 +616,6 @@ class ChannelAliasTests(unittest.TestCase):
                     ),
                     canonical,
                 )
-
     def test_selected_channel_alias_matches_and_enters_candidate_pool(self):
         result = normalize_source_content(
             content=(
