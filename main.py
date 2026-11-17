@@ -158,15 +158,14 @@ def load_configuration(
     if not isinstance(aliases, dict):
         raise ValueError("settings.json aliases 必须是字典")
 
-    channel_names = {channel.casefold() for channel in channels}
-    seen_aliases = set()
+        seen_aliases = set()
 
     for alias, canonical in aliases.items():
         if (
             not isinstance(alias, str)
             or not alias.strip()
             or not isinstance(canonical, str)
-            or canonical.casefold() not in channel_names
+            or not canonical.strip()
         ):
             raise ValueError(
                 f"settings.json 存在无效频道别名：{alias} -> {canonical}"
