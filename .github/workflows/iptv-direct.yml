@@ -1,4 +1,3 @@
-
 name: IPTV-Direct Unified Workflow
 
 on:
@@ -118,10 +117,15 @@ jobs:
           python -m py_compile tests/test_publisher.py tests/test_publisher_release.py tests/test_main_collection.py
           python -m py_compile tests/test_main_failure.py
           python -m py_compile tests/test_channel_categories.py
+          python -m py_compile tests/test_normalizer.py
 
       - name: Run six-category tests
         run: |
           python -m unittest discover -s tests -p "test_channel_categories.py" -v
+
+      - name: Run normalizer candidate limit tests
+        run: |
+          python -m unittest discover -s tests -p "test_normalizer.py" -v
 
       - name: Run checker tests
         run: |
