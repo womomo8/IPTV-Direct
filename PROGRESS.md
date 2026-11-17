@@ -1,7 +1,7 @@
 IPTV-Direct — PROGRESS.md
 
-版本： 4.3
-更新日期： 2026-11-17
+版本：4.4
+更新日期：2026-11-17
 
 一、项目当前状态
 
@@ -18,7 +18,8 @@ IPTV-Direct — PROGRESS.md
 - "main.py" 已实现多来源候选汇集、统一本地检测和同频道质量排序。
 - "globalping.py" 已接入实时额度检查和测量预算保护。
 - "publisher.py" 已具备正式准入、来源优先级和每频道最多保留两条线路的规则。
-- 最新手动测试 Run #69 成功，测试提交 SHA 与当前 main 分支一致。
+- "normalizer.py" 已改为从 "channels.txt" 动态读取分类名称、数量、顺序和频道归属，不再硬编码固定分类名单。
+- 最新手动测试 Run #74 成功。
 
 1.3 当前工作重点
 
@@ -30,13 +31,14 @@ IPTV-Direct — PROGRESS.md
 
 二、固定程序架构
 
-程序| 固定职责
-"main.py"| 总入口、流程调度、候选池组织和阶段交接
-"collector.py"| 来源管理、内容下载和索引链接提取
-"normalizer.py"| 内容解析、频道匹配、URL 归一和去重
-"checker.py"| 本地 IPv4、HTTP、HLS、TS 检测
-"globalping.py"| Globalping API、额度管理和外部检测
-"publisher.py"| 正式准入、线路统计、订阅生成和发布保护
+程序 | 固定职责
+
+"main.py" | 总入口、流程调度、候选池组织和阶段交接
+"collector.py" | 来源管理、内容下载和索引链接提取
+"normalizer.py" | 内容解析、频道匹配、URL 归一和去重
+"checker.py" | 本地 IPv4、HTTP、HLS、TS 检测
+"globalping.py" | Globalping API、额度管理和外部检测
+"publisher.py" | 正式准入、线路统计、订阅生成和发布保护
 
 固定原则
 
@@ -47,23 +49,25 @@ IPTV-Direct — PROGRESS.md
 5. 不新增复杂历史数据库和持久黑名单。
 6. 单个来源或候选失败不能无故阻断其他候选。
 7. "publisher.py" 独占最终准入和订阅发布。
+8. 频道分类由 "channels.txt" 动态配置，程序不得硬编码固定分类名单。
 
 三、最新测试证据
 
-Run #69：手动测试
+Run #74：手动测试
 
-项目| 结果
-Workflow| IPTV-Direct Unified Workflow
-Run 编号| #69
-Run ID| "43936399504"
-测试 Job ID| "133542025126"
-测试结果| success
-测试提交 SHA| "a0a02141c47d552cd15d0e589ee26d6e3f18ef81"
+项目 | 结果
+
+Workflow | IPTV-Direct Unified Workflow
+Run 编号 | #74
+Run ID | "43995301833"
+测试 Job ID | "133745758747"
+测试结果 | success
+测试提交 SHA | "b37374014aa3e28e153080e4abab83352c8d2a4b"
 
 核对结果
 
-- 当前 main 分支 SHA 与测试 SHA 一致。
-- 手动测试任务成功。
+- Run #74 对应提交为当时 main 分支最新提交。
+- 手动测试任务全部步骤 success。
 - Globalping 诊断任务按预期跳过。
 - 正式运行任务按预期跳过。
 - 没有创建真实 Globalping 测量。
@@ -73,15 +77,16 @@ Run ID| "43936399504"
 本次测试覆盖
 
 1. Python 语法检查。
-2. checker 专项测试。
-3. Globalping 专项测试。
-4. main 与 Globalping 交接测试。
-5. publisher 专项测试。
-6. main 跨来源候选池、批次和停止条件测试。
-7. main 正式流程异常退出测试。
-8. main 测试模式运行。
+2. 动态频道分类专项测试。
+3. checker 专项测试。
+4. Globalping 专项测试。
+5. main 与 Globalping 交接测试。
+6. publisher 专项测试。
+7. main 跨来源候选池、批次和停止条件测试。
+8. main 正式流程异常退出测试。
+9. main 测试模式运行。
 
-测试结论： 当前提交版本的自动化测试通过。
+测试结论：Run #74 对应提交的自动化测试通过。
 
 注意：自动化测试通过不代表已经完成中国大陆家庭网络实播验证，也不代表最终频道覆盖和订阅质量已经达到目标。
 
@@ -89,15 +94,18 @@ Run ID| "43936399504"
 
 本次核对的 main 分支文件：
 
-文件| SHA
-"main.py"| "46999adc5f372690c581c6dc37db294115ce1faa"
-"checker.py"| "4b1f68ff33079cfe2bd95f10367e2a0bf69e1a4f"
-"globalping.py"| "492d0ccb7a8254081bf1392d423b1f21e4b5bad6"
-"publisher.py"| "88ae8de081d2f78061baf8803d73d549bbd417ed"
-"normalizer.py"| "bdbef8afcf246949961a4d397fedc963d67624a9"
-"settings.json"| "03ab4ccb98de98b9d12946e355b5386e3df99820"
-"tests/test_main_collection.py"| "e7e8dd6b3309cbef143b7a0a7d6065be3a836f18"
-"tests/test_main_globalping.py"| "cc3b23280bf3e114c6e9acc199db14e3c89056fc"
+文件 | SHA
+
+"main.py" | "46999adc5f372690c581c6dc37db294115ce1faa"
+"collector.py" | "e609757993683036f1f734706fefb199dcd0594d"
+"checker.py" | "4b1f68ff33079cfe2bd95f10367e2a0bf69e1a4f"
+"globalping.py" | "492d0ccb7a8254081bf1392d423b1f21e4b5bad6"
+"publisher.py" | "790b593c24ad7ead1a8e196287e4023dd6e0a2c4"
+"normalizer.py" | "129ff61a51a66fc4b873b70fb0a95f3f0431387a"
+"settings.json" | "03ab4ccb98de98b9d12946e355b5386e3df99820"
+"tests/test_main_collection.py" | "e7e8dd6b3309cbef143b7a0a7d6065be3a836f18"
+"tests/test_main_globalping.py" | "cc3b23280bf3e114c6e9acc199db14e3c89056fc"
+"tests/test_channel_categories.py" | "a21b14198e55b87c1035aaa302241c33f25a94f0"
 
 以上 SHA 是本次核对时记录的文件版本。后续修改时必须重新检查仓库实际版本，不能直接假定这些 SHA 仍然是最新的。
 
@@ -188,35 +196,53 @@ main 将本地全部 PASS 候选按优选顺序交给 Globalping 检测入口，
 
 不能因为 publisher 独立测试通过，就直接认定整个端到端衔接已经验收完成。
 
+5.6 normalizer 动态频道分类
+
+已完成的修改：
+
+- 移除程序内固定的分类顺序。
+- 从 "channels.txt" 读取分类标题和顺序。
+- 支持分类名称调整。
+- 支持分类数量增减。
+- 支持分类顺序调整。
+- 支持频道归属调整。
+- 支持暂时没有频道的空分类。
+- 分类标题按不区分大小写的方式去重。
+- 拒绝空标题、重复频道、分类前出现频道、没有分类标题或没有目标频道的配置。
+
+"publisher.py" 使用 normalizer 返回的分类映射和顺序生成订阅，不需要再维护一套固定分类名单。
+
+本项已通过 Run #74 自动化测试。后续分类变化原则上只调整 "channels.txt"，不因分类名称或顺序变化修改程序代码。
+
 六、当前完整工作流程
 
 人工来源 + 自动来源
-          ↓
-     collector 采集
-          ↓
+↓
+collector 采集
+↓
 normalizer 解析、频道匹配、去重
-          ↓
-       完整候选池
-          ↓
-   checker 统一本地检测
-          ↓
-      记录质量数据
-          ↓
- main 按频道和媒体类型优选
-          ↓
- Globalping 按优选顺序检测
-          ↓
-       实时额度控制
-          ↓
-    publisher 正式准入
-          ↓
-       人工来源优先
-          ↓
-    每频道最多保留两条
-          ↓
-       生成 M3U / TXT
-          ↓
-       正式发布保护
+↓
+完整候选池
+↓
+checker 统一本地检测
+↓
+记录质量数据
+↓
+main 按频道和媒体类型优选
+↓
+Globalping 按优选顺序检测
+↓
+实时额度控制
+↓
+publisher 正式准入
+↓
+人工来源优先
+↓
+每频道最多保留两条
+↓
+生成 M3U / TXT
+↓
+正式发布保护
 
 七、下一步施工计划
 
@@ -276,22 +302,24 @@ normalizer 解析、频道匹配、去重
 
 此前 Run #64 的历史数据：
 
-项目| 数量
-有效来源| 13
-提取候选| 414
-重复候选| 136
-实际本地检测| 278
-最终输出线路| 41
-有线路频道| 24
+项目 | 数量
+
+有效来源 | 13
+提取候选 | 414
+重复候选 | 136
+实际本地检测 | 278
+最终输出线路 | 41
+有线路频道 | 24
 
 当时 Globalping 第一批检测：
 
-项目| 数量
-候选| 100
-本地 PASS| 86
-远程 PASS| 0
-远程 FAIL| 18
-远程 INCOMPLETE| 68
+项目 | 数量
+
+候选 | 100
+本地 PASS | 86
+远程 PASS | 0
+远程 FAIL | 18
+远程 INCOMPLETE | 68
 
 这次历史运行暴露出原有流程没有充分优先比较候选的问题。
 
@@ -340,7 +368,9 @@ GitHub Actions 成功、Globalping 云端检测成功，都不能直接证明中
 
 十二、当前结论
 
-Run #69 已成功，当前 main 分支与测试提交 SHA 完全一致。
+Run #74 已成功，测试提交 SHA 为 "b37374014aa3e28e153080e4abab83352c8d2a4b"。
+
+normalizer 动态频道分类修改已经通过自动化测试。分类由 "channels.txt" 决定，不再被程序固定为某一套分类名单。
 
 checker 质量观测、main 多来源候选池、同频道质量排序和 Globalping 实时额度保护均已有实际代码基础。
 
