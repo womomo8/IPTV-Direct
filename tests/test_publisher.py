@@ -204,7 +204,6 @@ class PublisherAdmissionTests(unittest.TestCase):
         self.assertEqual(result["accepted_count"], 2)
         self.assertEqual(result["rejected_count"], 1)
 
-
         urls = [
             item["normalized_url"]
             for item in result["accepted_routes"]
