@@ -1,8 +1,10 @@
+
 """IPTV-Direct：线路正式准入、频道统计和订阅内容生成。"""
 
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -24,6 +26,22 @@ MAX_ROUTES_PER_CHANNEL = 2
 
 class PublisherError(ValueError):
     """线路准入或订阅内容生成错误。"""
+
+
+def _category_map(channels: list[str]) -> dict[str, str]:
+    """读取 channels.txt 传递的唯一频道分类映射。"""
+    mapping = getattr(channels, "category_by_channel", None)
+
+    if mapping is None:
+        return {}
+
+    if not isinstance(mapping, dict):
+        raise PublisherError("频道分类映射格式错误")
+
+    if set(mapping) != set(channels):
+        raise PublisherError("频道分类映射与目标频道列表不一致")
+
+    return mapping
 
 
 def _status(checks: Any, name: str) -> str | None:
@@ -207,6 +225,10 @@ def _prepare_candidate(
         return None, reason
 
     result = dict(candidate)
+    category_map = _category_map(channels)
+
+    if category_map:
+        result["category"] = category_map[channel]
 
     # 国内真实网络验证与本地、Globalping 检测分别记录。
     # 没有实测证据时绝不标记为国内实播通过。
@@ -261,7 +283,7 @@ def process_batch(
     返回：
       results：本批逐线路准入结果。
       accepted_routes：累计保留的准入线路。
-      channel_counts：各频道累计有效线路数量。
+      channel_counts：各目标频道累计有效线路数量。
       all_channels_reached：是否全部达到线路数量目标。
     """
     if not isinstance(candidates, list):
@@ -298,7 +320,13 @@ def process_batch(
         if not isinstance(route, dict):
             raise PublisherError("累计准入数据中存在无效线路")
 
-        existing.append(dict(route))
+        saved_route = dict(route)
+        category_map = _category_map(channels)
+
+        if category_map and saved_route.get("channel") in category_map:
+            saved_route["category"] = category_map[saved_route["channel"]]
+
+        existing.append(saved_route)
 
     seen_urls = {
         route.get("normalized_url")
@@ -438,10 +466,21 @@ def _valid_output_route(
     channels: list[str],
 ) -> bool:
     """检查最终输出线路。"""
+    if not isinstance(route, dict):
+        return False
+
+    channel = route.get("channel")
+
+    if channel not in channels:
+        return False
+
+    category_map = _category_map(channels)
+
+    if category_map and route.get("category") != category_map[channel]:
+        return False
+
     return (
-        isinstance(route, dict)
-        and route.get("channel") in channels
-        and _valid_url(route.get("normalized_url"))
+        _valid_url(route.get("normalized_url"))
         and isinstance(route.get("selection"), dict)
         and route["selection"].get("status") == ACCEPTED
     )
@@ -495,10 +534,17 @@ def build_subscriptions(
 
     m3u_lines = ["#EXTM3U"]
     txt_lines = []
+    category_map = _category_map(channels)
 
     for route in ordered:
         channel = route["channel"]
         url = route["normalized_url"]
+
+        category = (
+            category_map[channel]
+            if category_map
+            else route.get("category", "")
+        )
 
         if any(char in channel for char in ("\r", "\n", ",")):
             raise PublisherError("频道名称包含不支持的格式字符")
@@ -510,7 +556,8 @@ def build_subscriptions(
             ("channel", "tvg-name"),
             ("category", "group-title"),
         ):
-            value = _safe_m3u_attribute(route.get(key))
+            raw_value = category if key == "category" else route.get(key)
+            value = _safe_m3u_attribute(raw_value)
 
             if value:
                 attributes.append(f'{attribute}="{value}"')
@@ -578,6 +625,20 @@ def validate_subscriptions(
         if channel not in channels:
             raise PublisherError("M3U 包含非目标频道")
 
+        category_map = _category_map(channels)
+
+        if category_map:
+            attributes = dict(
+                re.findall(r'([\w-]+)="([^"]*)"', extinf)
+            )
+            expected_category = category_map[channel]
+
+            if attributes.get("group-title") != expected_category:
+                raise PublisherError(
+                    f"M3U 频道分类错误：{channel}，"
+                    f"要求 {expected_category}"
+                )
+
         if not _valid_url(url):
             raise PublisherError("M3U 包含无效播放 URL")
 
@@ -624,6 +685,8 @@ def validate_subscriptions(
         raise PublisherError("订阅超过每频道 2 条线路上限")
 
     return True
+
+
 def _subscription_snapshot(m3u_text, txt_text):
     """从旧订阅自身提取频道和线路数量，并检查两份文件一致性。"""
     if not isinstance(m3u_text, str) or not isinstance(txt_text, str):
