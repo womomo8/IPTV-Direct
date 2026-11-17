@@ -1055,15 +1055,8 @@ def run_formal_flow(config: dict[str, Any]) -> int:
     accepted_routes = admission["accepted_routes"]
     admission_results = admission.get("results", [])
 
-    accepted_count = sum(
-        result.get("status") == publisher.ACCEPTED
-        for result in admission_results
-    )
-
-    rejected_count = sum(
-        result.get("status") == publisher.REJECTED
-        for result in admission_results
-    )
+    accepted_count = admission["accepted_count"]
+    rejected_count = admission["rejected_count"]
 
     print(
         f"正式准入汇总：候选 {len(detected)} 条；"
