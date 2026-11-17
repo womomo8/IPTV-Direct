@@ -993,8 +993,8 @@ def publish_subscriptions(
 
         old_data.append(data)
 
-has_m3u = old_data[0] is not None
-has_txt = old_data[1] is not None
+    has_m3u = old_data[0] is not None
+    has_txt = old_data[1] is not None
 
     if has_m3u != has_txt:
         raise PublisherError(
