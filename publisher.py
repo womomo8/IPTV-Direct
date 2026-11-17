@@ -351,7 +351,7 @@ def _rank_routes(
         ranked.extend(reordered)
 
     return ranked
-    def _prepare_candidate(
+def _prepare_candidate(
     candidate: dict[str, Any],
     channels: list[str],
 ) -> tuple[dict[str, Any] | None, str | None]:
