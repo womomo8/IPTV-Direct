@@ -589,6 +589,33 @@ class ChannelAliasTests(unittest.TestCase):
         )
         self.assertNotIn("安徽卫视", config["channels"])
 
+        def test_verified_real_source_aliases_match_configured_channels(self):
+        config = main.load_configuration(root=main.ROOT)
+        aliases = config["settings"]["aliases"]
+
+        expected_aliases = {
+            "Jade (1080p)": "翡翠台",
+            "Jade.hk@SD": "翡翠台",
+            "PhoenixInfoNewsChannel.hk@SD": "凤凰资讯台",
+            "凤凰资讯": "凤凰资讯台",
+            "Lotus TV": "澳门莲花卫视",
+            "LotusTV.mo@SD": "澳门莲花卫视",
+            "睛彩篮球「移动」": "睛彩篮球",
+            "睛彩竞技「移动」": "睛彩竞技",
+        }
+
+        for alias, canonical in expected_aliases.items():
+            with self.subTest(alias=alias):
+                self.assertEqual(aliases.get(alias), canonical)
+                self.assertEqual(
+                    _channel_match(
+                        [alias],
+                        config["channels"],
+                        aliases,
+                    ),
+                    canonical,
+                )
+
     def test_selected_channel_alias_matches_and_enters_candidate_pool(self):
         result = normalize_source_content(
             content=(
