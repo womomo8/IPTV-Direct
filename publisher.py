@@ -444,24 +444,11 @@ def process_batch(
         for channel in channels
     )
 
-
-    accepted_count = sum(
-        result.get("status") == ACCEPTED
-        for result in results
-    )
-
-    rejected_count = sum(
-        result.get("status") == REJECTED
-        for result in results
-    )
-
     return {
         "results": results,
         "accepted_routes": retained,
         "channel_counts": counts,
         "all_channels_reached": all_reached,
-        "accepted_count": accepted_count,
-        "rejected_count": rejected_count,
     }
 
 
