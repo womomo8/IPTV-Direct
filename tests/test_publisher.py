@@ -293,7 +293,7 @@ class PublisherAdmissionTests(unittest.TestCase):
                 "https://example.com/manual.m3u8",
             ],
         )
-            def test_better_automatic_route_beats_manual_route(self):
+    def test_better_automatic_route_beats_manual_route(self):
         candidates = [
             make_candidate(
                 url="https://example.com/manual-slow.m3u8",
@@ -628,7 +628,7 @@ class PublisherAdmissionTests(unittest.TestCase):
             result["results"][0]["status"],
             publisher.REJECTED,
         )
-        class MainPublisherHandoffIntegrationTests(unittest.TestCase):
+class MainPublisherHandoffIntegrationTests(unittest.TestCase):
     """验证 main 优选、Globalping 结果和真实 publisher 的完整交接。"""
 
     @staticmethod
