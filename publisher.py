@@ -351,9 +351,7 @@ def _rank_routes(
         ranked.extend(reordered)
 
     return ranked
-
-
-def _prepare_candidate(
+    def _prepare_candidate(
     candidate: dict[str, Any],
     channels: list[str],
 ) -> tuple[dict[str, Any] | None, str | None]:
@@ -497,37 +495,37 @@ def process_batch(
     }
 
     prepared = []
-    results = []
+    results = [None] * len(candidates)
 
-    # 保持 main.py 交来的候选池原始顺序。
+    # 按原始候选索引预留结果位置，确保所有结果严格保持输入顺序。
     # priority 和 source_order 仅作为来源元数据，不参与最终质量排序。
-    for candidate in candidates:
+    for candidate_index, candidate in enumerate(candidates):
         route, reason = _prepare_candidate(candidate, channels)
 
         if route is None:
-            results.append({
+            results[candidate_index] = {
                 "candidate": candidate,
                 "status": REJECTED,
                 "reason": reason,
-            })
+            }
             continue
 
         url = route["normalized_url"]
 
         if url in seen_urls:
-            results.append({
+            results[candidate_index] = {
                 "candidate": candidate,
                 "status": REJECTED,
                 "reason": "线路 URL 已存在，不重复准入",
-            })
+            }
             continue
 
         seen_urls.add(url)
-        prepared.append(route)
+        prepared.append((candidate_index, route))
 
     # 历史准入线路和本批新候选统一参与质量竞争。
     combined = _rank_routes(
-        existing + prepared,
+        existing + [route for _, route in prepared],
         channels,
     )
 
@@ -563,22 +561,25 @@ def process_batch(
         if route["normalized_url"] not in existing_urls
     }
 
-    # 为本批每条候选生成明确结果，保持本批原始候选顺序。
-    for item in prepared:
+    # 回填本批候选结果；索引槽位保证无效、重复和合格候选顺序一致。
+    for candidate_index, item in prepared:
         url = item["normalized_url"]
 
         if url in retained_new_urls:
-            results.append({
+            results[candidate_index] = {
                 "candidate": item,
                 "status": ACCEPTED,
                 "reason": item["selection"]["reason"],
-            })
+            }
         else:
-            results.append({
+            results[candidate_index] = {
                 "candidate": item,
                 "status": REJECTED,
                 "reason": "该频道已达到最多保留 2 条线路的上限",
-            })
+            }
+
+    if any(result is None for result in results):
+        raise PublisherError("本批候选结果生成不完整")
 
     all_reached = bool(channels) and all(
         counts[channel] >= MAX_ROUTES_PER_CHANNEL
@@ -603,9 +604,7 @@ def process_batch(
         "accepted_count": accepted_count,
         "rejected_count": rejected_count,
     }
-
-
-def _safe_m3u_attribute(value: Any) -> str:
+    def _safe_m3u_attribute(value: Any) -> str:
     """清理 M3U 属性值，避免破坏格式。"""
     if not isinstance(value, str):
         return ""
@@ -1016,104 +1015,4 @@ def publish_subscriptions(
 
         except (UnicodeDecodeError, PublisherError) as exc:
             raise PublisherError(
-                f"旧订阅损坏，阻止覆盖：{exc}"
-            ) from exc
-
-        if (
-            new_snapshot["channel_count"] * 2
-            < old_snapshot["channel_count"]
-        ):
-            raise PublisherError(
-                "频道数量下降超过50%，阻止发布"
-            )
-
-        if (
-            new_snapshot["route_count"] * 2
-            < old_snapshot["route_count"]
-        ):
-            raise PublisherError(
-                "线路数量下降超过50%，阻止发布"
-            )
-
-    new_data = [
-        m3u_text.encode("utf-8"),
-        txt_text.encode("utf-8"),
-    ]
-
-    staged = []
-
-    try:
-        # 先准备好两份临时文件。
-        for target, data in zip(targets, new_data):
-            staged.append(
-                _write_temp_file(
-                    directory,
-                    f".{target.name}.stage-",
-                    data,
-                )
-            )
-
-        try:
-            # 依次替换正式文件。
-            for temp_file, target in zip(staged, targets):
-                os.replace(temp_file, target)
-
-            # 重新读取正式文件。
-            actual_m3u = targets[0].read_text(
-                encoding="utf-8-sig"
-            )
-
-            actual_txt = targets[1].read_text(
-                encoding="utf-8-sig"
-            )
-
-            validate_subscriptions(
-                actual_m3u,
-                actual_txt,
-                channels,
-            )
-
-            if actual_m3u != m3u_text or actual_txt != txt_text:
-                raise PublisherError(
-                    "正式文件内容与预期不一致"
-                )
-
-            actual_snapshot = _subscription_snapshot(
-                actual_m3u,
-                actual_txt,
-            )
-
-            if actual_snapshot != new_snapshot:
-                raise PublisherError(
-                    "正式文件数量核验失败"
-                )
-
-        except Exception as publish_error:
-            rollback_errors = _restore_subscription_files(
-                targets,
-                old_data,
-                directory,
-            )
-
-            if rollback_errors:
-                raise PublisherError(
-                    f"发布失败：{publish_error}；"
-                    f"回滚失败：{'；'.join(rollback_errors)}"
-                ) from publish_error
-
-            raise PublisherError(
-                f"发布失败，旧文件已恢复：{publish_error}"
-            ) from publish_error
-
-    finally:
-        for temp_file in staged:
-            temp_file.unlink(missing_ok=True)
-
-    return {
-        "published": True,
-        "channel_count": new_snapshot["channel_count"],
-        "route_count": new_snapshot["route_count"],
-        "m3u_path": str(targets[0]),
-        "txt_path": str(targets[1]),
-        "first_publish": first_publish,
-    }
+                f"旧订阅损坏，阻止覆盖：{e
