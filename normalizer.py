@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -45,7 +44,9 @@ def load_channels(path):
             heading = line.lstrip("#").strip()
 
             if not heading:
-                raise ChannelConfigError("channels.txt 存在空分类标题")
+                raise ChannelConfigError(
+                    "channels.txt 存在空分类标题"
+                )
 
             category_key = heading.casefold()
 
@@ -74,10 +75,14 @@ def load_channels(path):
         category_by_channel[line] = current_category
 
     if not category_order:
-        raise ChannelConfigError("channels.txt 没有配置分类标题")
+        raise ChannelConfigError(
+            "channels.txt 没有配置分类标题"
+        )
 
     if not channels:
-        raise ChannelConfigError("channels.txt 没有配置目标频道")
+        raise ChannelConfigError(
+            "channels.txt 没有配置目标频道"
+        )
 
     return ChannelList(
         channels,
@@ -317,8 +322,7 @@ def parse_source_content(
         if candidate.get("channel") is not None:
             target_candidate_count += 1
 
-        # 保留原有解析函数的独立上限接口。
-        # 正式归一流程会传入 None，在 URL 验证和去重后计算额度。
+        # 只有目标频道候选才占用数量上限。
         return (
             max_candidates is not None
             and target_candidate_count > max_candidates
@@ -447,7 +451,6 @@ def normalize_source_content(
         content_type,
         max_hls_manifest_bytes,
         aliases,
-        # 不在 URL 验证、去重之前截断候选。
         max_candidates=None,
     )
 
@@ -460,7 +463,6 @@ def normalize_source_content(
 
     if parsed["recognized"]:
         for candidate in parsed["candidates"]:
-            # 非目标频道不占额度，也不进入全局去重集合。
             if candidate.get("channel") is None:
                 continue
 
@@ -476,13 +478,10 @@ def normalize_source_content(
 
             matched += 1
 
-            # 已经被本轮其他来源收录的线路不占本来源额度。
             if url in seen_urls:
                 duplicates += 1
                 continue
 
-            # 只有遇到下一条有效且全局唯一的线路，
-            # 才能确认额度真正超限。
             source_overflow = (
                 len(retained) >= max_candidates_per_source
             )
@@ -496,9 +495,7 @@ def normalize_source_content(
                 total_limited = total_overflow
                 break
 
-            # 只有正式收录的有效唯一线路才加入 seen_urls。
             seen_urls.add(url)
-
             retained.append({
                 **candidate,
                 "normalized_url": url,
@@ -521,7 +518,6 @@ def normalize_source_content(
     return {
         **parsed,
         "candidates": retained,
-        # 全局额度必须累计实际保留的有效唯一线路。
         "extracted_candidates": retained_count,
         "matched_target_candidates": matched,
         "invalid_candidates": invalid,
