@@ -198,7 +198,7 @@ class UrlAndIndexTests(unittest.TestCase):
 
         self.assertEqual(
             result,
-            ["https://index.test/list.m3u"],
+            ["https://index.test/list.m3u#first"],
         )
 
     def test_index_obeys_link_limit(self):
