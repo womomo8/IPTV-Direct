@@ -1031,7 +1031,7 @@ def run_formal_flow(config: dict[str, Any]) -> int:
     _print_detection_summary(detected)
 
     # 第三阶段：整轮只调用一次 publisher。
-    # 人工优先和每频道最多两条仍由 publisher 独占执行。
+    # publisher 独占最终质量比较、正式准入和每频道最多两条保留，不按来源身份优先。
     try:
         admission = process_admission_batch(
             candidates=detected,
