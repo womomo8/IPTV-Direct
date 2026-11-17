@@ -425,7 +425,7 @@ def _channel_counts(
             counts[channel] += 1
 
     return counts
-    def process_batch(
+def process_batch(
     candidates: list[dict[str, Any]],
     accepted_routes: list[dict[str, Any]],
     channels: list[str],
@@ -837,7 +837,7 @@ def validate_subscriptions(
         raise PublisherError("订阅超过每频道 2 条线路上限")
 
     return True
-    def _subscription_snapshot(m3u_text, txt_text):
+def _subscription_snapshot(m3u_text, txt_text):
     """从旧订阅自身提取频道和线路数量，并检查两份文件一致性。"""
     if not isinstance(m3u_text, str) or not isinstance(txt_text, str):
         raise PublisherError("旧订阅不是有效文本")
