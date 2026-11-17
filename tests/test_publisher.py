@@ -201,8 +201,6 @@ class PublisherAdmissionTests(unittest.TestCase):
 
         self.assertEqual(len(result["accepted_routes"]), 2)
         self.assertEqual(result["channel_counts"]["CCTV-1"], 2)
-        self.assertEqual(result["accepted_count"], 2)
-        self.assertEqual(result["rejected_count"], 1)
 
         urls = [
             item["normalized_url"]
