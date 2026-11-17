@@ -775,31 +775,6 @@ def process_admission_batch(
         settings=settings,
     )
 
-
-def _collection_stop_reason(
-    valid_sources: int,
-    extracted_total: int,
-    admission: dict[str, Any],
-    limits: dict[str, Any],
-) -> str | None:
-    if valid_sources >= limits["max_valid_sources"]:
-        return (
-            f"达到有效来源上限 "
-            f"{limits['max_valid_sources']}"
-        )
-
-    if extracted_total >= limits["max_candidates_total"]:
-        return (
-            f"达到全部候选总上限 "
-            f"{limits['max_candidates_total']}"
-        )
-
-    if admission.get("all_channels_reached"):
-        return "所有目标频道均已达到每频道 2 条有效线路目标"
-
-    return None
-
-
 # ----------------------------------------------------------------------
 # 正式流程：先汇集全部来源，再统一检测、优选和准入
 # ----------------------------------------------------------------------
