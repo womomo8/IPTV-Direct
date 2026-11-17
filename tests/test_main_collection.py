@@ -345,4 +345,387 @@ class MainCollectionFlowTests(unittest.TestCase):
 
         def admit(candidates, accepted_routes, channels, settings):
             received.append({
-                "candid
+                "candidates": list(candidates),
+                "accepted_routes": list(accepted_routes),
+                "channels": list(channels),
+            })
+            return self.make_admission(accepted_routes)
+
+        result, _, _, admission_mock, _, _ = self.run_flow(
+            source_stream(),
+            make_settings(),
+            admit,
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(admission_mock.call_count, 1)
+        self.assertEqual(len(received), 1)
+        self.assertEqual(len(received[0]["candidates"]), 4)
+        self.assertEqual(received[0]["accepted_routes"], [])
+        self.assertEqual(received[0]["channels"], [CHANNEL])
+
+    def test_source_failure_does_not_stop_later_sources(self):
+        def source_stream():
+            yield {
+                "source": {
+                    "name": "失败来源",
+                    "url": "https://example.test/fail.m3u",
+                    "source_type": "automatic",
+                },
+                "download": None,
+                "errors": ["模拟下载失败"],
+            }
+            yield make_source_item(1)
+
+        def admit(candidates, accepted_routes, channels, settings):
+            return self.make_admission(accepted_routes)
+
+        result, _, errors, admission_mock, _, detection_inputs = self.run_flow(
+            source_stream(),
+            make_settings(),
+            admit,
+        )
+
+        self.assertEqual(result, 0)
+        self.assertIn("模拟下载失败", errors)
+        self.assertEqual(len(detection_inputs), 1)
+        self.assertEqual(len(detection_inputs[0]["candidates"]), 1)
+        self.assertEqual(admission_mock.call_count, 1)
+
+
+class CandidateQualityRankingTests(unittest.TestCase):
+
+    @staticmethod
+    def candidate(
+        channel,
+        url,
+        media_type="HLS",
+        request_count=3,
+        success_count=3,
+        timeout_count=0,
+        elapsed=3.0,
+        read_seconds=1.0,
+        bytes_read=1000,
+        segment_total=3,
+        segment_success=3,
+    ):
+        return {
+            "channel": channel,
+            "normalized_url": url,
+            "media_type": media_type,
+            "quality": {
+                "request_count": request_count,
+                "request_success_count": success_count,
+                "timeout_count": timeout_count,
+                "total_elapsed_seconds": elapsed,
+                "total_read_seconds": read_seconds,
+                "total_bytes_read": bytes_read,
+                "segment_total": segment_total,
+                "segment_success_count": segment_success,
+            },
+        }
+
+    def test_best_candidate_in_each_channel_is_prioritized_first(self):
+        a_slow = self.candidate(
+            "频道A",
+            "https://example.test/a-slow.m3u8",
+            segment_success=1,
+            segment_total=3,
+            success_count=2,
+            timeout_count=1,
+        )
+        a_fast = self.candidate(
+            "频道A",
+            "https://example.test/a-fast.m3u8",
+            segment_success=3,
+            segment_total=3,
+            success_count=3,
+            timeout_count=0,
+        )
+        b_slow = self.candidate(
+            "频道B",
+            "https://example.test/b-slow.m3u8",
+            segment_success=1,
+            segment_total=3,
+            success_count=2,
+            timeout_count=1,
+        )
+        b_fast = self.candidate(
+            "频道B",
+            "https://example.test/b-fast.m3u8",
+            segment_success=3,
+            segment_total=3,
+            success_count=3,
+            timeout_count=0,
+        )
+
+        ranked = main.rank_candidates_for_globalping(
+            [a_slow, a_fast, b_slow, b_fast],
+            ["频道A", "频道B"],
+        )
+
+        self.assertEqual(
+            [item["normalized_url"] for item in ranked],
+            [
+                "https://example.test/a-fast.m3u8",
+                "https://example.test/b-fast.m3u8",
+                "https://example.test/a-slow.m3u8",
+                "https://example.test/b-slow.m3u8",
+            ],
+        )
+
+    def test_hls_and_direct_ts_are_not_compared_as_same_type(self):
+        hls_first = self.candidate(
+            "同一频道",
+            "https://example.test/first.m3u8",
+            media_type="HLS",
+        )
+        ts_first = self.candidate(
+            "同一频道",
+            "https://example.test/first.ts",
+            media_type="DIRECT_TS",
+            segment_total=0,
+            segment_success=0,
+        )
+        hls_second = self.candidate(
+            "同一频道",
+            "https://example.test/second.m3u8",
+            media_type="HLS",
+            segment_success=2,
+            segment_total=3,
+        )
+        ts_second = self.candidate(
+            "同一频道",
+            "https://example.test/second.ts",
+            media_type="DIRECT_TS",
+            segment_total=0,
+            segment_success=0,
+        )
+
+        ranked = main.rank_candidates_for_globalping(
+            [hls_first, ts_first, hls_second, ts_second],
+            ["同一频道"],
+        )
+
+        # 各媒体类型只在自己的组内排序，再轮流交接。
+        self.assertEqual(
+            [item["normalized_url"] for item in ranked],
+            [
+                "https://example.test/first.m3u8",
+                "https://example.test/first.ts",
+                "https://example.test/second.m3u8",
+                "https://example.test/second.ts",
+            ],
+        )
+
+    def test_missing_quality_data_keeps_original_order(self):
+        first = {
+            "channel": "频道A",
+            "normalized_url": "https://example.test/first.m3u8",
+            "media_type": "HLS",
+        }
+        second = {
+            "channel": "频道A",
+            "normalized_url": "https://example.test/second.m3u8",
+            "media_type": "HLS",
+        }
+
+        ranked = main.rank_candidates_for_globalping(
+            [first, second],
+            ["频道A"],
+        )
+
+        self.assertEqual(ranked, [first, second])
+
+
+class ChannelAliasTests(unittest.TestCase):
+
+    def test_cctv5_alias_matches_canonical_channel(self):
+        self.assertEqual(
+            _channel_match(
+                ["CCTV5"],
+                ["CCTV-5"],
+                {"CCTV5": "CCTV-5"},
+            ),
+            "CCTV-5",
+        )
+
+    def test_cctv5_plus_alias_matches_canonical_channel(self):
+        self.assertEqual(
+            _channel_match(
+                ["CCTV5+"],
+                ["CCTV-5+"],
+                {"CCTV5+": "CCTV-5+"},
+            ),
+            "CCTV-5+",
+        )
+
+    def test_cctv4_chinese_international_alias_matches_canonical_channel(self):
+        self.assertEqual(
+            _channel_match(
+                ["CCTV4中文国际"],
+                ["CCTV-4"],
+                {"CCTV4中文国际": "CCTV-4"},
+            ),
+            "CCTV-4",
+        )
+
+    def test_unknown_similar_name_does_not_fuzzy_match(self):
+        self.assertIsNone(
+            _channel_match(
+                ["CCTV5体育高清未知"],
+                ["CCTV-5"],
+                {"CCTV5": "CCTV-5"},
+            )
+        )
+
+    def test_real_configuration_accepts_unselected_channel_aliases(self):
+        config = main.load_configuration(root=main.ROOT)
+
+        self.assertIn("13873", config["settings"]["aliases"])
+        self.assertEqual(
+            config["settings"]["aliases"]["13873"],
+            "安徽卫视",
+        )
+        self.assertNotIn("安徽卫视", config["channels"])
+
+
+    def test_verified_real_source_aliases_match_configured_channels(self):
+        config = main.load_configuration(root=main.ROOT)
+        aliases = config["settings"]["aliases"]
+
+        expected_aliases = {
+            "Jade (1080p)": "翡翠台",
+            "Jade.hk@SD": "翡翠台",
+            "PhoenixInfoNewsChannel.hk@SD": "凤凰资讯台",
+            "凤凰资讯": "凤凰资讯台",
+            "Lotus TV": "澳门莲花卫视",
+            "LotusTV.mo@SD": "澳门莲花卫视",
+            "睛彩篮球「移动」": "睛彩篮球",
+            "睛彩竞技「移动」": "睛彩竞技",
+        }
+
+        for alias, canonical in expected_aliases.items():
+            with self.subTest(alias=alias):
+                self.assertEqual(aliases.get(alias), canonical)
+                self.assertEqual(
+                    _channel_match(
+                        [alias],
+                        config["channels"],
+                        aliases,
+                    ),
+                    canonical,
+                )
+    def test_selected_channel_alias_matches_and_enters_candidate_pool(self):
+        result = normalize_source_content(
+            content=(
+                '#EXTM3U\n'
+                '#EXTINF:-1 tvg-name="13873",13873\n'
+                'https://example.com/anhui.m3u8\n'
+            ),
+            source={
+                "url": "https://source.example/list.m3u",
+                "final_url": "https://source.example/list.m3u",
+                "source_type": "automatic",
+                "priority": 1,
+                "order": 0,
+            },
+            channels=["安徽卫视"],
+            max_candidates_per_source=10,
+            seen_urls=set(),
+            aliases={"13873": "安徽卫视"},
+        )
+
+        self.assertEqual(len(result["candidates"]), 1)
+        self.assertEqual(
+            result["candidates"][0]["channel"],
+            "安徽卫视",
+        )
+
+    def test_unselected_channel_alias_is_excluded_from_candidate_pool(self):
+        seen_urls = set()
+
+        result = normalize_source_content(
+            content=(
+                '#EXTM3U\n'
+                '#EXTINF:-1 tvg-name="13873",13873\n'
+                'https://example.com/anhui.m3u8\n'
+            ),
+            source={
+                "url": "https://source.example/list.m3u",
+                "final_url": "https://source.example/list.m3u",
+                "source_type": "automatic",
+                "priority": 1,
+                "order": 0,
+            },
+            channels=["CCTV-1"],
+            max_candidates_per_source=10,
+            seen_urls=seen_urls,
+            aliases={"13873": "安徽卫视"},
+        )
+
+        self.assertEqual(result["candidates"], [])
+        self.assertEqual(result["matched_target_candidates"], 0)
+        self.assertEqual(seen_urls, set())
+
+
+class CollectionStopReasonTests(unittest.TestCase):
+
+    def setUp(self):
+        self.limits = {
+            "max_valid_sources": 40,
+            "max_candidates_total": 1000,
+        }
+
+        self.admission = {
+            "all_channels_reached": False,
+        }
+
+    def test_valid_source_limit(self):
+        reason = main._collection_stop_reason(
+            40,
+            100,
+            self.admission,
+            self.limits,
+        )
+
+        self.assertEqual(reason, "达到有效来源上限 40")
+
+    def test_candidate_total_limit(self):
+        reason = main._collection_stop_reason(
+            10,
+            1000,
+            self.admission,
+            self.limits,
+        )
+
+        self.assertEqual(reason, "达到全部候选总上限 1000")
+
+    def test_channel_target_limit(self):
+        self.admission["all_channels_reached"] = True
+
+        reason = main._collection_stop_reason(
+            10,
+            100,
+            self.admission,
+            self.limits,
+        )
+
+        self.assertEqual(
+            reason,
+            "所有目标频道均已达到每频道 2 条有效线路目标",
+        )
+
+    def test_no_limit_reached(self):
+        reason = main._collection_stop_reason(
+            10,
+            100,
+            self.admission,
+            self.limits,
+        )
+
+        self.assertIsNone(reason)
+
+
+if __name__ == "__main__":
+    unittest.main()
