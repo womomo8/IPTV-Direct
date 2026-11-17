@@ -18,22 +18,26 @@ class ChannelList(list):
         self.category_by_channel = dict(category_by_channel)
 
 
+CATEGORY_ORDER = (
+    "央视频道",
+    "卫视频道",
+    "港澳台",
+    "体育频道",
+    "国外频道",
+    "其他频道",
+)
+
+
 def load_channels(path):
-    """读取频道名称及四大分组，分类信息随频道列表传递。"""
+    """严格读取六大分类及频道，分类信息随频道列表传递。"""
     try:
         lines = Path(path).read_text(encoding="utf-8-sig").splitlines()
     except OSError as exc:
         raise ChannelConfigError(f"读取 channels.txt 失败：{exc}") from exc
 
-    allowed_categories = {
-        "央视频道",
-        "卫视频道",
-        "港澳台频道",
-        "体育频道",
-    }
-
     channels = []
     category_by_channel = {}
+    heading_order = []
     current_category = None
 
     for raw_line in lines:
@@ -44,31 +48,45 @@ def load_channels(path):
 
         if line.startswith("#"):
             heading = line.lstrip("#").strip()
-            current_category = (
-                heading if heading in allowed_categories else None
-            )
+
+            if heading not in CATEGORY_ORDER:
+                raise ChannelConfigError(
+                    f"channels.txt 存在未知分类标题：{heading}"
+                )
+
+            if heading in heading_order:
+                raise ChannelConfigError(
+                    f"channels.txt 分类标题重复：{heading}"
+                )
+
+            heading_order.append(heading)
+            current_category = heading
             continue
 
-        if line not in channels:
-            channels.append(line)
+        if current_category is None:
+            raise ChannelConfigError(
+                f"频道必须放在六大分类标题下面：{line}"
+            )
 
-            if current_category:
-                category_by_channel[line] = current_category
+        if line in category_by_channel:
+            previous = category_by_channel[line]
+            raise ChannelConfigError(
+                f"频道重复配置：{line}（{previous}、{current_category}）"
+            )
+
+        channels.append(line)
+        category_by_channel[line] = current_category
+
+    if heading_order != list(CATEGORY_ORDER):
+        expected = " → ".join(CATEGORY_ORDER)
+        actual = " → ".join(heading_order) if heading_order else "无分类标题"
+        raise ChannelConfigError(
+            f"channels.txt 六大分类缺失或顺序错误；"
+            f"要求：{expected}；实际：{actual}"
+        )
 
     if not channels:
         raise ChannelConfigError("channels.txt 没有配置目标频道")
-
-    ungrouped = [
-        channel
-        for channel in channels
-        if channel not in category_by_channel
-    ]
-
-    if ungrouped:
-        preview = "、".join(ungrouped[:5])
-        raise ChannelConfigError(
-            f"channels.txt 存在未归入四大分类的频道：{preview}"
-        )
 
     return ChannelList(channels, category_by_channel)
 
