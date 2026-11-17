@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
 """IPTV-Direct：来源解析、频道匹配与 URL 归一。"""
 
@@ -11,25 +13,16 @@ class ChannelConfigError(ValueError):
 
 
 class ChannelList(list):
-    """兼容原有列表接口，同时保存 channels.txt 的频道分类。"""
+    """兼容列表接口，同时保存频道分类及分类顺序。"""
 
-    def __init__(self, channels, category_by_channel):
+    def __init__(self, channels, category_by_channel, category_order):
         super().__init__(channels)
         self.category_by_channel = dict(category_by_channel)
-
-
-CATEGORY_ORDER = (
-    "央视频道",
-    "卫视频道",
-    "港澳台",
-    "体育频道",
-    "国外频道",
-    "其他频道",
-)
+        self.category_order = tuple(category_order)
 
 
 def load_channels(path):
-    """严格读取六大分类及频道，分类信息随频道列表传递。"""
+    """从 channels.txt 动态读取分类、顺序及目标频道。"""
     try:
         lines = Path(path).read_text(encoding="utf-8-sig").splitlines()
     except OSError as exc:
@@ -37,7 +30,8 @@ def load_channels(path):
 
     channels = []
     category_by_channel = {}
-    heading_order = []
+    category_order = []
+    category_keys = set()
     current_category = None
 
     for raw_line in lines:
@@ -49,23 +43,26 @@ def load_channels(path):
         if line.startswith("#"):
             heading = line.lstrip("#").strip()
 
-            if heading not in CATEGORY_ORDER:
+            if not heading:
                 raise ChannelConfigError(
-                    f"channels.txt 存在未知分类标题：{heading}"
+                    "channels.txt 存在空分类标题"
                 )
 
-            if heading in heading_order:
+            category_key = heading.casefold()
+
+            if category_key in category_keys:
                 raise ChannelConfigError(
                     f"channels.txt 分类标题重复：{heading}"
                 )
 
-            heading_order.append(heading)
+            category_keys.add(category_key)
+            category_order.append(heading)
             current_category = heading
             continue
 
         if current_category is None:
             raise ChannelConfigError(
-                f"频道必须放在六大分类标题下面：{line}"
+                f"频道必须放在分类标题下面：{line}"
             )
 
         if line in category_by_channel:
@@ -77,18 +74,21 @@ def load_channels(path):
         channels.append(line)
         category_by_channel[line] = current_category
 
-    if heading_order != list(CATEGORY_ORDER):
-        expected = " → ".join(CATEGORY_ORDER)
-        actual = " → ".join(heading_order) if heading_order else "无分类标题"
+    if not category_order:
         raise ChannelConfigError(
-            f"channels.txt 六大分类缺失或顺序错误；"
-            f"要求：{expected}；实际：{actual}"
+            "channels.txt 没有配置分类标题"
         )
 
     if not channels:
-        raise ChannelConfigError("channels.txt 没有配置目标频道")
+        raise ChannelConfigError(
+            "channels.txt 没有配置目标频道"
+        )
 
-    return ChannelList(channels, category_by_channel)
+    return ChannelList(
+        channels,
+        category_by_channel,
+        category_order,
+    )
 
 
 def _channel_category(channels, channel):
@@ -266,8 +266,6 @@ def parse_source_content(
     )
     is_ts = _looks_like_ts(raw)
 
-    # M3U 播放列表的 MIME 类型可能以 audio/ 开头，
-    # 不能将其误判为普通音频媒体。
     is_media_type = (
         media_type.startswith(("video/", "audio/"))
         and "mpegurl" not in media_type
@@ -343,8 +341,6 @@ def parse_source_content(
             continue
 
         is_absolute_url = _is_absolute_http_url(line)
-
-        # M3U 中非注释行均按播放地址处理，支持相对 URL。
         is_m3u_url = is_m3u and not line.startswith("#")
 
         if is_absolute_url or is_m3u_url:
@@ -358,6 +354,7 @@ def parse_source_content(
                 raw_url = urljoin(base, line)
             else:
                 names = []
+                attrs = {}
                 raw_url = line
 
             channel = _channel_match(names, channels, aliases)
@@ -490,6 +487,7 @@ def normalize_source_content(
         for candidate in parsed["candidates"]
         if candidate["channel"] is not None
     ][:limit]
+
     retained = []
     duplicates = 0
     matched = 0
@@ -503,7 +501,6 @@ def normalize_source_content(
             )
             continue
 
-        # 未匹配频道的 URL 不占用全局去重记录。
         if candidate["channel"] is None:
             continue
 
