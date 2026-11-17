@@ -177,7 +177,6 @@ class MainCollectionFlowTests(unittest.TestCase):
         )
 
     @staticmethod
-    @staticmethod
     def make_admission(
         accepted_routes,
         all_channels_reached=False,
@@ -189,8 +188,6 @@ class MainCollectionFlowTests(unittest.TestCase):
             "channel_counts": {CHANNEL: count},
             "all_channels_reached": all_channels_reached,
             "results": [],
-            "accepted_count": 0,
-            "rejected_count": 0,
         }
 
     def test_aliases_are_passed_to_normalizer(self):
