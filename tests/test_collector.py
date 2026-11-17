@@ -349,4 +349,162 @@ class IterSourceContentsTests(unittest.TestCase):
         def fake_download(url, *args):
             return {
                 "url": url,
-                "final_url
+                "final_url": url,
+                "content": b"playlist",
+                "content_type": "text/plain",
+                "http_status": 200,
+                "truncated_media_probe": False,
+            }
+
+        with patch(
+            "collector.download_url",
+            side_effect=fake_download,
+        ) as mocked:
+            results = list(
+                collector.iter_source_contents(
+                    manual, automatic, make_settings()
+                )
+            )
+
+        self.assertEqual(
+            [item["source"]["name"] for item in results],
+            ["内嵌来源", "人工 URL", "自动 URL"],
+        )
+        self.assertEqual(
+            results[0]["download"]["http_status"],
+            "LOCAL",
+        )
+        self.assertEqual(mocked.call_count, 2)
+
+    def test_one_failed_source_does_not_stop_later_sources(self):
+        sources = [
+            {
+                "url": "https://bad.test/a.m3u",
+                "name": "坏来源",
+                "mode": "manual",
+            },
+            {
+                "url": "https://good.test/a.m3u",
+                "name": "好来源",
+                "mode": "manual",
+            },
+        ]
+
+        def fake_download(url, *args):
+            if "bad.test" in url:
+                raise collector.SourceDownloadError("模拟失败")
+
+            return {
+                "url": url,
+                "final_url": url,
+                "content": b"ok",
+                "content_type": "text/plain",
+                "http_status": 200,
+                "truncated_media_probe": False,
+            }
+
+        with patch(
+            "collector.download_url",
+            side_effect=fake_download,
+        ):
+            results = list(
+                collector.iter_source_contents(
+                    sources, [], make_settings()
+                )
+            )
+
+        self.assertIsNone(results[0]["download"])
+        self.assertIn("模拟失败", results[0]["errors"][0])
+        self.assertIsNotNone(results[1]["download"])
+
+    def test_index_source_expands_links(self):
+        index = {
+            "url": "https://index.test/page.html",
+            "name": "索引来源",
+            "mode": "index",
+        }
+
+        index_content = (
+            b'<a href="/a.m3u">A</a>'
+            b'<a href="/b.m3u8">B</a>'
+        )
+
+        def fake_download(url, *args):
+            content = (
+                index_content
+                if url == index["url"]
+                else b"playlist"
+            )
+
+            return {
+                "url": url,
+                "final_url": url,
+                "content": content,
+                "content_type": (
+                    "text/html"
+                    if url == index["url"]
+                    else "text/plain"
+                ),
+                "http_status": 200,
+                "truncated_media_probe": False,
+            }
+
+        with patch(
+            "collector.download_url",
+            side_effect=fake_download,
+        ) as mocked:
+            results = list(
+                collector.iter_source_contents(
+                    [], [index], make_settings()
+                )
+            )
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual(
+            [item["source"]["url"] for item in results],
+            [
+                "https://index.test/a.m3u",
+                "https://index.test/b.m3u8",
+            ],
+        )
+        self.assertEqual(mocked.call_count, 3)
+
+    def test_duplicate_sources_are_downloaded_once(self):
+        manual = [{
+            "url": "https://same.test/list.m3u#fragment",
+            "name": "人工",
+            "mode": "manual",
+        }]
+
+        automatic = [{
+            "url": "https://same.test/list.m3u",
+            "name": "自动",
+            "mode": "playlist",
+        }]
+
+        def fake_download(url, *args):
+            return {
+                "url": url,
+                "final_url": url,
+                "content": b"playlist",
+                "content_type": "text/plain",
+                "http_status": 200,
+                "truncated_media_probe": False,
+            }
+
+        with patch(
+            "collector.download_url",
+            side_effect=fake_download,
+        ) as mocked:
+            results = list(
+                collector.iter_source_contents(
+                    manual, automatic, make_settings()
+                )
+            )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(mocked.call_count, 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
