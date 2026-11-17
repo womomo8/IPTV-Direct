@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -44,9 +45,7 @@ def load_channels(path):
             heading = line.lstrip("#").strip()
 
             if not heading:
-                raise ChannelConfigError(
-                    "channels.txt 存在空分类标题"
-                )
+                raise ChannelConfigError("channels.txt 存在空分类标题")
 
             category_key = heading.casefold()
 
@@ -75,14 +74,10 @@ def load_channels(path):
         category_by_channel[line] = current_category
 
     if not category_order:
-        raise ChannelConfigError(
-            "channels.txt 没有配置分类标题"
-        )
+        raise ChannelConfigError("channels.txt 没有配置分类标题")
 
     if not channels:
-        raise ChannelConfigError(
-            "channels.txt 没有配置目标频道"
-        )
+        raise ChannelConfigError("channels.txt 没有配置目标频道")
 
     return ChannelList(
         channels,
@@ -322,7 +317,8 @@ def parse_source_content(
         if candidate.get("channel") is not None:
             target_candidate_count += 1
 
-        # 只有目标频道候选才占用数量上限。
+        # 保留原有解析函数的独立上限接口。
+        # 正式归一流程会传入 None，在 URL 验证和去重后计算额度。
         return (
             max_candidates is not None
             and target_candidate_count > max_candidates
@@ -429,7 +425,7 @@ def normalize_source_content(
     aliases=None,
     max_candidates_remaining=None,
 ):
-    """执行候选上限、频道过滤、URL 归一和全局去重。"""
+    """只让有效且全局唯一的目标频道 URL 占用候选额度。"""
     for value, name in (
         (max_candidates_per_source, "单来源候选上限"),
         (max_candidates_remaining, "本轮剩余候选额度"),
@@ -444,11 +440,6 @@ def normalize_source_content(
     if not isinstance(seen_urls, set):
         raise TypeError("seen_urls 必须是整轮共用的 set")
 
-    limit = max_candidates_per_source
-
-    if max_candidates_remaining is not None:
-        limit = min(limit, max_candidates_remaining)
-
     parsed = parse_source_content(
         content,
         source,
@@ -456,83 +447,86 @@ def normalize_source_content(
         content_type,
         max_hls_manifest_bytes,
         aliases,
-        limit,
+        # 不在 URL 验证、去重之前截断候选。
+        max_candidates=None,
     )
-
-    if not parsed["recognized"]:
-        return {
-            **parsed,
-            "extracted_candidates": 0,
-            "matched_target_candidates": 0,
-            "duplicate_candidates": 0,
-            "retained_candidates": 0,
-            "limit_reached": False,
-        }
-
-    target_candidate_count = sum(
-        candidate["channel"] is not None
-        for candidate in parsed["candidates"]
-    )
-
-    source_limited = (
-        target_candidate_count > max_candidates_per_source
-    )
-    total_limited = (
-        max_candidates_remaining is not None
-        and target_candidate_count > max_candidates_remaining
-    )
-
-    selected = [
-        candidate
-        for candidate in parsed["candidates"]
-        if candidate["channel"] is not None
-    ][:limit]
 
     retained = []
     duplicates = 0
     matched = 0
+    invalid = 0
+    source_limited = False
+    total_limited = False
 
-    for candidate in selected:
-        try:
-            url = normalize_url(candidate["raw_url"])
-        except (TypeError, ValueError):
-            parsed["errors"].append(
-                f"无效线路 URL：{candidate.get('raw_url', '')[:100]}"
+    if parsed["recognized"]:
+        for candidate in parsed["candidates"]:
+            # 非目标频道不占额度，也不进入全局去重集合。
+            if candidate.get("channel") is None:
+                continue
+
+            try:
+                url = normalize_url(candidate.get("raw_url"))
+            except (TypeError, ValueError):
+                invalid += 1
+                parsed["errors"].append(
+                    f"无效线路 URL："
+                    f"{str(candidate.get('raw_url', ''))[:100]}"
+                )
+                continue
+
+            matched += 1
+
+            # 已经被本轮其他来源收录的线路不占本来源额度。
+            if url in seen_urls:
+                duplicates += 1
+                continue
+
+            # 只有遇到下一条有效且全局唯一的线路，
+            # 才能确认额度真正超限。
+            source_overflow = (
+                len(retained) >= max_candidates_per_source
             )
-            continue
+            total_overflow = (
+                max_candidates_remaining is not None
+                and len(retained) >= max_candidates_remaining
+            )
 
-        if candidate["channel"] is None:
-            continue
+            if source_overflow or total_overflow:
+                source_limited = source_overflow
+                total_limited = total_overflow
+                break
 
-        matched += 1
+            # 只有正式收录的有效唯一线路才加入 seen_urls。
+            seen_urls.add(url)
 
-        if url in seen_urls:
-            duplicates += 1
-            continue
-
-        seen_urls.add(url)
-        retained.append({
-            **candidate,
-            "normalized_url": url,
-        })
+            retained.append({
+                **candidate,
+                "normalized_url": url,
+            })
 
     if source_limited:
         parsed["errors"].append(
             f"达到单来源候选上限 {max_candidates_per_source}，"
-            "其余候选不再处理"
+            "其余有效唯一候选不再处理"
         )
 
     if total_limited:
         parsed["errors"].append(
-            "达到本轮剩余候选额度，其余候选不再处理"
+            f"达到本轮剩余候选额度 {max_candidates_remaining}，"
+            "其余有效唯一候选不再处理"
         )
+
+    retained_count = len(retained)
 
     return {
         **parsed,
         "candidates": retained,
-        "extracted_candidates": len(selected),
+        # 全局额度必须累计实际保留的有效唯一线路。
+        "extracted_candidates": retained_count,
         "matched_target_candidates": matched,
+        "invalid_candidates": invalid,
         "duplicate_candidates": duplicates,
-        "retained_candidates": len(retained),
+        "retained_candidates": retained_count,
         "limit_reached": source_limited,
+        "total_limit_reached": total_limited,
     }
