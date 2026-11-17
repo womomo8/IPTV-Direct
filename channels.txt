@@ -1,3 +1,4 @@
+
 # 央视频道
 CCTV-1
 CCTV-2
@@ -52,5 +53,7 @@ Fox Sports 1
 Sky Sports F1
 TNT Sports 1
 The NBA Channel
+FIFA+
+Red Bull TV
 
 # 其他频道
