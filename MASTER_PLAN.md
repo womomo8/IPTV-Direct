@@ -181,7 +181,12 @@ main.py 只能依据 publisher 返回的正式累计统计决定是否满足频�
 
 4.2 manual.txt
 
-每行一个 HTTP/HTTPS 地址，支持直接直播 URL、TXT 订阅和 M3U 频道订阅。
+支持以下人工来源：
+
+- 每行一个 HTTP/HTTPS 地址；
+- TXT 订阅；
+- M3U 频道订阅；
+- 文件内嵌 M3U：以 #EXTM3U 开始，以 #END-M3U 结束，作为本地内容直接交给后续解析，不进行网络下载。
 
 TXT 可使用每行一个有可靠频道信息的 URL，或“频道名称,URL”。
 
