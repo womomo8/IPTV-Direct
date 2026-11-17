@@ -23,6 +23,7 @@ def make_candidate(
     media_type="HLS",
     local_status="PASS",
     global_status="PASS",
+    quality=None,
 ):
     """构造完整的线路检测结果。"""
 
@@ -59,25 +60,22 @@ def make_candidate(
             "status": global_status,
             "checks": remote_checks,
         },
+        "quality": quality,
     }
 
 
 class PublisherAdmissionTests(unittest.TestCase):
 
-    def process(self, candidates):
+    def process(self, candidates, accepted_routes=None):
         return publisher.process_batch(
             candidates=candidates,
-            accepted_routes=[],
+            accepted_routes=accepted_routes or [],
             channels=CHANNELS,
             settings=SETTINGS,
         )
 
     def test_hls_all_checks_pass_is_accepted(self):
-        """HLS 本地适用检测全部通过，Globalping 通过，应准入。"""
-
-        result = self.process([
-            make_candidate()
-        ])
+        result = self.process([make_candidate()])
 
         self.assertEqual(len(result["accepted_routes"]), 1)
         self.assertEqual(
@@ -86,8 +84,6 @@ class PublisherAdmissionTests(unittest.TestCase):
         )
 
     def test_direct_ts_with_hls_na_is_accepted(self):
-        """直接 TS 的 HLS 必须为 N/A，其余适用检测通过。"""
-
         candidate = make_candidate(
             url="https://example.com/live.ts",
             media_type="DIRECT_TS",
@@ -102,11 +98,9 @@ class PublisherAdmissionTests(unittest.TestCase):
         )
 
     def test_local_failure_is_rejected(self):
-        """本地任一适用检测失败，不得准入。"""
-
-        candidate = make_candidate(local_status="FAIL")
-
-        result = self.process([candidate])
+        result = self.process([
+            make_candidate(local_status="FAIL")
+        ])
 
         self.assertEqual(len(result["accepted_routes"]), 0)
         self.assertEqual(
@@ -115,11 +109,9 @@ class PublisherAdmissionTests(unittest.TestCase):
         )
 
     def test_globalping_failure_is_rejected(self):
-        """Globalping 明确失败，不得准入。"""
-
-        candidate = make_candidate(global_status="FAIL")
-
-        result = self.process([candidate])
+        result = self.process([
+            make_candidate(global_status="FAIL")
+        ])
 
         self.assertEqual(len(result["accepted_routes"]), 0)
         self.assertEqual(
@@ -128,8 +120,6 @@ class PublisherAdmissionTests(unittest.TestCase):
         )
 
     def test_globalping_incomplete_can_be_accepted(self):
-        """Globalping 未完成时，符合降级规则的线路可以准入。"""
-
         candidate = make_candidate(global_status="INCOMPLETE")
 
         candidate["globalping"]["checks"]["ipv4"]["status"] = "PASS"
@@ -146,9 +136,7 @@ class PublisherAdmissionTests(unittest.TestCase):
         )
 
     def test_globalping_pass_with_incomplete_check_is_rejected(self):
-        """总体 PASS 但适用分项 INCOMPLETE，必须拒绝。"""
-
-        candidate = make_candidate(global_status="PASS")
+        candidate = make_candidate()
         candidate["globalping"]["checks"]["http"]["status"] = "INCOMPLETE"
 
         result = self.process([candidate])
@@ -160,8 +148,6 @@ class PublisherAdmissionTests(unittest.TestCase):
         )
 
     def test_globalping_incomplete_with_failed_check_is_rejected(self):
-        """总体 INCOMPLETE 但适用分项 FAIL，必须拒绝。"""
-
         candidate = make_candidate(global_status="INCOMPLETE")
         candidate["globalping"]["checks"]["http"]["status"] = "FAIL"
 
@@ -174,8 +160,6 @@ class PublisherAdmissionTests(unittest.TestCase):
         )
 
     def test_unknown_media_type_is_rejected(self):
-        """未知媒体类型不得进入正式订阅。"""
-
         candidate = make_candidate()
         candidate["media_type"] = "UNKNOWN"
 
@@ -188,8 +172,6 @@ class PublisherAdmissionTests(unittest.TestCase):
         )
 
     def test_duplicate_url_is_not_accepted_twice(self):
-        """同一 URL 不得重复准入。"""
-
         first = make_candidate(
             url="https://example.com/same.m3u8",
             source_order=0,
@@ -205,8 +187,6 @@ class PublisherAdmissionTests(unittest.TestCase):
         self.assertEqual(result["channel_counts"]["CCTV-1"], 1)
 
     def test_channel_keeps_at_most_two_routes(self):
-        """每个频道最多保留两条线路。"""
-
         candidates = [
             make_candidate(
                 url="https://example.com/auto.m3u8",
@@ -230,22 +210,18 @@ class PublisherAdmissionTests(unittest.TestCase):
         self.assertEqual(len(result["accepted_routes"]), 2)
         self.assertEqual(result["channel_counts"]["CCTV-1"], 2)
 
-        urls = [
-            item["normalized_url"]
-            for item in result["accepted_routes"]
-        ]
-
         self.assertEqual(
-            urls,
             [
+                item["normalized_url"]
+                for item in result["accepted_routes"]
+            ],
+            [
+                "https://example.com/auto.m3u8",
                 "https://example.com/manual-1.m3u8",
-                "https://example.com/manual-2.m3u8",
             ],
         )
 
-    def test_manual_source_has_priority(self):
-        """人工来源必须优先于自动来源。"""
-
+    def test_missing_quality_preserves_original_candidate_order(self):
         candidates = [
             make_candidate(
                 url="https://example.com/automatic.m3u8",
@@ -262,13 +238,186 @@ class PublisherAdmissionTests(unittest.TestCase):
         result = self.process(candidates)
 
         self.assertEqual(
+            [
+                item["normalized_url"]
+                for item in result["accepted_routes"]
+            ],
+            [
+                "https://example.com/automatic.m3u8",
+                "https://example.com/manual.m3u8",
+            ],
+        )
+
+    def test_better_automatic_route_beats_manual_route(self):
+        candidates = [
+            make_candidate(
+                url="https://example.com/manual-slow.m3u8",
+                priority=0,
+                quality={
+                    "request_count": 3,
+                    "request_success_count": 2,
+                    "timeout_count": 1,
+                    "total_elapsed_seconds": 12.0,
+                    "total_read_seconds": 9.0,
+                    "total_bytes_read": 1000,
+                    "segment_total": 3,
+                    "segment_success_count": 1,
+                },
+            ),
+            make_candidate(
+                url="https://example.com/automatic-fast.m3u8",
+                priority=1,
+                quality={
+                    "request_count": 3,
+                    "request_success_count": 3,
+                    "timeout_count": 0,
+                    "total_elapsed_seconds": 3.0,
+                    "total_read_seconds": 1.5,
+                    "total_bytes_read": 3000,
+                    "segment_total": 3,
+                    "segment_success_count": 3,
+                },
+            ),
+        ]
+
+        result = self.process(candidates)
+
+        self.assertEqual(
             result["accepted_routes"][0]["normalized_url"],
-            "https://example.com/manual.m3u8",
+            "https://example.com/automatic-fast.m3u8",
+        )
+
+    def test_better_manual_route_beats_automatic_route(self):
+        candidates = [
+            make_candidate(
+                url="https://example.com/automatic-slow.m3u8",
+                priority=1,
+                quality={
+                    "request_count": 3,
+                    "request_success_count": 2,
+                    "timeout_count": 1,
+                    "total_elapsed_seconds": 12.0,
+                    "total_read_seconds": 9.0,
+                    "total_bytes_read": 1000,
+                    "segment_total": 3,
+                    "segment_success_count": 1,
+                },
+            ),
+            make_candidate(
+                url="https://example.com/manual-fast.m3u8",
+                priority=0,
+                quality={
+                    "request_count": 3,
+                    "request_success_count": 3,
+                    "timeout_count": 0,
+                    "total_elapsed_seconds": 3.0,
+                    "total_read_seconds": 1.5,
+                    "total_bytes_read": 3000,
+                    "segment_total": 3,
+                    "segment_success_count": 3,
+                },
+            ),
+        ]
+
+        result = self.process(candidates)
+
+        self.assertEqual(
+            result["accepted_routes"][0]["normalized_url"],
+            "https://example.com/manual-fast.m3u8",
+        )
+
+    def test_hls_segment_quality_does_not_compare_with_direct_ts(self):
+        candidates = [
+            make_candidate(
+                url="https://example.com/hls.m3u8",
+                media_type="HLS",
+                quality={
+                    "request_count": 3,
+                    "request_success_count": 3,
+                    "timeout_count": 0,
+                    "total_elapsed_seconds": 3.0,
+                    "total_read_seconds": 1.5,
+                    "total_bytes_read": 3000,
+                    "segment_total": 3,
+                    "segment_success_count": 3,
+                },
+            ),
+            make_candidate(
+                url="https://example.com/direct.ts",
+                media_type="DIRECT_TS",
+                quality={
+                    "request_count": 3,
+                    "request_success_count": 3,
+                    "timeout_count": 0,
+                    "total_elapsed_seconds": 2.0,
+                    "total_read_seconds": 1.0,
+                    "total_bytes_read": 3000,
+                    "segment_total": 0,
+                    "segment_success_count": 0,
+                },
+            ),
+        ]
+
+        result = self.process(candidates)
+
+        urls = [
+            item["normalized_url"]
+            for item in result["accepted_routes"]
+        ]
+
+        # 两种媒体类型各自排序，不跨类型交换位置。
+        self.assertEqual(
+            urls,
+            [
+                "https://example.com/hls.m3u8",
+                "https://example.com/direct.ts",
+            ],
+        )
+
+    def test_existing_route_competes_with_new_candidate_by_quality(self):
+        old_route = make_candidate(
+            url="https://example.com/old-slow.m3u8",
+            quality={
+                "request_count": 3,
+                "request_success_count": 2,
+                "timeout_count": 1,
+                "total_elapsed_seconds": 12.0,
+                "total_read_seconds": 9.0,
+                "total_bytes_read": 1000,
+                "segment_total": 3,
+                "segment_success_count": 1,
+            },
+        )
+        old_route["selection"] = {"status": publisher.ACCEPTED}
+
+        new_route = make_candidate(
+            url="https://example.com/new-fast.m3u8",
+            quality={
+                "request_count": 3,
+                "request_success_count": 3,
+                "timeout_count": 0,
+                "total_elapsed_seconds": 3.0,
+                "total_read_seconds": 1.5,
+                "total_bytes_read": 3000,
+                "segment_total": 3,
+                "segment_success_count": 3,
+            },
+        )
+
+        result = self.process(
+            [new_route],
+            accepted_routes=[old_route],
+        )
+
+        self.assertEqual(
+            [
+                item["normalized_url"]
+                for item in result["accepted_routes"]
+            ],
+            ["https://example.com/new-fast.m3u8"],
         )
 
     def test_domestic_verification_is_not_fabricated(self):
-        """没有国内实测证据时，必须标记 NOT_VERIFIED。"""
-
         result = self.process([make_candidate()])
 
         verification = result["accepted_routes"][0][
@@ -281,8 +430,6 @@ class PublisherAdmissionTests(unittest.TestCase):
         )
 
     def test_subscription_outputs_are_consistent(self):
-        """M3U 和 TXT 必须来自同一份准入线路数据。"""
-
         result = self.process([
             make_candidate(),
             make_candidate(
@@ -309,18 +456,36 @@ class PublisherAdmissionTests(unittest.TestCase):
             )
         )
 
-    def test_subscription_rejects_mismatched_content(self):
-        """M3U 与 TXT 内容不一致时必须报错。"""
+    def test_subscription_keeps_publisher_route_order(self):
+        first = make_candidate(
+            url="https://example.com/first.m3u8",
+        )
+        second = make_candidate(
+            url="https://example.com/second.m3u8",
+            priority=0,
+        )
 
+        for route in (first, second):
+            route["selection"] = {"status": publisher.ACCEPTED}
+
+        output = publisher.build_subscriptions(
+            [first, second],
+            CHANNELS,
+        )
+
+        self.assertLess(
+            output["m3u"].index("https://example.com/first.m3u8"),
+            output["m3u"].index("https://example.com/second.m3u8"),
+        )
+
+    def test_subscription_rejects_mismatched_content(self):
         m3u = (
             "#EXTM3U\n"
             "#EXTINF:-1,CCTV-1\n"
             "https://example.com/live.m3u8\n"
         )
 
-        txt = (
-            "CCTV-5,https://example.com/live.m3u8\n"
-        )
+        txt = "CCTV-5,https://example.com/live.m3u8\n"
 
         with self.assertRaises(publisher.PublisherError):
             publisher.validate_subscriptions(
@@ -330,14 +495,10 @@ class PublisherAdmissionTests(unittest.TestCase):
             )
 
     def test_empty_subscription_generation_is_rejected(self):
-        """没有任何准入线路时，不得生成空订阅。"""
-
         with self.assertRaises(publisher.PublisherError):
             publisher.build_subscriptions([], CHANNELS)
 
     def test_empty_subscription_content_is_rejected(self):
-        """M3U只有文件头、TXT为空时，必须拒绝。"""
-
         with self.assertRaises(publisher.PublisherError):
             publisher.validate_subscriptions(
                 "#EXTM3U\n",
@@ -346,8 +507,6 @@ class PublisherAdmissionTests(unittest.TestCase):
             )
 
     def test_invalid_channel_limit_is_rejected(self):
-        """每频道线路上限不得偏离正式标准 2。"""
-
         invalid_settings = {
             "selection": {
                 "max_routes_per_channel": 3,
@@ -363,13 +522,9 @@ class PublisherAdmissionTests(unittest.TestCase):
             )
 
     def test_invalid_url_is_rejected(self):
-        """无效播放地址不得准入。"""
-
-        candidate = make_candidate(
-            url="not-a-valid-url"
-        )
-
-        result = self.process([candidate])
+        result = self.process([
+            make_candidate(url="not-a-valid-url")
+        ])
 
         self.assertEqual(len(result["accepted_routes"]), 0)
         self.assertEqual(
@@ -433,13 +588,12 @@ class MainPublisherHandoffIntegrationTests(unittest.TestCase):
             },
         }
 
-    def test_quality_order_and_publisher_priority_are_both_preserved(self):
+    def test_quality_order_and_publisher_quality_selection(self):
         """
         Globalping 按质量优先检测；
         main 恢复原始候选顺序；
-        publisher 仍按人工来源和来源顺序准入。
+        publisher 最终按真实质量选留线路。
         """
-
         auto_best = make_candidate(
             url="https://example.com/auto-best.m3u8",
             priority=1,
@@ -517,7 +671,6 @@ class MainPublisherHandoffIntegrationTests(unittest.TestCase):
             channels=["CCTV-1"],
         )
 
-        # 第一层：Globalping 收到的是同频道质量优先顺序。
         self.assertEqual(
             remote_order,
             [
@@ -527,7 +680,6 @@ class MainPublisherHandoffIntegrationTests(unittest.TestCase):
             ],
         )
 
-        # 第二层：main 返回时恢复候选池原始顺序。
         self.assertEqual(
             [
                 item["normalized_url"]
@@ -540,7 +692,6 @@ class MainPublisherHandoffIntegrationTests(unittest.TestCase):
             ],
         )
 
-        # 第三层：真实 publisher 执行人工优先、来源顺序和数量上限。
         admission = main.process_admission_batch(
             candidates=detected,
             accepted_routes=[],
@@ -556,36 +707,30 @@ class MainPublisherHandoffIntegrationTests(unittest.TestCase):
         self.assertEqual(
             accepted_urls,
             [
-                "https://example.com/manual-slow.m3u8",
+                "https://example.com/auto-best.m3u8",
                 "https://example.com/auto-first.m3u8",
             ],
         )
 
         self.assertEqual(admission["channel_counts"]["CCTV-1"], 2)
 
-        # 自动来源中，source_order=0 的线路优先于 source_order=1。
-        # 质量最好的 auto_best 不得绕过已确定的来源顺序政策。
         self.assertNotIn(
-            "https://example.com/auto-best.m3u8",
+            "https://example.com/manual-slow.m3u8",
             accepted_urls,
         )
 
-        # 本地质量数据和 Globalping 结果必须完整保留到正式准入结果。
-        accepted_auto = admission["accepted_routes"][1]
+        accepted_auto = admission["accepted_routes"][0]
 
         self.assertEqual(
             accepted_auto["quality"],
-            auto_first["quality"],
+            auto_best["quality"],
         )
         self.assertEqual(
             accepted_auto["globalping"]["status"],
             "PASS",
         )
 
-        self.assertEqual(
-            len(admission["results"]),
-            3,
-        )
+        self.assertEqual(len(admission["results"]), 3)
 
 
 if __name__ == "__main__":
