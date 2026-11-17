@@ -1,3 +1,4 @@
+
 """normalizer.py 候选额度与 URL 去重测试。"""
 
 import unittest
@@ -222,6 +223,7 @@ class NormalizerCandidateLimitTests(unittest.TestCase):
             [
                 (CHANNEL, "https://example.com/a"),
                 (CHANNEL, "https://example.com/c"),
+                (CHANNEL, "https://example.com/d"),
             ],
             seen_urls,
             source_limit=100,
