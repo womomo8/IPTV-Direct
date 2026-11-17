@@ -10,23 +10,81 @@ class ChannelConfigError(ValueError):
     """目标频道配置错误。"""
 
 
+class ChannelList(list):
+    """兼容原有列表接口，同时保存 channels.txt 的频道分类。"""
+
+    def __init__(self, channels, category_by_channel):
+        super().__init__(channels)
+        self.category_by_channel = dict(category_by_channel)
+
+
 def load_channels(path):
-    """读取 channels.txt，每行一个频道名称。"""
+    """读取频道名称及四大分组，分类信息随频道列表传递。"""
     try:
         lines = Path(path).read_text(encoding="utf-8-sig").splitlines()
     except OSError as exc:
         raise ChannelConfigError(f"读取 channels.txt 失败：{exc}") from exc
 
-    channels = list(dict.fromkeys(
-        line.strip()
-        for line in lines
-        if line.strip() and not line.lstrip().startswith("#")
-    ))
+    allowed_categories = {
+        "央视频道",
+        "卫视频道",
+        "港澳台频道",
+        "体育频道",
+    }
+
+    channels = []
+    category_by_channel = {}
+    current_category = None
+
+    for raw_line in lines:
+        line = raw_line.strip()
+
+        if not line:
+            continue
+
+        if line.startswith("#"):
+            heading = line.lstrip("#").strip()
+            current_category = (
+                heading if heading in allowed_categories else None
+            )
+            continue
+
+        if line not in channels:
+            channels.append(line)
+
+            if current_category:
+                category_by_channel[line] = current_category
 
     if not channels:
         raise ChannelConfigError("channels.txt 没有配置目标频道")
 
-    return channels
+    ungrouped = [
+        channel
+        for channel in channels
+        if channel not in category_by_channel
+    ]
+
+    if ungrouped:
+        preview = "、".join(ungrouped[:5])
+        raise ChannelConfigError(
+            f"channels.txt 存在未归入四大分类的频道：{preview}"
+        )
+
+    return ChannelList(channels, category_by_channel)
+
+
+def _channel_category(channels, channel):
+    """只读取目标频道配置中的分类，不采信直播源自带分类。"""
+    if not channel:
+        return ""
+
+    category_by_channel = getattr(
+        channels,
+        "category_by_channel",
+        {},
+    )
+
+    return category_by_channel.get(channel, "")
 
 
 def _is_absolute_http_url(value):
@@ -291,7 +349,7 @@ def parse_source_content(
                 "raw_url": raw_url,
                 "tvg_id": attrs.get("tvg-id", "") if is_m3u else "",
                 "tvg_name": attrs.get("tvg-name", "") if is_m3u else "",
-                "category": attrs.get("group-title", "") if is_m3u else "",
+                "category": _channel_category(channels, channel),
                 "source_url": source.get("url", ""),
                 "source_type": source.get("source_type", ""),
                 "priority": source.get("priority", 1),
@@ -320,7 +378,7 @@ def parse_source_content(
                     "raw_url": url,
                     "tvg_id": "",
                     "tvg_name": name,
-                    "category": "",
+                    "category": _channel_category(channels, channel),
                     "source_url": source.get("url", ""),
                     "source_type": source.get("source_type", ""),
                     "priority": source.get("priority", 1),
