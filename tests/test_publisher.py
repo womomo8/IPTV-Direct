@@ -372,6 +372,7 @@ class PublisherAdmissionTests(unittest.TestCase):
             "https://example.com/manual-fast.m3u8",
         )
 
+
     def test_hls_and_direct_ts_are_ranked_independently(self):
         candidates = [
             make_candidate(
@@ -432,11 +433,11 @@ class PublisherAdmissionTests(unittest.TestCase):
             ),
         ]
 
-        result = self.process(candidates)
+        ranked = publisher._rank_routes(candidates, CHANNELS)
 
         urls = [
             item["normalized_url"]
-            for item in result["accepted_routes"]
+            for item in ranked
         ]
 
         # HLS 只在 HLS 的原位置槽内按分片质量排序。
@@ -451,6 +452,7 @@ class PublisherAdmissionTests(unittest.TestCase):
                 "https://example.com/direct-slow.ts",
             ],
         )
+
 
     def test_existing_routes_compete_with_new_candidate_by_quality(self):
         old_slowest = make_candidate(
