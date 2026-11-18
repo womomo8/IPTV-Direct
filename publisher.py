@@ -9,9 +9,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from normalizer import normalize_url
-
-
 PASS = "PASS"
 FAIL = "FAIL"
 INCOMPLETE = "INCOMPLETE"
@@ -55,27 +52,58 @@ def _status(checks: Any, name: str) -> str | None:
     value = item.get("status")
     return value if isinstance(value, str) else None
 
-
 def _valid_url(value: Any) -> bool:
-    """确认候选 URL 是规范化后的有效 HTTP/HTTPS 地址。"""
-    if not isinstance(value, str) or not value:
+    """确认候选 URL 是有效且已规范化的 HTTP/HTTPS 地址。"""
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or any(char.isspace() for char in value)
+    ):
         return False
 
     try:
         parsed = urlsplit(value)
+        scheme = parsed.scheme.lower()
+        host = parsed.hostname
+        port = parsed.port
 
         if (
-            parsed.scheme.lower() not in ("http", "https")
-            or not parsed.hostname
+            scheme not in ("http", "https")
+            or not host
             or parsed.username is not None
             or parsed.password is not None
+            or parsed.fragment
+            or parsed.netloc.endswith(":")
         ):
             return False
 
-        return normalize_url(value) == value
+        if port is not None and not 1 <= port <= 65535:
+            return False
+
+        host = host.lower()
+
+        if ":" in host:
+            host = f"[{host}]"
+
+        expected_netloc = host
+
+        if port is not None and not (
+            (scheme == "http" and port == 80)
+            or (scheme == "https" and port == 443)
+        ):
+            expected_netloc += f":{port}"
+
+        return (
+            parsed.scheme == scheme
+            and parsed.netloc == expected_netloc
+            and bool(parsed.path)
+            and parsed.path.startswith("/")
+        )
 
     except (TypeError, ValueError):
         return False
+
 
 
 def _required_checks(media_type: str) -> tuple[str, ...] | None:
