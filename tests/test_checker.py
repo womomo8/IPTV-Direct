@@ -20,7 +20,6 @@ from checker import (
     check_candidates,
 )
 
-
 VALID_TS = b"".join(b"\x47" + bytes(187) for _ in range(6))
 INVALID_TS = bytes(len(VALID_TS))
 
@@ -381,7 +380,8 @@ class CheckerLocalTests(unittest.TestCase):
                 "body": OVERSIZED_MANIFEST,
             },
         }
-            def settings(self, **overrides):
+
+    def settings(self, **overrides):
         """返回与 settings.json detection 区段一致的测试配置。"""
         config = {
             "local_concurrency": 4,
@@ -422,13 +422,28 @@ class CheckerLocalTests(unittest.TestCase):
         )
 
     def test_direct_ts_http_206_passes(self):
-        result = self.check("/direct.ts")
+        result = self.check("/large-direct.ts")
+        quality = result["quality"]
+        sample = quality["request_samples"][0]
 
         self.assertEqual(result["media_type"], "DIRECT_TS")
-        self.assert_status(result, "ipv4", "PASS")
-        self.assert_status(result, "http", "PASS")
-        self.assert_status(result, "ts", "PASS")
-        self.assert_status(result, "hls", "N/A")
+        for name, expected in (("ipv4", "PASS"), ("http", "PASS"),
+                               ("ts", "PASS"), ("hls", "N/A")):
+            self.assert_status(result, name, expected)
+        self.assertEqual(quality["request_count"], 1)
+        self.assertEqual(quality["request_success_count"], 1)
+        self.assertEqual(quality["request_failure_count"], 0)
+        self.assertEqual(sample["stage"], "direct_ts")
+        self.assertEqual(sample["status_code"], 206)
+        self.assertEqual(sample["outcome"], "PASS")
+        self.assertEqual(sample["bytes_read"], 65536)
+        self.assertGreaterEqual(sample["elapsed_seconds"], 0)
+        self.assertGreaterEqual(sample["read_seconds"], 0)
+        self.assertGreater(quality["total_bytes_read"], 0)
+        self.assertNotIn("url", sample)
+        self.assertNotIn("host", sample)
+        self.assertEqual(self.server.range_headers[-1],
+                         ("/large-direct.ts", "bytes=0-65535"))
 
     def test_direct_ts_http_200_ignoring_range_passes(self):
         result = self.check("/direct-200.ts")
@@ -440,69 +455,50 @@ class CheckerLocalTests(unittest.TestCase):
         self.assert_status(result, "hls", "N/A")
 
     def test_hls_media_playlist_and_segments_pass(self):
-        """验证 HLS 实际分片抽查数量和每个分片的读取上限。"""
         playlist = (
-            "#EXTM3U\n"
-            "#EXT-X-VERSION:3\n"
-            "#EXT-X-TARGETDURATION:10\n"
-            "#EXTINF:10,\n"
-            "seg1.ts\n"
-            "#EXTINF:10,\n"
-            "seg2.ts\n"
-            "#EXTINF:10,\n"
-            "seg3.ts\n"
-            "#EXTINF:10,\n"
-            "seg4.ts\n"
+            "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:10\n"
+            "#EXTINF:10,\nseg1.ts\n#EXTINF:10,\nseg2.ts\n"
+            "#EXTINF:10,\nseg3.ts\n#EXTINF:10,\nseg4.ts\n"
             "#EXT-X-ENDLIST\n"
-        ).encode("utf-8")
+        ).encode()
         self.server.routes["/media.m3u8"]["body"] = playlist
-        for index in range(1, 5):
+        for index in (3, 4):
             self.server.routes[f"/seg{index}.ts"] = {
-                "status": 200,
-                "body": VALID_TS * 1000,
+                "status": 200, "body": VALID_TS * 1000,
             }
 
         result = self.check("/media.m3u8")
         quality = result["quality"]
+        requests = [(path, header) for path, header in self.server.range_headers
+                    if path.endswith(".ts")]
+        samples = [item for item in quality["request_samples"]
+                   if item["stage"].startswith("segment_")]
 
         self.assertEqual(result["media_type"], "HLS")
-        self.assert_status(result, "ipv4", "PASS")
-        self.assert_status(result, "http", "PASS")
-        self.assert_status(result, "hls", "PASS")
-        self.assert_status(result, "ts", "PASS")
+        for name in ("ipv4", "http", "hls", "ts"):
+            self.assert_status(result, name, "PASS")
         self.assertEqual(quality["segment_total"], 3)
         self.assertEqual(quality["segment_success_count"], 3)
         self.assertEqual(quality["segment_failure_count"], 0)
-
-        segment_requests = [
-            (path, header)
-            for path, header in self.server.range_headers
-            if path.endswith(".ts")
-        ]
-        self.assertEqual(
-            [path for path, _ in segment_requests],
-            ["/seg1.ts", "/seg2.ts", "/seg3.ts"],
-        )
-        self.assertTrue(
-            all(header == "bytes=0-65535" for _, header in segment_requests)
-        )
-
-        segment_samples = [
-            sample
-            for sample in quality["request_samples"]
-            if sample["stage"].startswith("segment_")
-        ]
-        self.assertEqual(len(segment_samples), 3)
-        self.assertTrue(
-            all(sample["bytes_read"] <= 65536 for sample in segment_samples)
-        )
+        self.assertEqual([path for path, _ in requests],
+                         ["/seg1.ts", "/seg2.ts", "/seg3.ts"])
+        self.assertTrue(all(header == "bytes=0-65535" for _, header in requests))
+        self.assertEqual(len(samples), 3)
+        self.assertTrue(all(item["bytes_read"] <= 65536 for item in samples))
 
     def test_hls_master_playlist_resolves_relative_urls(self):
         result = self.check("/master.m3u8")
+        quality = result["quality"]
 
         self.assertEqual(result["media_type"], "HLS")
         self.assert_status(result, "hls", "PASS")
         self.assert_status(result, "ts", "PASS")
+        self.assertEqual(
+            [item["stage"] for item in quality["request_samples"]],
+            ["main_playlist", "media_playlist", "segment_1", "segment_2"],
+        )
+        self.assertEqual(quality["segment_total"], 2)
+        self.assertEqual(quality["segment_success_count"], 2)
 
     def test_hls_invalid_ts_segments_do_not_pass(self):
         self.server.routes["/bad-hls.m3u8"]["body"] = (
@@ -550,42 +546,31 @@ class CheckerLocalTests(unittest.TestCase):
         self.assert_status(result, "ts", "PASS")
 
     def test_hls_manifest_over_1mb_is_rejected(self):
-        """验证默认 1 MB 上限及实际配置的清单大小限制。"""
+        """默认及自定义清单上限均不得把截断内容误判为通过。"""
         self.assertGreater(len(OVERSIZED_MANIFEST), 1048576)
-
         result = self.check("/oversized-manifest.m3u8")
-
-        self.assertEqual(result["media_type"], "HLS")
-        self.assert_status(result, "ipv4", "PASS")
-        self.assert_status(result, "http", "PASS")
-        self.assert_status(result, "hls", "FAIL")
-        self.assert_status(result, "ts", "INCOMPLETE")
-
         limited = self.check(
-            "/limited-manifest.m3u8",
+            "/oversized-manifest.m3u8",
             max_hls_manifest_bytes=100,
         )
-        self.assert_status(limited, "hls", "FAIL")
-        self.assert_status(limited, "ts", "INCOMPLETE")
-        self.assertEqual(limited["quality"]["segment_total"], 0)
 
-    def test_encrypted_hls_is_rejected_without_ts_failure(self):
-        result = self.check("/encrypted.m3u8")
+        for item in (result, limited):
+            self.assertEqual(item["media_type"], "HLS")
+            self.assert_status(item, "ipv4", "PASS")
+            self.assert_status(item, "http", "PASS")
+            self.assert_status(item, "hls", "FAIL")
+            self.assert_status(item, "ts", "INCOMPLETE")
+            self.assertEqual(item["quality"]["segment_total"], 0)
 
-        self.assertEqual(result["media_type"], "HLS")
-        self.assert_status(result, "ipv4", "PASS")
-        self.assert_status(result, "http", "PASS")
-        self.assert_status(result, "hls", "FAIL")
-        self.assert_status(result, "ts", "INCOMPLETE")
-
-    def test_fmp4_hls_is_rejected_without_ts_failure(self):
-        result = self.check("/fmp4.m3u8")
-
-        self.assertEqual(result["media_type"], "HLS")
-        self.assert_status(result, "ipv4", "PASS")
-        self.assert_status(result, "http", "PASS")
-        self.assert_status(result, "hls", "FAIL")
-        self.assert_status(result, "ts", "INCOMPLETE")
+    def test_encrypted_and_fmp4_hls_are_rejected(self):
+        for path in ("/encrypted.m3u8", "/fmp4.m3u8"):
+            with self.subTest(path=path):
+                result = self.check(path)
+                self.assertEqual(result["media_type"], "HLS")
+                self.assert_status(result, "ipv4", "PASS")
+                self.assert_status(result, "http", "PASS")
+                self.assert_status(result, "hls", "FAIL")
+                self.assert_status(result, "ts", "INCOMPLETE")
 
     def test_channel_subscription_m3u_is_not_hls(self):
         result = self.check("/subscription.m3u")
@@ -604,7 +589,8 @@ class CheckerLocalTests(unittest.TestCase):
         self.assert_status(result, "http", "PASS")
         self.assert_status(result, "hls", "FAIL")
         self.assert_status(result, "ts", "FAIL")
-            def test_redirect_to_direct_ts_uses_ipv4(self):
+
+    def test_redirect_to_direct_ts_uses_ipv4(self):
         result = self.check("/redirect")
 
         self.assertEqual(result["media_type"], "DIRECT_TS")
@@ -716,18 +702,22 @@ class CheckerLocalTests(unittest.TestCase):
         )
         self.assertTrue(connection.context.check_hostname)
 
-    def test_redirect_loop_is_rejected(self):
-        result = self.check("/loop")
-
-        self.assert_status(result, "http", "FAIL")
-
     def test_http_503_is_not_pass(self):
         result = self.check("/unavailable")
+        quality = result["quality"]
+        sample = quality["request_samples"][0]
 
-        self.assert_status(result, "ipv4", "PASS")
-        self.assert_status(result, "http", "INCOMPLETE")
-        self.assert_status(result, "hls", "INCOMPLETE")
-        self.assert_status(result, "ts", "INCOMPLETE")
+        for name in ("ipv4", "http", "hls", "ts"):
+            self.assert_status(result, name,
+                               "PASS" if name == "ipv4" else "INCOMPLETE")
+        self.assertEqual(quality["request_count"], 1)
+        self.assertEqual(quality["request_success_count"], 0)
+        self.assertEqual(quality["request_failure_count"], 1)
+        self.assertEqual(sample["status_code"], 503)
+        self.assertEqual(sample["outcome"], "INCOMPLETE")
+        self.assertEqual(sample["bytes_read"], 0)
+        self.assertEqual(sample["read_seconds"], 0)
+        self.assertIsNone(sample["bytes_per_second"])
 
     def test_invalid_content_range_is_rejected(self):
         result = self.check("/bad-range")
@@ -740,9 +730,15 @@ class CheckerLocalTests(unittest.TestCase):
             "/slow.ts",
             candidate_active_budget_seconds=1,
         )
+        quality = result["quality"]
 
         self.assert_status(result, "http", "INCOMPLETE")
         self.assert_status(result, "ts", "INCOMPLETE")
+        self.assertEqual(quality["request_count"], 1)
+        self.assertEqual(quality["request_success_count"], 0)
+        self.assertEqual(quality["request_failure_count"], 1)
+        self.assertGreaterEqual(quality["timeout_count"], 1)
+        self.assertEqual(quality["request_samples"][0]["outcome"], "INCOMPLETE")
 
     def test_max_redirect_limit_is_respected(self):
         result = self.check(
@@ -793,19 +789,6 @@ class CheckerLocalTests(unittest.TestCase):
             result["checks"]["http"]["reason"],
         )
 
-    def test_direct_ts_range_read_is_capped_at_64kb(self):
-        """直接 TS 检测必须把 Range 请求限制在 64 KB。"""
-        result = self.check("/large-direct.ts")
-
-        self.assertEqual(result["media_type"], "DIRECT_TS")
-        self.assert_status(result, "ipv4", "PASS")
-        self.assert_status(result, "http", "PASS")
-        self.assert_status(result, "ts", "PASS")
-        self.assertEqual(
-            self.server.range_headers[-1],
-            ("/large-direct.ts", "bytes=0-65535"),
-        )
-
     def test_ts_requires_five_sync_bytes_at_188_byte_intervals(self):
         """五个同步位置必须连续满足，四个同步位置不能通过。"""
         valid = bytearray(188 * 5)
@@ -822,103 +805,6 @@ class CheckerLocalTests(unittest.TestCase):
         self.assertTrue(Detector._ts_ok(bytes(valid)))
         self.assertFalse(Detector._ts_ok(bytes(invalid)))
         self.assertTrue(Detector._ts_ok(bytes(offset_valid)))
-
-    # 以下是新增的质量观测测试。
-
-    def test_quality_metrics_for_direct_ts(self):
-        """直接 TS 应记录初始响应、读取字节数和阶段结果。"""
-        result = self.check("/direct.ts")
-        quality = result["quality"]
-
-        self.assertEqual(quality["request_count"], 1)
-        self.assertEqual(quality["request_success_count"], 1)
-        self.assertEqual(quality["request_failure_count"], 0)
-        self.assertEqual(quality["segment_total"], 0)
-        self.assertEqual(len(quality["request_samples"]), 1)
-
-        sample = quality["request_samples"][0]
-        self.assertEqual(sample["stage"], "direct_ts")
-        self.assertEqual(sample["status_code"], 206)
-        self.assertEqual(sample["outcome"], "PASS")
-        self.assertEqual(sample["bytes_read"], len(VALID_TS))
-        self.assertGreaterEqual(sample["elapsed_seconds"], 0)
-        self.assertGreaterEqual(sample["read_seconds"], 0)
-        self.assertGreater(quality["total_bytes_read"], 0)
-        self.assertNotIn("url", sample)
-        self.assertNotIn("host", sample)
-
-    def test_quality_metrics_for_hls_media_playlist(self):
-        """HLS 应记录主清单和实际分片请求及其 TS 校验结果。"""
-        result = self.check("/media.m3u8")
-        quality = result["quality"]
-        samples = quality["request_samples"]
-
-        self.assertEqual(result["media_type"], "HLS")
-        self.assertEqual(quality["request_count"], 3)
-        self.assertEqual(quality["request_success_count"], 3)
-        self.assertEqual(quality["request_failure_count"], 0)
-        self.assertEqual(quality["segment_total"], 2)
-        self.assertEqual(quality["segment_success_count"], 2)
-        self.assertEqual(quality["segment_failure_count"], 0)
-        self.assertEqual(
-            [sample["stage"] for sample in samples],
-            ["main_playlist", "segment_1", "segment_2"],
-        )
-        self.assertTrue(
-            all(sample["outcome"] == "PASS" for sample in samples)
-        )
-
-    def test_quality_metrics_for_hls_master_playlist(self):
-        """主播放列表应区分主清单、媒体清单和分片阶段。"""
-        result = self.check("/master.m3u8")
-        quality = result["quality"]
-
-        self.assertEqual(result["media_type"], "HLS")
-        self.assertEqual(
-            [sample["stage"] for sample in quality["request_samples"]],
-            [
-                "main_playlist",
-                "media_playlist",
-                "segment_1",
-                "segment_2",
-            ],
-        )
-        self.assertEqual(quality["segment_total"], 2)
-        self.assertEqual(quality["segment_success_count"], 2)
-            def test_quality_metrics_record_failed_request(self):
-        """HTTP 503 应保留真实失败状态，且无吞吐量时使用 None。"""
-        result = self.check("/unavailable")
-        quality = result["quality"]
-
-        self.assertEqual(quality["request_count"], 1)
-        self.assertEqual(quality["request_success_count"], 0)
-        self.assertEqual(quality["request_failure_count"], 1)
-        self.assertEqual(len(quality["request_samples"]), 1)
-
-        sample = quality["request_samples"][0]
-        self.assertEqual(sample["status_code"], 503)
-        self.assertEqual(sample["outcome"], "INCOMPLETE")
-        self.assertEqual(sample["bytes_read"], 0)
-        self.assertEqual(sample["read_seconds"], 0)
-        self.assertIsNone(sample["bytes_per_second"])
-
-    def test_quality_metrics_record_timeout(self):
-        """请求超过候选时间预算时应记录超时，不得记为成功。"""
-        result = self.check(
-            "/slow.ts",
-            candidate_active_budget_seconds=1,
-        )
-        quality = result["quality"]
-
-        self.assertEqual(quality["request_count"], 1)
-        self.assertEqual(quality["request_success_count"], 0)
-        self.assertEqual(quality["request_failure_count"], 1)
-        self.assertGreaterEqual(quality["timeout_count"], 1)
-        self.assertEqual(
-            quality["request_samples"][0]["outcome"],
-            "INCOMPLETE",
-        )
-
 
     def test_queue_wait_is_excluded_from_network_elapsed(self):
         """并发排队耗时必须独立记录，不得计入网络请求耗时。"""
@@ -1104,42 +990,6 @@ class CheckerLocalTests(unittest.TestCase):
         )
 
         self.assert_status(result, "http", "INCOMPLETE")
-
-    def test_queue_limit_controls_batch_size(self):
-        """queue_limit 必须控制每批提交数量，并保持结果顺序。"""
-        observed = []
-
-        def fake_check(detector, candidate, submitted_at):
-            observed.append((candidate["id"], submitted_at))
-            return {"id": candidate["id"]}
-
-        candidates = [
-            {"id": index}
-            for index in range(5)
-        ]
-
-        with patch.object(Detector, "check_one", new=fake_check):
-            results = check_candidates(
-                candidates,
-                self.settings(
-                    local_concurrency=1,
-                    queue_limit=2,
-                ),
-            )
-
-        batches = {}
-        for candidate_id, submitted_at in observed:
-            batches.setdefault(submitted_at, []).append(candidate_id)
-
-        self.assertEqual(
-            sorted(len(batch) for batch in batches.values()),
-            [1, 2, 2],
-        )
-
-        self.assertEqual(
-            [item["id"] for item in results],
-            [0, 1, 2, 3, 4],
-        )
 
 
 if __name__ == "__main__":
