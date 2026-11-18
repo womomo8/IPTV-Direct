@@ -208,7 +208,7 @@ def run_detection_pipeline(
     全部候选统一执行本地检测。
 
     本地适用检测全部 PASS 后，才由 publisher 生成完整优选队列并交给 Globalping。
-    返回结果恢复候选池原始顺序，不改变 publisher 确定的远程检测顺序。
+    返回结果保持 publisher 确定的完整优选队列顺序，排除项随后保留。
     """
     if not candidates:
         return []
@@ -404,15 +404,19 @@ def run_detection_pipeline(
                     reason,
                 )
 
-    return [
-        item
-        if item is not None
-        else globalping.incomplete_result(
-            local_results[index],
-            "检测结果未能完成交接。",
-        )
-        for index, item in enumerate(output)
-    ]
+    ordered_output = []
+
+    for identity in ranked_ids + excluded_ids:
+        item = output[original_index_by_id[identity]]
+
+        if item is None:
+            raise ValueError(
+                "检测结果未能按 publisher 优选顺序完成交接"
+            )
+
+        ordered_output.append(item)
+
+    return ordered_output
 
 
 # ----------------------------------------------------------------------
