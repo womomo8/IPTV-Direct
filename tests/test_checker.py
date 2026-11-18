@@ -1023,10 +1023,11 @@ class CheckerLocalTests(unittest.TestCase):
     def test_initial_queue_timeout_is_not_network_timeout(self):
         """初始请求排队超时不能计入网络请求超时。"""
         detector = Detector(
-                        self.settings(
+            self.settings(
                 max_queue_seconds=1,
                 per_host_concurrency=1,
             )
+        )
         )
         slot = detector._slot("127.0.0.1")
         self.assertTrue(slot.acquire(blocking=False))
