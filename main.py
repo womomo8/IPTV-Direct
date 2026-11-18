@@ -193,23 +193,6 @@ def _identity(item: dict[str, Any]) -> tuple[Any, Any]:
     return item.get("channel"), item.get("normalized_url")
 
 
-def rank_candidates_for_globalping(
-    candidates: list[dict[str, Any]],
-    channels: list[str] | None = None,
-) -> list[dict[str, Any]]:
-    """
-    兼容旧测试/调用方的委托入口；质量比较和排序全部由 publisher 执行。
-
-    正式检测流程直接调用 publisher 的完整结果接口，并核对排除记录。
-    """
-    result = publisher._prioritize_candidates_for_globalping(
-        candidates,
-        channels or [],
-        require_local_pass=False,
-    )
-    return result["queue"]
-
-
 # ----------------------------------------------------------------------
 # 本地 checker 与 Globalping 检测交接
 # ----------------------------------------------------------------------
@@ -685,7 +668,8 @@ def process_admission_batch(
         channels=channels,
         settings=settings,
     )
-    
+
+
 # ----------------------------------------------------------------------
 # 正式流程：先汇集全部来源，再统一检测、优选和准入
 # ----------------------------------------------------------------------
