@@ -1,10 +1,10 @@
 
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""IPTV-Direct Globalping 辅助检测模块。
+"""IPTV-Direct Globalping 远程检测、正式准入和订阅发布模块。
 
-只负责 Globalping API、额度、探针、测量和结构化结果；
-不负责本地检测、正式准入、订阅生成或发布。
+负责 Globalping API、额度、探针、测量、正式准入、订阅生成和发布；
+不负责本地质量检测、质量比较、优选排序或总流程调度。
 """
 
 from __future__ import annotations
@@ -1743,4 +1743,280 @@ def process_admission_batch(
         "all_channels_reached": all_reached,
         "accepted_count": accepted_count,
         "rejected_count": rejected_count,
+    }
+def _safe_m3u_attribute(value: Any) -> str:
+    """清理 M3U 属性值，避免破坏格式。"""
+    if not isinstance(value, str):
+        return ""
+
+    value = value.replace("\r", " ").replace("\n", " ").strip()
+    return value.replace('"', "&quot;")
+
+
+def _valid_output_route(
+    route: dict[str, Any],
+    channels: list[str],
+) -> bool:
+    """检查最终输出线路。"""
+    if not isinstance(route, dict):
+        return False
+
+    channel = route.get("channel")
+
+    if channel not in channels:
+        return False
+
+    category_map = _category_map(channels)
+
+    if category_map and route.get("category") != category_map[channel]:
+        return False
+
+    return (
+        _valid_admission_url(route.get("normalized_url"))
+        and isinstance(route.get("selection"), dict)
+        and route["selection"].get("status") == ACCEPTED
+    )
+
+
+def build_subscriptions(
+    routes: list[dict[str, Any]],
+    channels: list[str],
+) -> dict[str, Any]:
+    """使用同一份最终线路数据生成 M3U 和 TXT。"""
+    if not isinstance(routes, list):
+        raise GlobalpingError("routes 必须是列表")
+
+    if not isinstance(channels, list) or not channels:
+        raise GlobalpingError("没有有效目标频道")
+
+    ordered = []
+
+    for route in routes:
+        if not _valid_output_route(route, channels):
+            raise GlobalpingError("最终准入线路包含无效数据")
+
+        ordered.append(route)
+
+    channel_index = {
+        channel: index
+        for index, channel in enumerate(channels)
+    }
+
+    ordered.sort(
+        key=lambda route: channel_index[route["channel"]]
+    )
+
+    counts = _channel_counts(ordered, channels)
+
+    if any(value > MAX_ROUTES_PER_CHANNEL for value in counts.values()):
+        raise GlobalpingError("最终线路数量超过每频道 2 条上限")
+
+    urls = [route["normalized_url"] for route in ordered]
+
+    if len(urls) != len(set(urls)):
+        raise GlobalpingError("最终订阅存在重复 URL")
+
+    m3u_lines = ["#EXTM3U"]
+    txt_lines = []
+    category_map = _category_map(channels)
+
+    for route in ordered:
+        channel = route["channel"]
+        url = route["normalized_url"]
+
+        category = (
+            category_map[channel]
+            if category_map
+            else route.get("category", "")
+        )
+
+        if any(char in channel for char in ("\r", "\n", ",")):
+            raise GlobalpingError("频道名称包含不支持的格式字符")
+
+        attributes = []
+
+        for key, attribute in (
+            ("tvg_id", "tvg-id"),
+            ("channel", "tvg-name"),
+            ("category", "group-title"),
+        ):
+            raw_value = category if key == "category" else route.get(key)
+            value = _safe_m3u_attribute(raw_value)
+
+            if value:
+                attributes.append(f'{attribute}="{value}"')
+
+        suffix = (
+            " " + " ".join(attributes)
+            if attributes
+            else ""
+        )
+
+        m3u_lines.append(f"#EXTINF:-1{suffix},{channel}")
+        m3u_lines.append(url)
+
+        txt_lines.append(f"{channel},{url}")
+
+    m3u_text = "\n".join(m3u_lines) + "\n"
+    txt_text = (
+        "\n".join(txt_lines) + "\n"
+        if txt_lines
+        else ""
+    )
+
+    validate_subscriptions(m3u_text, txt_text, channels)
+
+    return {
+        "m3u": m3u_text,
+        "txt": txt_text,
+        "route_count": len(ordered),
+        "channel_counts": counts,
+    }
+
+
+def validate_subscriptions(
+    m3u_text: str,
+    txt_text: str,
+    channels: list[str],
+) -> bool:
+    """检查 M3U、TXT 格式及两份订阅内容一致性。"""
+    if not isinstance(m3u_text, str) or not m3u_text:
+        raise GlobalpingError("M3U 内容为空")
+
+    if not isinstance(txt_text, str):
+        raise GlobalpingError("TXT 内容格式无效")
+
+    m3u_lines = m3u_text.splitlines()
+
+    if not m3u_lines or m3u_lines[0] != "#EXTM3U":
+        raise GlobalpingError("M3U 文件缺少 #EXTM3U 文件头")
+
+    m3u_entries = []
+    index = 1
+    category_map = _category_map(channels)
+
+    while index < len(m3u_lines):
+        if index + 1 >= len(m3u_lines):
+            raise GlobalpingError("M3U 存在不完整的频道条目")
+
+        extinf = m3u_lines[index]
+        url = m3u_lines[index + 1]
+
+        if not extinf.startswith("#EXTINF:") or "," not in extinf:
+            raise GlobalpingError("M3U 频道条目格式错误")
+
+        channel = extinf.split(",", 1)[1].strip()
+
+        if channel not in channels:
+            raise GlobalpingError("M3U 包含非目标频道")
+
+        if category_map:
+            attributes = dict(
+                re.findall(r'([\w-]+)="([^"]*)"', extinf)
+            )
+            expected_category = category_map[channel]
+
+            if attributes.get("group-title") != expected_category:
+                raise GlobalpingError(
+                    f"M3U 频道分类错误：{channel}，"
+                    f"要求 {expected_category}"
+                )
+
+        if not _valid_admission_url(url):
+            raise GlobalpingError("M3U 包含无效播放 URL")
+
+        m3u_entries.append((channel, url))
+        index += 2
+
+    if not m3u_entries:
+        raise GlobalpingError("订阅没有任何有效线路")
+
+    txt_entries = []
+
+    for line in txt_text.splitlines():
+        if not line or "," not in line:
+            raise GlobalpingError("TXT 订阅行格式错误")
+
+        channel, url = line.split(",", 1)
+
+        if channel not in channels:
+            raise GlobalpingError("TXT 包含非目标频道")
+
+        if not _valid_admission_url(url):
+            raise GlobalpingError("TXT 包含无效播放 URL")
+
+        txt_entries.append((channel, url))
+
+    if not txt_entries:
+        raise GlobalpingError("TXT 订阅没有任何有效线路")
+
+    if m3u_entries != txt_entries:
+        raise GlobalpingError("M3U 与 TXT 的频道和线路内容不一致")
+
+    urls = [url for _, url in m3u_entries]
+
+    if len(urls) != len(set(urls)):
+        raise GlobalpingError("订阅中存在重复 URL")
+
+    counts = _channel_counts(
+        [{"channel": channel} for channel, _ in m3u_entries],
+        channels,
+    )
+
+    if any(value > MAX_ROUTES_PER_CHANNEL for value in counts.values()):
+        raise GlobalpingError("订阅超过每频道 2 条线路上限")
+
+    return True
+
+
+def _subscription_snapshot(
+    m3u_text: str,
+    txt_text: str,
+) -> dict[str, int]:
+    """从旧订阅自身提取频道和线路数量，并检查两份文件一致性。"""
+    if not isinstance(m3u_text, str) or not isinstance(txt_text, str):
+        raise GlobalpingError("旧订阅不是有效文本")
+
+    lines = m3u_text.splitlines()
+
+    if not lines or lines[0] != "#EXTM3U":
+        raise GlobalpingError("旧 M3U 缺少文件头")
+
+    channels = []
+    route_count = 0
+    index = 1
+
+    while index < len(lines):
+        if index + 1 >= len(lines):
+            raise GlobalpingError("旧 M3U 存在不完整条目")
+
+        extinf = lines[index]
+        url = lines[index + 1]
+
+        if not extinf.startswith("#EXTINF:") or "," not in extinf:
+            raise GlobalpingError("旧 M3U 条目格式错误")
+
+        channel = extinf.split(",", 1)[1].strip()
+
+        if not channel or not _valid_admission_url(url):
+            raise GlobalpingError("旧 M3U 包含无效频道或 URL")
+
+        channels.append(channel)
+        route_count += 1
+        index += 2
+
+    if not channels:
+        raise GlobalpingError("旧订阅没有有效线路")
+
+    unique_channels = list(dict.fromkeys(channels))
+
+    validate_subscriptions(
+        m3u_text,
+        txt_text,
+        unique_channels,
+    )
+
+    return {
+        "channel_count": len(unique_channels),
+        "route_count": route_count,
     }
