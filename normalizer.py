@@ -36,87 +36,81 @@ def load_channels(path):
 
     for raw_line in lines:
         line = raw_line.strip()
-
         if not line:
             continue
-
         if line.startswith("#"):
             heading = line.lstrip("#").strip()
-
             if not heading:
-                raise ChannelConfigError(
-                    "channels.txt 存在空分类标题"
-                )
-
+                raise ChannelConfigError("channels.txt 存在空分类标题")
             category_key = heading.casefold()
-
             if category_key in category_keys:
-                raise ChannelConfigError(
-                    f"channels.txt 分类标题重复：{heading}"
-                )
-
+                raise ChannelConfigError(f"channels.txt 分类标题重复：{heading}")
             category_keys.add(category_key)
             category_order.append(heading)
             current_category = heading
             continue
-
         if current_category is None:
-            raise ChannelConfigError(
-                f"频道必须放在分类标题下面：{line}"
-            )
-
+            raise ChannelConfigError(f"频道必须放在分类标题下面：{line}")
         if line in category_by_channel:
             previous = category_by_channel[line]
-            raise ChannelConfigError(
-                f"频道重复配置：{line}（{previous}、{current_category}）"
-            )
-
+            raise ChannelConfigError(f"频道重复配置：{line}（{previous}、{current_category}）")
         channels.append(line)
         category_by_channel[line] = current_category
 
     if not category_order:
-        raise ChannelConfigError(
-            "channels.txt 没有配置分类标题"
-        )
-
+        raise ChannelConfigError("channels.txt 没有配置分类标题")
     if not channels:
-        raise ChannelConfigError(
-            "channels.txt 没有配置目标频道"
-        )
-
-    return ChannelList(
-        channels,
-        category_by_channel,
-        category_order,
-    )
+        raise ChannelConfigError("channels.txt 没有配置目标频道")
+    return ChannelList(channels, category_by_channel, category_order)
 
 
 def _channel_category(channels, channel):
     """只读取目标频道配置中的分类，不采信直播源自带分类。"""
     if not channel:
         return ""
-
-    category_by_channel = getattr(
-        channels,
-        "category_by_channel",
-        {},
-    )
-
+    category_by_channel = getattr(channels, "category_by_channel", {})
     return category_by_channel.get(channel, "")
+
+
+def _source_identity(source):
+    """提取候选的完整来源身份；不把来源优先级解释为质量优先级。"""
+    source_type = source.get("source_type", "")
+    identity = {
+        "source_id": source.get("id") or None,
+        "source_name": source.get("name", ""),
+        "source_url": source.get("url", ""),
+        "source_final_url": source.get("final_url", source.get("url", "")),
+        "source_type": source_type,
+        "is_manual": source_type == "manual",
+        "priority": source.get("priority", 1),
+        "source_order": source.get("order", 0),
+        "mode": source.get("mode", ""),
+    }
+    for key in ("discovered_from", "discovered_order"):
+        if key in source:
+            identity[key] = source[key]
+    return identity
+
+
+def _source_identity_key(identity):
+    """用于来源追溯去重，不参与候选质量或排序决策。"""
+    if identity.get("source_id"):
+        return ("id", identity["source_id"])
+    return (
+        identity.get("source_type", ""),
+        identity.get("source_url", ""),
+        identity.get("source_order", 0),
+        identity.get("source_name", ""),
+    )
 
 
 def _is_absolute_http_url(value):
     """判断是否为绝对 HTTP/HTTPS URL，不区分协议头大小写。"""
     if not isinstance(value, str) or not value:
         return False
-
     try:
         parsed = urlsplit(value)
-        return (
-            parsed.scheme.lower() in ("http", "https")
-            and bool(parsed.netloc)
-            and bool(parsed.hostname)
-        )
+        return parsed.scheme.lower() in ("http", "https") and bool(parsed.netloc) and bool(parsed.hostname)
     except ValueError:
         return False
 
@@ -125,12 +119,9 @@ def normalize_url(value):
     """规范化 HTTP/HTTPS URL，保留有效端口和查询参数。"""
     if not isinstance(value, str) or not value.strip():
         raise ValueError("URL 为空")
-
     value = value.strip()
-
     if any(char.isspace() for char in value):
         raise ValueError("URL 包含空白字符")
-
     try:
         parsed = urlsplit(value)
         scheme = parsed.scheme.lower()
@@ -138,67 +129,35 @@ def normalize_url(value):
         port = parsed.port
     except ValueError as exc:
         raise ValueError("URL 格式无效") from exc
-
-    if (
-        scheme not in ("http", "https")
-        or not host
-        or parsed.username is not None
-        or parsed.password is not None
-    ):
+    if scheme not in ("http", "https") or not host or parsed.username is not None or parsed.password is not None:
         raise ValueError("只接受不含用户名密码的 HTTP/HTTPS URL")
-
     if parsed.netloc.endswith(":"):
         raise ValueError("URL 端口格式无效")
-
     if port is not None and not 1 <= port <= 65535:
         raise ValueError("URL 端口无效")
-
     host = host.lower()
-
     if ":" in host:
         host = f"[{host}]"
-
     netloc = host
-
-    if port is not None and not (
-        (scheme == "http" and port == 80)
-        or (scheme == "https" and port == 443)
-    ):
+    if port is not None and not ((scheme == "http" and port == 80) or (scheme == "https" and port == 443)):
         netloc += f":{port}"
-
-    return urlunsplit((
-        scheme,
-        netloc,
-        parsed.path or "/",
-        parsed.query,
-        "",
-    ))
+    return urlunsplit((scheme, netloc, parsed.path or "/", parsed.query, ""))
 
 
 def _channel_match(names, channels, aliases):
     """只按标准名称或明确别名精确匹配。"""
     targets = {name.casefold(): name for name in channels}
-
     if aliases is not None and not isinstance(aliases, dict):
         raise TypeError("aliases 必须是字典")
-
-    alias_map = {
-        str(alias).casefold(): canonical
-        for alias, canonical in (aliases or {}).items()
-    }
-
+    alias_map = {str(alias).casefold(): canonical for alias, canonical in (aliases or {}).items()}
     for name in names:
         name = (name or "").strip()
-
         if not name:
             continue
-
         canonical = alias_map.get(name.casefold(), name)
         matched = targets.get(str(canonical).casefold())
-
         if matched:
             return matched
-
     return None
 
 
@@ -210,11 +169,26 @@ def _looks_like_ts(data):
     """检查连续五个 188 字节 TS 同步位置。"""
     if len(data) < 188 * 4 + 1:
         return False
+    return any(all(data[offset + 188 * index] == 0x47 for index in range(5))
+               for offset in range(min(188, len(data) - 188 * 4)))
 
-    return any(
-        all(data[offset + 188 * index] == 0x47 for index in range(5))
-        for offset in range(min(188, len(data) - 188 * 4))
-    )
+
+def _candidate_source_fields(source):
+    """生成兼容旧字段并补齐可追溯来源身份。"""
+    identity = _source_identity(source)
+    return {
+        "source_id": identity["source_id"],
+        "source_name": identity["source_name"],
+        "source_url": identity["source_url"],
+        "source_type": identity["source_type"],
+        "is_manual": identity["is_manual"],
+        "priority": identity["priority"],
+        "source_order": identity["source_order"],
+        "primary_source": dict(identity),
+        "source_history": [dict(identity)],
+        # 实际媒体类型需要结合响应/检测结果确认，此阶段不猜测。
+        "media_type": None,
+    }
 
 
 def parse_source_content(
@@ -237,185 +211,105 @@ def parse_source_content(
         raise TypeError("来源内容必须是 bytes 或 str")
 
     if max_candidates is not None and (
-        not isinstance(max_candidates, int)
-        or isinstance(max_candidates, bool)
-        or max_candidates < 1
+        not isinstance(max_candidates, int) or isinstance(max_candidates, bool) or max_candidates < 1
     ):
         raise ValueError("解析候选上限必须是正整数")
 
-    lines = [
-        line.strip()
-        for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    ]
+    lines = [line.strip() for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
     nonempty = [line for line in lines if line]
-
     if not nonempty:
-        return {
-            "recognized": False,
-            "format": "unknown",
-            "candidates": [],
-            "errors": ["来源内容为空"],
-        }
+        return {"recognized": False, "format": "unknown", "candidates": [], "errors": ["来源内容为空"]}
 
     base = source.get("final_url") or source.get("url", "")
     media_type = (content_type or "").lower()
-
-    is_hls = any(
-        line.startswith("#EXT-X-")
-        for line in nonempty[:30]
-    )
+    is_hls = any(line.startswith("#EXT-X-") for line in nonempty[:30])
     is_ts = _looks_like_ts(raw)
-
-    is_media_type = (
-        media_type.startswith(("video/", "audio/"))
-        and "mpegurl" not in media_type
-    )
+    is_media_type = media_type.startswith(("video/", "audio/")) and "mpegurl" not in media_type
+    source_fields = _candidate_source_fields(source)
 
     if is_hls or is_ts or is_media_type:
         fmt = "hls" if is_hls else "media"
-
         if is_hls and len(raw) > max_hls_manifest_bytes:
-            return {
-                "recognized": False,
-                "format": fmt,
-                "candidates": [],
-                "errors": ["HLS 媒体清单超过读取上限"],
-            }
-
+            return {"recognized": False, "format": fmt, "candidates": [], "errors": ["HLS 媒体清单超过读取上限"]}
         return {
             "recognized": True,
             "format": fmt,
             "candidates": [{
-                "channel": None,
-                "raw_url": base,
-                "tvg_id": "",
-                "tvg_name": "",
-                "category": "",
-                "source_url": source.get("url", ""),
-                "source_type": source.get("source_type", ""),
-                "priority": source.get("priority", 1),
-                "source_order": source.get("order", 0),
+                "channel": None, "raw_url": base, "tvg_id": "", "tvg_name": "", "category": "",
+                **source_fields,
             }],
             "errors": ["媒体来源未提供可确认的频道名称"],
         }
 
-    is_m3u = any(
-        line.upper().startswith("#EXTM3U")
-        for line in nonempty[:3]
-    )
+    is_m3u = any(line.upper().startswith("#EXTM3U") for line in nonempty[:3])
     fmt = "m3u" if is_m3u else "txt"
-
-    candidates = []
-    errors = []
+    candidates, errors = [], []
     pending = None
-
     target_candidate_count = 0
 
     def add_candidate(candidate, error=None):
         nonlocal target_candidate_count
-
         candidates.append(candidate)
-
         if error:
             errors.append(error)
-
         if candidate.get("channel") is not None:
             target_candidate_count += 1
-
         # 只有目标频道候选才占用数量上限。
-        return (
-            max_candidates is not None
-            and target_candidate_count > max_candidates
-        )
+        return max_candidates is not None and target_candidate_count > max_candidates
 
     for line in lines:
         if not line:
             continue
-
         if line.upper().startswith("#EXTINF:"):
             title = line.split(",", 1)[1].strip() if "," in line else ""
             pending = (title, _parse_attributes(line))
             continue
-
         if line.startswith("#"):
             continue
 
         is_absolute_url = _is_absolute_http_url(line)
         is_m3u_url = is_m3u and not line.startswith("#")
-
         if is_absolute_url or is_m3u_url:
             if is_m3u:
                 title, attrs = pending or ("", {})
-                names = [
-                    attrs.get("tvg-name", ""),
-                    attrs.get("tvg-id", ""),
-                    title,
-                ]
+                names = [attrs.get("tvg-name", ""), attrs.get("tvg-id", ""), title]
                 raw_url = urljoin(base, line)
             else:
-                names = []
-                attrs = {}
-                raw_url = line
-
+                names, attrs, raw_url = [], {}, line
             channel = _channel_match(names, channels, aliases)
-
             candidate = {
                 "channel": channel,
                 "raw_url": raw_url,
                 "tvg_id": attrs.get("tvg-id", "") if is_m3u else "",
                 "tvg_name": attrs.get("tvg-name", "") if is_m3u else "",
                 "category": _channel_category(channels, channel),
-                "source_url": source.get("url", ""),
-                "source_type": source.get("source_type", ""),
-                "priority": source.get("priority", 1),
-                "source_order": source.get("order", 0),
+                **source_fields,
             }
-
             pending = None
-
-            error = None if channel else (
-                f"线路缺少可确认的目标频道信息：{line[:100]}"
-            )
-
+            error = None if channel else f"线路缺少可确认的目标频道信息：{line[:100]}"
             if add_candidate(candidate, error):
                 break
-
             continue
 
         if not is_m3u and "," in line:
             name, url = (part.strip() for part in line.split(",", 1))
-
             if _is_absolute_http_url(url):
                 channel = _channel_match([name], channels, aliases)
-
                 candidate = {
                     "channel": channel,
                     "raw_url": url,
                     "tvg_id": "",
                     "tvg_name": name,
                     "category": _channel_category(channels, channel),
-                    "source_url": source.get("url", ""),
-                    "source_type": source.get("source_type", ""),
-                    "priority": source.get("priority", 1),
-                    "source_order": source.get("order", 0),
+                    **source_fields,
                 }
-
-                error = None if channel else (
-                    f"频道名称不在目标频道配置中：{name}"
-                )
-
+                error = None if channel else f"频道名称不在目标频道配置中：{name}"
                 if add_candidate(candidate, error):
                     break
 
     if not candidates:
         errors.append("未提取到直播线路")
-
-    return {
-        "recognized": bool(candidates),
-        "format": fmt,
-        "candidates": candidates,
-        "errors": errors,
-    }
+    return {"recognized": bool(candidates), "format": fmt, "candidates": candidates, "errors": errors}
 
 
 def normalize_source_content(
@@ -428,98 +322,96 @@ def normalize_source_content(
     max_hls_manifest_bytes=1048576,
     aliases=None,
     max_candidates_remaining=None,
+    source_history_by_url=None,
 ):
-    """只让有效且全局唯一的目标频道 URL 占用候选额度。"""
+    """只让有效且全局唯一的目标频道 URL 占用候选额度，并保留来源身份。"""
     for value, name in (
         (max_candidates_per_source, "单来源候选上限"),
         (max_candidates_remaining, "本轮剩余候选额度"),
     ):
         if value is not None and (
-            not isinstance(value, int)
-            or isinstance(value, bool)
-            or value < 1
+            not isinstance(value, int) or isinstance(value, bool) or value < 1
         ):
             raise ValueError(f"{name}必须是正整数")
-
     if not isinstance(seen_urls, set):
         raise TypeError("seen_urls 必须是整轮共用的 set")
+    if source_history_by_url is not None and not isinstance(source_history_by_url, dict):
+        raise TypeError("source_history_by_url 必须是整轮共用的字典")
 
     parsed = parse_source_content(
-        content,
-        source,
-        channels,
-        content_type,
-        max_hls_manifest_bytes,
-        aliases,
-        max_candidates=None,
+        content, source, channels, content_type, max_hls_manifest_bytes, aliases, max_candidates=None,
     )
-
-    retained = []
-    duplicates = 0
-    matched = 0
-    invalid = 0
-    source_limited = False
-    total_limited = False
+    retained, duplicate_source_records = [], []
+    duplicates = matched = invalid = 0
+    matched_channel_candidates = sum(
+        candidate.get("channel") is not None
+        for candidate in parsed["candidates"]
+    )
+    source_limited = total_limited = False
+    identity = _source_identity(source)
 
     if parsed["recognized"]:
         for candidate in parsed["candidates"]:
             if candidate.get("channel") is None:
                 continue
-
             try:
                 url = normalize_url(candidate.get("raw_url"))
             except (TypeError, ValueError):
                 invalid += 1
-                parsed["errors"].append(
-                    f"无效线路 URL："
-                    f"{str(candidate.get('raw_url', ''))[:100]}"
-                )
+                parsed["errors"].append(f"无效线路 URL：{str(candidate.get('raw_url', ''))[:100]}")
                 continue
-
             matched += 1
 
             if url in seen_urls:
                 duplicates += 1
+                duplicate_source_records.append({"normalized_url": url, "source": dict(identity)})
+                if source_history_by_url is not None:
+                    history = source_history_by_url.get(url)
+                    if history is not None:
+                        identity_key = _source_identity_key(identity)
+                        if all(_source_identity_key(item) != identity_key for item in history):
+                            history.append(dict(identity))
                 continue
 
-            source_overflow = (
-                len(retained) >= max_candidates_per_source
-            )
-            total_overflow = (
-                max_candidates_remaining is not None
-                and len(retained) >= max_candidates_remaining
-            )
-
+            source_overflow = len(retained) >= max_candidates_per_source
+            total_overflow = max_candidates_remaining is not None and len(retained) >= max_candidates_remaining
             if source_overflow or total_overflow:
                 source_limited = source_overflow
                 total_limited = total_overflow
                 break
 
             seen_urls.add(url)
+            candidate_history = [dict(identity)]
+            if source_history_by_url is not None:
+                source_history_by_url[url] = candidate_history
             retained.append({
                 **candidate,
                 "normalized_url": url,
+                "primary_source": dict(identity),
+                "source_history": candidate_history,
             })
 
     if source_limited:
         parsed["errors"].append(
-            f"达到单来源候选上限 {max_candidates_per_source}，"
-            "其余有效唯一候选不再处理"
+            f"达到单来源候选上限 {max_candidates_per_source}，其余有效唯一候选不再处理"
         )
-
     if total_limited:
         parsed["errors"].append(
-            f"达到本轮剩余候选额度 {max_candidates_remaining}，"
-            "其余有效唯一候选不再处理"
+            f"达到本轮剩余候选额度 {max_candidates_remaining}，其余有效唯一候选不再处理"
         )
 
     retained_count = len(retained)
-
+    channel_valid_source = matched_channel_candidates > 0
     return {
         **parsed,
         "candidates": retained,
         "extracted_candidates": retained_count,
         "matched_target_candidates": matched,
+        "matched_channel_candidates": matched_channel_candidates,
+        "channel_valid_source": channel_valid_source,
+        "channel_valid_source_count": 1 if channel_valid_source else 0,
+        "source_identity": dict(identity),
+        "duplicate_source_records": duplicate_source_records,
         "invalid_candidates": invalid,
         "duplicate_candidates": duplicates,
         "retained_candidates": retained_count,
