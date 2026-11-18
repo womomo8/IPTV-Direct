@@ -2072,18 +2072,12 @@ def _read_subscription_pair(
     txt_data: bytes,
     channels: list[str],
 ) -> tuple[str, str, dict[str, int]]:
-    """读取并完整验证一组备份订阅。"""
+    """读取并验证一组备份订阅自身的完整性。"""
     try:
         m3u_text = m3u_data.decode("utf-8-sig")
         txt_text = txt_data.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
         raise GlobalpingError("订阅备份不是有效 UTF-8 文件") from exc
-
-    validate_subscriptions(
-        m3u_text,
-        txt_text,
-        channels,
-    )
 
     snapshot = _subscription_snapshot(
         m3u_text,
