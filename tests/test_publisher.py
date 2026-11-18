@@ -994,6 +994,18 @@ class PublisherGlobalpingPrioritizationTests(unittest.TestCase):
             ),
         )
 
+        # 质量数据完全缺失的候选。
+        # 两条线路属于同一频道、同一媒体类型组，
+        # 应排在已知质量候选之后，并保持原始先后顺序。
+        hls_missing_first = make_candidate(
+            url="https://example.com/hls-missing-first.m3u8",
+            quality=None,
+        )
+        hls_missing_second = make_candidate(
+            url="https://example.com/hls-missing-second.m3u8",
+            quality=None,
+        )
+
         candidates = [
             hls_lower_first,
             direct_ts_slow,
@@ -1002,6 +1014,8 @@ class PublisherGlobalpingPrioritizationTests(unittest.TestCase):
             hls_lower_second,
             configured_later_channel,
             unconfigured_channel,
+            hls_missing_first,
+            hls_missing_second,
         ]
 
         result = publisher.prioritize_candidates_for_globalping(
@@ -1017,6 +1031,8 @@ class PublisherGlobalpingPrioritizationTests(unittest.TestCase):
             "https://example.com/hls-lower-first.m3u8",
             "https://example.com/direct-slow.ts",
             "https://example.com/hls-lower-second.m3u8",
+            "https://example.com/hls-missing-first.m3u8",
+            "https://example.com/hls-missing-second.m3u8",
         ]
         self.assertEqual(
             [
@@ -1030,7 +1046,7 @@ class PublisherGlobalpingPrioritizationTests(unittest.TestCase):
 
         self.assertEqual(
             [item["original_index"] for item in result["ranking"]],
-            [2, 3, 5, 6, 0, 1, 4],
+            [2, 3, 5, 6, 0, 1, 4, 7, 8],
         )
         self.assertEqual(
             [item["priority_order"] for item in result["ranking"]],
@@ -1052,8 +1068,12 @@ class PublisherGlobalpingPrioritizationTests(unittest.TestCase):
                 ("CCTV-1", "HLS"),
                 ("CCTV-1", "DIRECT_TS"),
                 ("CCTV-1", "HLS"),
+                ("CCTV-1", "HLS"),
+                ("CCTV-1", "HLS"),
             ],
         )
+
+        # 已知质量相同：保持原始候选顺序。
         self.assertEqual(
             result["ranking"][4]["identity"],
             ("CCTV-1", "https://example.com/hls-lower-first.m3u8"),
@@ -1062,6 +1082,25 @@ class PublisherGlobalpingPrioritizationTests(unittest.TestCase):
             result["ranking"][6]["identity"],
             ("CCTV-1", "https://example.com/hls-lower-second.m3u8"),
         )
+
+        # 质量数据缺失：同样保持原始候选顺序。
+        self.assertEqual(
+            result["ranking"][7]["identity"],
+            ("CCTV-1", "https://example.com/hls-missing-first.m3u8"),
+        )
+        self.assertEqual(
+            result["ranking"][8]["identity"],
+            ("CCTV-1", "https://example.com/hls-missing-second.m3u8"),
+        )
+        self.assertEqual(
+            result["ranking"][7]["quality_data"],
+            {},
+        )
+        self.assertEqual(
+            result["ranking"][8]["quality_data"],
+            {},
+        )
+
         self.assertEqual(
             result["ranking"][0]["quality_data"],
             hls_best["quality"],
