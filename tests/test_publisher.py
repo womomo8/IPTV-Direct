@@ -1,4 +1,3 @@
-
 """IPTV-Direct：publisher.py 线路准入与订阅生成专项测试。"""
 
 import unittest
@@ -294,6 +293,7 @@ class PublisherAdmissionTests(unittest.TestCase):
                 "https://example.com/manual.m3u8",
             ],
         )
+
     def test_better_automatic_route_beats_manual_route(self):
         candidates = [
             make_candidate(
@@ -830,221 +830,88 @@ class MainPublisherHandoffIntegrationTests(unittest.TestCase):
 
         self.assertEqual(len(admission["results"]), 3)
 
-    def test_duplicate_publisher_queue_is_rejected_before_globalping(self):
+    def test_invalid_publisher_handoffs_are_rejected_before_globalping(self):
+        """重复、漏项或排序依据不一致时，main 必须拒绝交给 Globalping。"""
         candidates = [
-            make_candidate(
-                url="https://example.com/first.m3u8",
-            ),
-            make_candidate(
-                url="https://example.com/second.m3u8",
-            ),
+            make_candidate(url="https://example.com/first.m3u8"),
+            make_candidate(url="https://example.com/second.m3u8"),
         ]
 
-        remote_called = False
-
-        def invalid_prioritization(local_results, channels):
+        def duplicate_queue(local_results, channels):
             candidate = local_results[0]
-            identity = (
-                candidate["channel"],
-                candidate["normalized_url"],
-            )
-
+            identity = (candidate["channel"], candidate["normalized_url"])
             return {
-                "queue": [
-                    candidate,
-                    candidate,
-                ],
+                "queue": [candidate, candidate],
                 "excluded": [],
                 "ranking": [
-                    {
-                        "identity": identity,
-                        "priority_order": 1,
-                    },
-                    {
-                        "identity": identity,
-                        "priority_order": 2,
-                    },
+                    {"identity": identity, "priority_order": 1},
+                    {"identity": identity, "priority_order": 2},
                 ],
             }
 
-        def remote_check(items, settings):
-            nonlocal remote_called
-            remote_called = True
-            return items
-
-        original_prioritizer = (
-            publisher.prioritize_candidates_for_globalping
-        )
-
-        try:
-            publisher.prioritize_candidates_for_globalping = (
-                invalid_prioritization
-            )
-
-            with self.assertRaisesRegex(
-                ValueError,
-                "候选数量、身份或完整分区不匹配",
-            ):
-                main.run_detection_pipeline(
-                    candidates=candidates,
-                    settings={
-                        "detection": {},
-                        "globalping": {},
-                    },
-                    local_check=lambda items, settings: items,
-                    remote_check=remote_check,
-                    channels=CHANNELS,
-                )
-
-        finally:
-            publisher.prioritize_candidates_for_globalping = (
-                original_prioritizer
-            )
-
-        self.assertFalse(remote_called)
-
-    def test_incomplete_publisher_queue_is_rejected_before_globalping(self):
-        candidates = [
-            make_candidate(
-                url="https://example.com/first.m3u8",
-            ),
-            make_candidate(
-                url="https://example.com/second.m3u8",
-            ),
-        ]
-
-        remote_called = False
-
-        def incomplete_prioritization(local_results, channels):
+        def incomplete_queue(local_results, channels):
             candidate = local_results[0]
-            identity = (
-                candidate["channel"],
-                candidate["normalized_url"],
-            )
-
+            identity = (candidate["channel"], candidate["normalized_url"])
             return {
-                "queue": [
-                    candidate,
-                ],
+                "queue": [candidate],
                 "excluded": [],
-                "ranking": [
-                    {
-                        "identity": identity,
-                        "priority_order": 1,
-                    },
-                ],
+                "ranking": [{"identity": identity, "priority_order": 1}],
             }
 
-        def remote_check(items, settings):
-            nonlocal remote_called
-            remote_called = True
-            return items
-
-        original_prioritizer = (
-            publisher.prioritize_candidates_for_globalping
-        )
-
-        try:
-            publisher.prioritize_candidates_for_globalping = (
-                incomplete_prioritization
-            )
-
-            with self.assertRaisesRegex(
-                ValueError,
-                "候选数量、身份或完整分区不匹配",
-            ):
-                main.run_detection_pipeline(
-                    candidates=candidates,
-                    settings={
-                        "detection": {},
-                        "globalping": {},
-                    },
-                    local_check=lambda items, settings: items,
-                    remote_check=remote_check,
-                    channels=CHANNELS,
-                )
-
-        finally:
-            publisher.prioritize_candidates_for_globalping = (
-                original_prioritizer
-            )
-
-        self.assertFalse(remote_called)
-
-    def test_publisher_ranking_order_mismatch_is_rejected_before_globalping(self):
-        candidates = [
-            make_candidate(
-                url="https://example.com/first.m3u8",
-            ),
-            make_candidate(
-                url="https://example.com/second.m3u8",
-            ),
-        ]
-
-        remote_called = False
-
-        def invalid_ranking(local_results, channels):
+        def mismatched_ranking(local_results, channels):
             first, second = local_results
-
             return {
-                "queue": [
-                    first,
-                    second,
-                ],
+                "queue": [first, second],
                 "excluded": [],
                 "ranking": [
                     {
-                        "identity": (
-                            second["channel"],
-                            second["normalized_url"],
-                        ),
+                        "identity": (second["channel"], second["normalized_url"]),
                         "priority_order": 1,
                     },
                     {
-                        "identity": (
-                            first["channel"],
-                            first["normalized_url"],
-                        ),
+                        "identity": (first["channel"], first["normalized_url"]),
                         "priority_order": 2,
                     },
                 ],
             }
 
-        def remote_check(items, settings):
-            nonlocal remote_called
-            remote_called = True
-            return items
-
-        original_prioritizer = (
-            publisher.prioritize_candidates_for_globalping
+        scenarios = (
+            ("重复候选", duplicate_queue, "候选数量、身份或完整分区不匹配"),
+            ("队列漏项", incomplete_queue, "候选数量、身份或完整分区不匹配"),
+            (
+                "排序依据不一致",
+                mismatched_ranking,
+                "publisher 排序依据与完整优选队列不一致",
+            ),
         )
 
-        try:
-            publisher.prioritize_candidates_for_globalping = (
-                invalid_ranking
-            )
+        original_prioritizer = publisher.prioritize_candidates_for_globalping
 
-            with self.assertRaisesRegex(
-                ValueError,
-                "publisher 排序依据与完整优选队列不一致",
-            ):
-                main.run_detection_pipeline(
-                    candidates=candidates,
-                    settings={
-                        "detection": {},
-                        "globalping": {},
-                    },
-                    local_check=lambda items, settings: items,
-                    remote_check=remote_check,
-                    channels=CHANNELS,
-                )
+        for name, prioritizer, expected_error in scenarios:
+            with self.subTest(scenario=name):
+                remote_called = False
 
-        finally:
-            publisher.prioritize_candidates_for_globalping = (
-                original_prioritizer
-            )
+                def remote_check(items, settings):
+                    nonlocal remote_called
+                    remote_called = True
+                    return items
 
-        self.assertFalse(remote_called)
+                try:
+                    publisher.prioritize_candidates_for_globalping = prioritizer
+                    with self.assertRaisesRegex(ValueError, expected_error):
+                        main.run_detection_pipeline(
+                            candidates=candidates,
+                            settings={"detection": {}, "globalping": {}},
+                            local_check=lambda items, settings: items,
+                            remote_check=remote_check,
+                            channels=CHANNELS,
+                        )
+                finally:
+                    publisher.prioritize_candidates_for_globalping = (
+                        original_prioritizer
+                    )
+
+                self.assertFalse(remote_called, "非法队列不得触发 Globalping")
 
 
 class PublisherGlobalpingPrioritizationTests(unittest.TestCase):
