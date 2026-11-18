@@ -34,6 +34,8 @@ class CheckError(Exception):
         ts_status=INCOMPLETE,
         ts_reason="TS 分片尚未完成实际检测",
         queue_timeout=False,
+        timed_out=False,
+        bytes_read=0,
     ):
         super().__init__(reason)
         self.status = status
@@ -41,6 +43,8 @@ class CheckError(Exception):
         self.ts_status = ts_status
         self.ts_reason = ts_reason
         self.queue_timeout = queue_timeout
+        self.timed_out = timed_out
+        self.bytes_read = bytes_read
 
 
 class DeadlineResolver:
@@ -196,7 +200,8 @@ class Detector:
                 FAIL, "HTTP 206 的范围或总长度无效", connected
             )
         return start, end, total
-            @staticmethod
+
+    @staticmethod
     def _abort(conn):
         """shutdown 能中断其他线程中的阻塞读取；单纯 close 不可靠。"""
         sock = getattr(conn, "sock", None)
@@ -215,8 +220,9 @@ class Detector:
             pass
 
     @staticmethod
-    def _read(response, conn, limit, deadline, connected):
+    def _read(response, conn, limit, deadline, connected, metrics):
         chunks, size = [], 0
+        metrics["bytes_read"] = 0
         while size < limit:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -224,6 +230,8 @@ class Detector:
                     INCOMPLETE,
                     "超过单候选主动检测时间预算",
                     connected,
+                    timed_out=True,
+                    bytes_read=size,
                 )
             sock = getattr(conn, "sock", None)
             try:
@@ -235,11 +243,15 @@ class Detector:
                     INCOMPLETE,
                     f"响应读取超时或连接中断：{exc}",
                     connected,
+                    timed_out=isinstance(exc, (socket.timeout, TimeoutError))
+                    or time.monotonic() >= deadline,
+                    bytes_read=size,
                 ) from exc
             if not part:
                 break
             chunks.append(part)
             size += len(part)
+            metrics["bytes_read"] = size
         return b"".join(chunks)
 
     def _request(
@@ -287,22 +299,13 @@ class Detector:
             if outcome not in (PASS, FAIL, INCOMPLETE):
                 outcome = FAIL
 
-            reason = str(error) if error is not None else ""
-
-            # 除了识别异常文字，也检查请求是否已经接近候选检测期限。
-            # 这样即使底层 socket 被期限定时器中断，异常文字没有出现
-            # “timeout/超时”，也不会漏记超时质量数据。
-            deadline_exhausted = finished >= deadline - 0.1
             is_queue_timeout = bool(getattr(error, "queue_timeout", False))
             is_timeout = (
                 not is_queue_timeout
                 and outcome == INCOMPLETE
                 and (
                     isinstance(error, (socket.timeout, TimeoutError))
-                    or "超时" in reason
-                    or "超过" in reason
-                    or "timeout" in reason.lower()
-                    or deadline_exhausted
+                    or getattr(error, "timed_out", False)
                 )
             )
 
@@ -365,6 +368,8 @@ class Detector:
             connected = False
 
             metrics["redirect_count"] = redirects
+            metrics.pop("status_code", None)
+            data = b""
             try:
                 parsed = urlsplit(current)
                 scheme = parsed.scheme.lower()
@@ -397,7 +402,9 @@ class Detector:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise CheckError(
-                        INCOMPLETE, "超过单候选主动检测时间预算"
+                        INCOMPLETE,
+                        "超过单候选主动检测时间预算",
+                        timed_out=True,
                     )
 
                 port = parsed.port or (443 if scheme == "https" else 80)
@@ -431,7 +438,9 @@ class Detector:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise CheckError(
-                        INCOMPLETE, "超过单候选主动检测时间预算"
+                        INCOMPLETE,
+                        "超过单候选主动检测时间预算",
+                        timed_out=True,
                     )
                 timer = threading.Timer(
                     remaining, self._abort, args=(conn,)
@@ -457,7 +466,7 @@ class Detector:
                     current = urljoin(current, location)
                     redirects += 1
                     continue
-                                    if response.status not in (200, 206):
+                if response.status not in (200, 206):
                     status = FAIL if response.status < 500 else INCOMPLETE
                     raise CheckError(
                         status,
@@ -496,14 +505,14 @@ class Detector:
                 read_started = time.monotonic()
                 try:
                     data = self._read(
-                        response, conn, limit, deadline, connected
+                        response, conn, limit, deadline, connected, metrics
                     )
                 finally:
                     metrics["read_seconds"] = max(
                         0.0, time.monotonic() - read_started
                     )
-                    metrics["bytes_read"] = (
-                        len(data) if "data" in locals() else 0
+                    metrics["bytes_read"] = max(
+                        metrics.get("bytes_read", 0), len(data)
                     )
                     metrics["redirect_count"] = redirects
                 if not data:
@@ -574,9 +583,10 @@ class Detector:
                     INCOMPLETE,
                     f"连接或读取超时：{exc}",
                     connected,
+                    timed_out=True,
                 ) from exc
             except (
-                OSError,
+                                OSError,
                 ssl.SSLError,
                 http.client.HTTPException,
                 ValueError,
@@ -593,6 +603,7 @@ class Detector:
                     status,
                     f"IPv4/HTTP 请求失败：{exc}",
                     connected,
+                    timed_out=(time.monotonic() >= deadline),
                 ) from exc
             finally:
                 if timer:
@@ -706,7 +717,8 @@ class Detector:
             )
 
         return lines
-            def _complete_manifest(self, result, label):
+
+    def _complete_manifest(self, result, label):
         length = result["content_length"]
         total = result["range_total"]
         if (
@@ -727,10 +739,6 @@ class Detector:
         self, deadline, queue_deadline, first, candidate_result,
         quality=None,
     ):
-        # 关键修正：在完整清单读取和大小检查之前，
-        # 先根据首次读取到的实际内容确认是否具备 HLS 结构。
-        # 普通频道订阅 M3U 只有 #EXTM3U / #EXTINF，
-        # 不含 HLS_MARKERS，因此不会被误识别为 HLS。
         self._mark_hls_type(first["data"], candidate_result)
 
         result = first
@@ -913,7 +921,6 @@ class Detector:
 
             deadline = time.monotonic() + self.budget
             first_slot, slot = slot, None
-            # 信号量所有权已移交给 _request，由 _request 负责释放。
             slot_acquired = False
             first = self._request(
                 url,
@@ -926,7 +933,7 @@ class Detector:
                 stage="initial_response",
                 first_queue_wait_seconds=first_queue_wait,
             )
-                        result["checks"]["ipv4"] = {
+            result["checks"]["ipv4"] = {
                 "status": PASS,
                 "reason": "已建立最终目标的真实 IPv4 连接",
             }
@@ -1030,9 +1037,15 @@ class Detector:
                     reason=f"候选 URL 无效：{exc}",
                 )
 
+        except Exception as exc:
+            for item in result["checks"].values():
+                if item["status"] == INCOMPLETE and item["reason"] == "尚未检测":
+                    item.update(
+                        status=INCOMPLETE,
+                        reason=f"检测程序异常：{exc}",
+                    )
+
         finally:
-            # 只有当前函数确实成功获取且仍持有槽位时才能释放。
-            # acquire 超时失败时，slot 变量虽然非空，但不拥有该信号量。
             if slot is not None and slot_acquired:
                 slot.release()
 
@@ -1065,7 +1078,9 @@ def local_checks_passed(candidate):
         and checks[name].get("status") == PASS
         for name in required
     )
-    def check_candidates(candidates, settings):
+
+
+def check_candidates(candidates, settings):
     """按输入顺序检测候选；settings 接收 settings.json 的 detection 区段。"""
     required = (
         "local_concurrency",
@@ -1148,3 +1163,6 @@ def local_checks_passed(candidate):
                     })
 
     return results
+
+                
+            
