@@ -1,6 +1,6 @@
 IPTV-Direct — PROGRESS.md
 
-版本：2.2
+版本：2.3
 更新日期：2026-11-19
 文件职责：施工进度台账。记录施工阶段顺序、验收进度、执行纪律和当前状态。
 
@@ -275,11 +275,11 @@ D. 迁移对照和清理
 
 14.3 本地检测与质量数据
 
-- [x] 14.3-1 至 14.3-12：第三阶段 checker 已完成。当前 "checker.py" 保留 IPv4、HTTP、HLS、TS 检测及资源限制；排队等待与网络请求耗时、排队超时与网络超时已分离；读取耗时、字节数和吞吐来自实际读取过程；未取得有效读取耗时时吞吐保留为未知；既有 PASS/FAIL/INCOMPLETE 判定语义未作改写。回归测试共 30 项："tests/test_checker.py" 26 项、"tests/test_checker_limits.py" 4 项。GitHub Actions run #97（提交 "c0112cfc18bccbbf4695c7b22c0176be8b953327"）中语法检查、"Run checker tests" 及整个测试 job 均成功。该 CI 提交之后至当前 main（"243d3cc800cfdb0598f22e38d1c9dc37e96d85b5"）的 13 个提交没有修改 "checker.py" 或这两份 checker 测试文件；当前文件与 CI 时一致。
+- [x] 14.3-1 至 14.3-12：第三阶段 checker 已完成。当前 "checker.py" 保留 IPv4、HTTP、HLS、TS 检测及资源限制；排队等待与网络请求耗时、排队超时与网络超时已分离；读取耗时、字节数和吞吐来自实际读取过程；未取得有效读取耗时时吞吐保留为未知；既有 PASS/FAIL/INCOMPLETE 判定语义未作改写。回归测试共 30 项："tests/test_checker.py" 26 项、"tests/test_checker_limits.py" 4 项。GitHub Actions run #97（提交 "c0112cfc18bccbbf4695c7b22c0176be8b953327"）中语法检查、"Run checker tests" 及整个测试 job 均成功。该 CI 提交之后至此前记录的 main（"243d3cc800cfdb0598f22e38d1c9dc37e96d85b5"）的 13 个提交没有修改 "checker.py" 或这两份 checker 测试文件；当前文件与 CI 时一致。
 
 14.4 publisher 优选
 
-- [ ] 14.4-1 至 14.4-13：第四阶段验收尚未通过。已核对当前 publisher 本地优选入口、质量比较与分组实现，以及 tests/test_publisher.py 中的本地 PASS 筛选、质量审计、稳定排序、完整队列和轮流交接测试；main.py 存在优选顺序及候选身份核对，globalping.py 当前按输入候选顺序处理并按原索引返回。尚未取得当前代码版本对应的实际 CI 测试结果；Publisher 旧正式准入、名额、统计和发布实现按施工纪律暂时保留，待第六阶段迁移对照通过后清理。
+- [~] 14.4-1 至 14.4-13：第四阶段本地优选职责已完成并取得当前提交的 CI 测试证据。14.4-1 至 14.4-11、14.4-13 已通过代码核对和对应回归测试：包括本地 PASS 筛选、同频道同媒体类型质量比较、HLS 与 DIRECT_TS 指标隔离、分层排序、稳定顺序、频道及媒体类型分组、未配置频道首次出现顺序、完整优选队列和排序审计，以及 main 与 Globalping 交接顺序核对。GitHub Actions run #44422119239，对应提交 "426c08cd22d28a3a0f8eac775ce9269c74cf357c"，status 为 completed，conclusion 为 success；语法检查及整个测试 Job 成功，其中 "Run publisher tests" 和 "Run main Globalping handoff tests" 均成功。14.4-12 暂不通过：Publisher 仍保留正式准入、每频道名额、累计统计和发布旧业务，这是为了保证第五阶段不提前破坏现有正式调用链；该职责将在第六阶段迁移并完成迁移对照后清理。因此本组暂记部分通过，不把尚未迁移的职责冒充完成。
 
 14.5 Globalping 和正式准入
 
@@ -328,26 +328,34 @@ D. 迁移对照和清理
 
 四、当前状态
 
-当前阶段：第四阶段进行中（publisher）
+当前阶段：第四阶段本地优选工作已完成；下一步进入第五阶段（Globalping 接收接口与远程检测基础）
 
 最近更新：2026-11-19
 
-已完成阶段：第一阶段 collector、第二阶段 normalizer、第三阶段 checker
+已完成阶段：第一阶段 collector、第二阶段 normalizer、第三阶段 checker、第四阶段 publisher 本地优选职责
 
-进行中事项：已完成 publisher 本地优选实现、现有测试、main 交接核对及 Globalping 输入顺序核对；下一步取得当前代码版本的实际测试结果，并按 MASTER_PLAN 14.4 逐项验收
+进行中事项：Publisher 本地优选实现、测试及交接核对已完成；当前提交的 GitHub Actions 测试通过。14.4-1 至 14.4-11、14.4-13 已核验，14.4-12 的正式业务迁移留待第六阶段。下一步先核对现有 globalping.py、API、额度、探针、测量、轮询及测试，再按 MASTER_PLAN 开展第五阶段。
 
-阻塞项：当前 GitHub 连接的文件写入操作返回 403（Resource not accessible by integration），无法由当前连接直接提交修改；当前代码版本尚未取得实际测试结果。
+阻塞项：当前 GitHub 连接无法直接写入仓库，PROGRESS.md 更新需由用户提交；当前 Publisher 测试无未解决的 CI 阻塞。
 
 阶段记录
 
 阶段| 内容| 状态| 完成日期 / 提交 SHA / 证据
+
 第一阶段| collector| 已完成（对应 CI 测试通过）| 2026-11-18；代码 "3b5135d8b432f0a1daacc5e7dadc474f30f1f1c6"；测试 "6e64020144beda17cc953e285320aa2aba1ae119"；Actions run #97 成功
+
 第二阶段| normalizer| 已完成（对应 CI 测试通过）| 2026-11-18；代码 "b1aef21c04bf4096b239b5b7221a0f72d8722d9d"；测试 "1b6e0d0159f0f97cfaa111869ef7d812e2a2fdee"；Actions run #97 成功
+
 第三阶段| checker| 已完成（30 项回归测试通过）| checker "110a79ffd0c34a20d600cf0eb3763c0a26ff81a8"；测试更新 "c0112cfc18bccbbf4695c7b22c0176be8b953327"；Actions run #97 成功
-第四阶段| publisher 本地优选| 进行中| 已完成代码与测试覆盖核对；当前版本测试尚未执行，未验收
-第五阶段| Globalping 接收接口与远程检测基础完善| 未开始| —
+
+第四阶段| publisher 本地优选| 已完成（本地优选职责）| 2026-11-19；提交 "426c08cd22d28a3a0f8eac775ce9269c74cf357c"；Actions run #44422119239 成功；正式准入、名额、统计和发布旧业务保留，待第六阶段迁移
+
+第五阶段| Globalping 接收接口与远程检测基础完善| 待开始| 第四阶段本地优选工作完成；开始前先核对现有 globalping.py、API、额度、探针、测量、轮询及对应测试
+
 第六阶段| Publisher 正式准入、动态处理和发布业务迁移| 未开始| —
+
 第七阶段| main 唯一调用架构整合| 暂缓，等待第六阶段完成| —
+
 第八阶段| 全链路验收| 等待第七阶段完成| —
 
 备注
