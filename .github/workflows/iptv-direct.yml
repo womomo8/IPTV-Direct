@@ -1,19 +1,22 @@
-name: IPTV-Direct
+
+name: IPTV-Direct Unified Workflow
 
 on:
   schedule:
-    - cron: "0 */6 * * *"
+    # 北京时间每天 06:17（UTC 前一天 22:17）
+    - cron: "17 22 * * *"
 
   workflow_dispatch:
     inputs:
       mode:
-        description: 运行模式
+        description: "选择运行模式"
         required: true
         type: choice
         options:
-          - 正式
           - 测试
+          - 正式
           - 诊断
+        default: 正式
 
 permissions:
   contents: read
@@ -118,8 +121,7 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       inputs.mode == '测试'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-
+    timeout-minutes: 15
     permissions:
       contents: read
 
@@ -135,15 +137,56 @@ jobs:
       - name: Show run mode
         run: echo "运行模式：测试"
 
-      - name: Install dependencies
+      - name: Check Python syntax
         run: |
-          python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          fi
+          python -m py_compile main.py checker.py globalping.py collector.py normalizer.py publisher.py
+          python -m py_compile tests/test_checker.py tests/test_checker_limits.py
+          python -m py_compile tests/test_globalping.py tests/test_main_globalping.py
+          python -m py_compile tests/test_publisher.py tests/test_publisher_release.py tests/test_main_collection.py
+          python -m py_compile tests/test_main_failure.py
+          python -m py_compile tests/test_channel_categories.py
 
-      - name: Run tests
-        run: python -m pytest -q
+          python -m py_compile tests/test_normalizer.py
+          python -m py_compile tests/test_collector.py
+
+      - name: Run collector regression tests
+        run: |
+          python -m unittest discover -s tests -p "test_collector.py" -v
+
+      - name: Run six-category tests
+        run: |
+          python -m unittest discover -s tests -p "test_channel_categories.py" -v
+
+      - name: Run normalizer candidate limit tests
+        run: |
+          python -m unittest discover -s tests -p "test_normalizer.py" -v
+
+      - name: Run checker tests
+        run: |
+          python -m unittest discover -s tests -p "test_checker*.py" -v
+
+      - name: Run Globalping tests
+        run: |
+          python -m unittest discover -s tests -p "test_globalping.py" -v
+
+      - name: Run main Globalping handoff tests
+        run: |
+          python -m unittest discover -s tests -p "test_main_globalping.py" -v
+
+      - name: Run publisher tests
+        run: |
+          python -m unittest discover -s tests -p "test_publisher*.py" -v
+
+      - name: Run main collection tests
+        run: |
+          python -m unittest discover -s tests -p "test_main_collection.py" -v
+
+      - name: Run main failure tests
+        run: |
+          python -m unittest discover -s tests -p "test_main_failure.py" -v
+
+      - name: Run existing test flow
+        run: python main.py --mode test
 
   diagnostic:
     name: 诊断
@@ -151,8 +194,7 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       inputs.mode == '诊断'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-
+    timeout-minutes: 10
     permissions:
       contents: read
 
@@ -168,12 +210,7 @@ jobs:
       - name: Show run mode
         run: echo "运行模式：诊断"
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          fi
-
-      - name: Run diagnostic
-        run: python main.py --mode diagnostic
+      - name: Run Globalping API diagnostic
+        env:
+          GLOBALPING_API_TOKEN: ${{ secrets.GLOBALPING_API_TOKEN }}
+        run: python tools/globalping_api_test.py
