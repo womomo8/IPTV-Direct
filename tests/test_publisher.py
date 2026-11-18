@@ -689,7 +689,7 @@ class MainPublisherHandoffIntegrationTests(unittest.TestCase):
     def test_quality_order_and_publisher_quality_selection(self):
         """
         Globalping 按质量优先检测；
-        main 恢复原始候选顺序；
+        main 保持 publisher 的优选顺序；
         publisher 最终按真实质量选留线路。
         """
         auto_best = make_candidate(
@@ -785,8 +785,8 @@ class MainPublisherHandoffIntegrationTests(unittest.TestCase):
             ],
             [
                 "https://example.com/auto-best.m3u8",
-                "https://example.com/manual-slow.m3u8",
                 "https://example.com/auto-first.m3u8",
+                "https://example.com/manual-slow.m3u8",
             ],
         )
 
