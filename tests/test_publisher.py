@@ -1,3 +1,4 @@
+
 """IPTV-Direct：publisher.py 线路准入与订阅生成专项测试。"""
 
 import unittest
@@ -628,6 +629,8 @@ class PublisherAdmissionTests(unittest.TestCase):
             result["results"][0]["status"],
             publisher.REJECTED,
         )
+
+
 class MainPublisherHandoffIntegrationTests(unittest.TestCase):
     """验证 main 优选、Globalping 结果和真实 publisher 的完整交接。"""
 
@@ -826,6 +829,243 @@ class MainPublisherHandoffIntegrationTests(unittest.TestCase):
         )
 
         self.assertEqual(len(admission["results"]), 3)
+
+
+class PublisherGlobalpingPrioritizationTests(unittest.TestCase):
+    """验证 publisher 的本地优选职责，不涉及正式准入和发布。"""
+
+    @staticmethod
+    def _quality(
+        segment_success,
+        timeout_count,
+        elapsed,
+        request_success=3,
+    ):
+        return {
+            "request_count": 3,
+            "request_success_count": request_success,
+            "timeout_count": timeout_count,
+            "total_elapsed_seconds": elapsed,
+            "total_read_seconds": elapsed / 2,
+            "total_bytes_read": 3000,
+            "segment_total": 3,
+            "segment_success_count": segment_success,
+        }
+
+    def test_local_pass_filter_and_audit_records(self):
+        hls = make_candidate(
+            url="https://example.com/eligible.m3u8",
+            quality=self._quality(
+                segment_success=3,
+                timeout_count=0,
+                elapsed=1.0,
+            ),
+        )
+        direct_ts = make_candidate(
+            url="https://example.com/eligible.ts",
+            media_type="DIRECT_TS",
+            global_status="FAIL",
+            quality=self._quality(
+                segment_success=0,
+                timeout_count=0,
+                elapsed=1.0,
+            ),
+        )
+        failed = make_candidate(
+            url="https://example.com/failed.m3u8",
+            local_status="FAIL",
+        )
+
+        result = publisher.prioritize_candidates_for_globalping(
+            [hls, direct_ts, failed],
+            CHANNELS,
+        )
+
+        self.assertEqual(
+            [
+                item["normalized_url"]
+                for item in result["queue"]
+            ],
+            [
+                "https://example.com/eligible.m3u8",
+                "https://example.com/eligible.ts",
+            ],
+        )
+        self.assertEqual(
+            [
+                item["identity"]
+                for item in result["excluded"]
+            ],
+            [
+                ("CCTV-1", "https://example.com/failed.m3u8"),
+            ],
+        )
+        self.assertTrue(result["excluded"][0]["reason"])
+
+        self.assertEqual(
+            [
+                item["identity"]
+                for item in result["ranking"]
+            ],
+            [
+                ("CCTV-1", "https://example.com/eligible.m3u8"),
+                ("CCTV-1", "https://example.com/eligible.ts"),
+            ],
+        )
+        self.assertEqual(
+            [item["priority_order"] for item in result["ranking"]],
+            [1, 2],
+        )
+        self.assertEqual(
+            result["ranking"][1]["local_status"]["hls"],
+            "N/A",
+        )
+        self.assertEqual(
+            result["ranking"][0]["quality_data"],
+            hls["quality"],
+        )
+        self.assertEqual(
+            result["ranking"][1]["quality_data"],
+            direct_ts["quality"],
+        )
+
+    def test_group_quality_order_stability_and_complete_round_robin(self):
+        hls_lower_first = make_candidate(
+            url="https://example.com/hls-lower-first.m3u8",
+            quality=self._quality(
+                segment_success=1,
+                timeout_count=1,
+                elapsed=9.0,
+                request_success=2,
+            ),
+        )
+        direct_ts_slow = make_candidate(
+            url="https://example.com/direct-slow.ts",
+            media_type="DIRECT_TS",
+            quality=self._quality(
+                segment_success=0,
+                timeout_count=1,
+                elapsed=9.0,
+                request_success=2,
+            ),
+        )
+        hls_best = make_candidate(
+            url="https://example.com/hls-best.m3u8",
+            quality=self._quality(
+                segment_success=3,
+                timeout_count=0,
+                elapsed=1.0,
+            ),
+        )
+        direct_ts_fast = make_candidate(
+            url="https://example.com/direct-fast.ts",
+            media_type="DIRECT_TS",
+            quality=self._quality(
+                segment_success=0,
+                timeout_count=0,
+                elapsed=1.0,
+            ),
+        )
+        hls_lower_second = make_candidate(
+            url="https://example.com/hls-lower-second.m3u8",
+            quality=self._quality(
+                segment_success=1,
+                timeout_count=1,
+                elapsed=9.0,
+                request_success=2,
+            ),
+        )
+        configured_later_channel = make_candidate(
+            url="https://example.com/cctv5.m3u8",
+            channel="CCTV-5",
+            quality=self._quality(
+                segment_success=2,
+                timeout_count=0,
+                elapsed=2.0,
+            ),
+        )
+        unconfigured_channel = make_candidate(
+            url="https://example.com/other.m3u8",
+            channel="OTHER",
+            quality=self._quality(
+                segment_success=2,
+                timeout_count=0,
+                elapsed=2.0,
+            ),
+        )
+
+        candidates = [
+            hls_lower_first,
+            direct_ts_slow,
+            hls_best,
+            direct_ts_fast,
+            hls_lower_second,
+            configured_later_channel,
+            unconfigured_channel,
+        ]
+
+        result = publisher.prioritize_candidates_for_globalping(
+            candidates,
+            CHANNELS,
+        )
+
+        expected_urls = [
+            "https://example.com/hls-best.m3u8",
+            "https://example.com/direct-fast.ts",
+            "https://example.com/cctv5.m3u8",
+            "https://example.com/other.m3u8",
+            "https://example.com/hls-lower-first.m3u8",
+            "https://example.com/direct-slow.ts",
+            "https://example.com/hls-lower-second.m3u8",
+        ]
+        self.assertEqual(
+            [
+                item["normalized_url"]
+                for item in result["queue"]
+            ],
+            expected_urls,
+        )
+        self.assertEqual(len(result["queue"]), len(candidates))
+        self.assertEqual(result["excluded"], [])
+
+        self.assertEqual(
+            [item["original_index"] for item in result["ranking"]],
+            [2, 3, 5, 6, 0, 1, 4],
+        )
+        self.assertEqual(
+            [item["priority_order"] for item in result["ranking"]],
+            list(range(1, len(candidates) + 1)),
+        )
+        self.assertEqual(
+            [
+                (
+                    item["group"]["channel"],
+                    item["group"]["media_type"],
+                )
+                for item in result["ranking"]
+            ],
+            [
+                ("CCTV-1", "HLS"),
+                ("CCTV-1", "DIRECT_TS"),
+                ("CCTV-5", "HLS"),
+                ("OTHER", "HLS"),
+                ("CCTV-1", "HLS"),
+                ("CCTV-1", "DIRECT_TS"),
+                ("CCTV-1", "HLS"),
+            ],
+        )
+        self.assertEqual(
+            result["ranking"][4]["identity"],
+            ("CCTV-1", "https://example.com/hls-lower-first.m3u8"),
+        )
+        self.assertEqual(
+            result["ranking"][6]["identity"],
+            ("CCTV-1", "https://example.com/hls-lower-second.m3u8"),
+        )
+        self.assertEqual(
+            result["ranking"][0]["quality_data"],
+            hls_best["quality"],
+        )
 
 
 if __name__ == "__main__":
