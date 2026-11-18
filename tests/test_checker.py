@@ -1053,6 +1053,139 @@ class CheckerLocalTests(unittest.TestCase):
 
         self.assert_status(result, "http", "INCOMPLETE")
 
+    def test_hls_checks_at_most_three_segments_with_64kb_limit(self):
+        """HLS 最多抽查三个实际分片，每个分片最多读取 64 KB。"""
+        playlist = (
+            "#EXTM3U\n"
+            "#EXT-X-VERSION:3\n"
+            "#EXT-X-TARGETDURATION:10\n"
+            "#EXTINF:10,\n"
+            "seg1.ts\n"
+            "#EXTINF:10,\n"
+            "seg2.ts\n"
+            "#EXTINF:10,\n"
+            "seg3.ts\n"
+            "#EXTINF:10,\n"
+            "seg4.ts\n"
+            "#EXT-X-ENDLIST\n"
+        ).encode("utf-8")
+
+        self.server.routes["/many-segments.m3u8"] = {
+            "status": 200,
+            "body": playlist,
+        }
+
+        for index in range(1, 5):
+            self.server.routes[f"/seg{index}.ts"] = {
+                "status": 200,
+                "body": VALID_TS * 1000,
+            }
+
+        result = self.check("/many-segments.m3u8")
+        quality = result["quality"]
+
+        self.assertEqual(result["media_type"], "HLS")
+        self.assert_status(result, "hls", "PASS")
+        self.assert_status(result, "ts", "PASS")
+
+        self.assertEqual(quality["segment_total"], 3)
+        self.assertEqual(quality["segment_success_count"], 3)
+        self.assertEqual(quality["segment_failure_count"], 0)
+
+        segment_requests = [
+            (path, header)
+            for path, header in self.server.range_headers
+            if path.endswith(".ts")
+        ]
+
+        self.assertEqual(
+            [path for path, _ in segment_requests],
+            ["/seg1.ts", "/seg2.ts", "/seg3.ts"],
+        )
+
+        self.assertTrue(
+            all(header == "bytes=0-65535" for _, header in segment_requests)
+        )
+
+        segment_samples = [
+            sample
+            for sample in quality["request_samples"]
+            if sample["stage"].startswith("segment_")
+        ]
+
+        self.assertEqual(len(segment_samples), 3)
+        self.assertTrue(
+            all(sample["bytes_read"] <= 65536 for sample in segment_samples)
+        )
+
+    def test_configured_hls_manifest_limit_is_respected(self):
+        """HLS 清单必须遵守实际配置的大小上限。"""
+        self.assertGreater(len(MEDIA_PLAYLIST), 100)
+
+        self.server.routes["/limited-manifest.m3u8"] = {
+            "status": 200,
+            "body": MEDIA_PLAYLIST,
+        }
+
+        result = self.check(
+            "/limited-manifest.m3u8",
+            max_hls_manifest_bytes=100,
+        )
+
+        self.assertEqual(result["media_type"], "HLS")
+        self.assert_status(result, "ipv4", "PASS")
+        self.assert_status(result, "http", "PASS")
+        self.assert_status(result, "hls", "FAIL")
+        self.assert_status(result, "ts", "INCOMPLETE")
+
+        self.assertEqual(result["quality"]["segment_total"], 0)
+
+    def test_missing_throughput_is_none_not_zero(self):
+        """没有实际读取数据时，吞吐率必须保留为缺失值。"""
+        result = self.check("/unavailable")
+        sample = result["quality"]["request_samples"][0]
+
+        self.assertEqual(sample["outcome"], "INCOMPLETE")
+        self.assertEqual(sample["bytes_read"], 0)
+        self.assertEqual(sample["read_seconds"], 0)
+        self.assertIsNone(sample["bytes_per_second"])
+
+    def test_queue_limit_controls_batch_size(self):
+        """queue_limit 必须控制每批提交数量，并保持结果顺序。"""
+        observed = []
+
+        def fake_check(detector, candidate, submitted_at):
+            observed.append((candidate["id"], submitted_at))
+            return {"id": candidate["id"]}
+
+        candidates = [
+            {"id": index}
+            for index in range(5)
+        ]
+
+        with patch.object(Detector, "check_one", new=fake_check):
+            results = check_candidates(
+                candidates,
+                self.settings(
+                    local_concurrency=1,
+                    queue_limit=2,
+                ),
+            )
+
+        batches = {}
+        for candidate_id, submitted_at in observed:
+            batches.setdefault(submitted_at, []).append(candidate_id)
+
+        self.assertEqual(
+            sorted(len(batch) for batch in batches.values()),
+            [1, 2, 2],
+        )
+
+        self.assertEqual(
+            [item["id"] for item in results],
+            [0, 1, 2, 3, 4],
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
