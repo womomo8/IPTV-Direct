@@ -1069,6 +1069,18 @@ def run_formal_flow(config: dict[str, Any]) -> int:
         )
     )
 
+    # 目标完成状态只读取 publisher 的正式返回结果。
+    if admission["all_channels_reached"]:
+        print(
+            "本轮频道目标完成："
+            "所有目标频道均达到每频道 2 条正式准入线路。"
+        )
+    else:
+        print(
+            "本轮频道目标未完成："
+            "至少一个目标频道未达到每频道 2 条正式准入线路。"
+        )
+
     # 统一检测和准入完成后，再输出人工来源逐条诊断。
     detected_by_id = {
         _identity(item): item
