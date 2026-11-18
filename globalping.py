@@ -2362,12 +2362,37 @@ def _restore_previous_publish(
     channels: list[str],
 ) -> None:
     """恢复上一版订阅；恢复前先核验持久化备份。"""
-    if old_data[0] is None and old_data[1] is None:
+    if old_data == [None, None]:
         for target in targets:
             target.unlink(missing_ok=True)
 
         if any(target.exists() for target in targets):
             raise GlobalpingError("首次发布失败后的文件清理核验失败")
+
+        return
+
+    if old_data == [b"", b""]:
+        staged = []
+
+        try:
+            for target in targets:
+                staged.append(
+                    _write_temp_file(
+                        target.parent,
+                        f".{target.name}.restore-",
+                        b"",
+                    )
+                )
+
+            for temporary, target in zip(staged, targets):
+                os.replace(temporary, target)
+
+            if any(target.read_bytes() != b"" for target in targets):
+                raise GlobalpingError("空订阅文件恢复后的内容核验失败")
+
+        finally:
+            for temporary in staged:
+                temporary.unlink(missing_ok=True)
 
         return
 
