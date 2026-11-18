@@ -759,7 +759,7 @@ class Detector:
                 f"媒体清单及 {min(3, len(segments))} 个 TS 分片通过"
             ),
         }
-            def check_one(self, candidate, submitted_at):
+    def check_one(self, candidate, submitted_at):
         result = {
             **candidate,
             "media_type": "UNKNOWN",
