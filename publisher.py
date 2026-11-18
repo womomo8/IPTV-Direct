@@ -53,6 +53,7 @@ def _status(checks: Any, name: str) -> str | None:
     value = item.get("status")
     return value if isinstance(value, str) else None
 
+
 def _valid_url(value: Any) -> bool:
     """确认候选 URL 是有效且已规范化的 HTTP/HTTPS 地址。"""
     if (
@@ -106,7 +107,6 @@ def _valid_url(value: Any) -> bool:
         return False
 
 
-
 def _required_checks(media_type: str) -> tuple[str, ...] | None:
     """根据实际识别的媒体类型返回适用检测项目。"""
     if media_type == "HLS":
@@ -140,6 +140,43 @@ def _local_admission_reason(candidate: dict[str, Any]) -> str | None:
 
         if state != PASS:
             return f"本地 {name.upper()} 检测未通过：{state or '缺少结果'}"
+
+    return None
+
+
+def _prioritization_local_reason(
+    candidate: dict[str, Any],
+) -> str | None:
+    """
+    检查候选是否具备进入 Globalping 优选队列的本地资格。
+
+    这是优选阶段独立的资格判断，不调用正式准入函数。
+    优选阶段只负责筛选本地适用检测全部 PASS 的候选，
+    不执行 Globalping 结果判定、正式准入或名额竞争。
+    """
+    media_type = candidate.get("media_type")
+    required = _required_checks(media_type)
+
+    if required is None:
+        return "未知或不支持的媒体类型，不能进入 Globalping 优选队列"
+
+    checks = candidate.get("checks")
+
+    if not isinstance(checks, dict):
+        return "缺少本地检测结果，不能进入 Globalping 优选队列"
+
+    if media_type == "DIRECT_TS":
+        if _status(checks, "hls") != NA:
+            return "直接 TS 的 HLS 本地检测必须为 N/A"
+
+    for name in required:
+        state = _status(checks, name)
+
+        if state != PASS:
+            return (
+                f"本地 {name.upper()} 检测未通过，"
+                f"不能进入 Globalping 优选队列：{state or '缺少结果'}"
+            )
 
     return None
 
@@ -301,7 +338,6 @@ def _candidate_quality_key(
 
     parts: list[tuple[int, float]] = []
 
-    # HLS 比较实际媒体分片成功情况；直接 TS 不使用此指标。
     if media_type == "HLS":
         segment_total = _quality_number(quality, "segment_total")
         segment_success = _quality_number(
@@ -371,7 +407,6 @@ def _rank_routes(
                 for index in positions
             ]
 
-            # Python 稳定排序：质量相同时保留原始候选顺序。
             same_type_routes.sort(key=_candidate_quality_key)
 
             for index, route in zip(positions, same_type_routes):
@@ -396,10 +431,8 @@ def _priority_key_for_audit(key: tuple[Any, ...]) -> list[dict[str, Any]]:
 def _prioritize_candidates_for_globalping(
     candidates: list[dict[str, Any]],
     channels: list[str],
-    *,
-    require_local_pass: bool,
 ) -> dict[str, Any]:
-    """构建完整优选队列；公开入口始终要求本地适用检测全部通过。"""
+    """构建完整优选队列；始终要求本地适用检测全部通过。"""
     if not isinstance(candidates, list):
         raise PublisherError("Globalping 优选输入必须是候选列表")
 
@@ -444,7 +477,11 @@ def _prioritize_candidates_for_globalping(
             )
 
         seen_identities.add(identity)
-        first_channel_position.setdefault(channel, len(first_channel_position))
+
+        first_channel_position.setdefault(
+            channel,
+            len(first_channel_position),
+        )
 
         if isinstance(media_type, str) and media_type:
             first_group_position.setdefault(
@@ -452,21 +489,13 @@ def _prioritize_candidates_for_globalping(
                 original_index,
             )
 
-        if require_local_pass:
-            reason = _local_admission_reason(candidate)
-            if reason is not None:
-                excluded.append({
-                    "candidate": candidate,
-                    "identity": identity,
-                    "reason": reason,
-                })
-                continue
+        reason = _prioritization_local_reason(candidate)
 
-        if not isinstance(media_type, str) or not media_type:
+        if reason is not None:
             excluded.append({
                 "candidate": candidate,
                 "identity": identity,
-                "reason": "缺少有效媒体类型，不能建立媒体类型优选组",
+                "reason": reason,
             })
             continue
 
@@ -491,15 +520,18 @@ def _prioritize_candidates_for_globalping(
         ),
     )
 
-    queues: list[tuple[tuple[str, str], list[tuple[int, dict[str, Any]]]]] = []
+    queues: list[
+        tuple[tuple[str, str], list[tuple[int, dict[str, Any]]]]
+    ] = []
 
     for group_key in group_keys:
         indexed_candidates = groups[group_key]
-        # Python 稳定排序：所有质量键相同或同样缺失时保留原始顺序。
+
         ranked_group = sorted(
             indexed_candidates,
             key=lambda item: _candidate_quality_key(item[1]),
         )
+
         queues.append((group_key, ranked_group))
 
     queue: list[dict[str, Any]] = []
@@ -520,6 +552,7 @@ def _prioritize_candidates_for_globalping(
                 name: _status(checks, name)
                 for name in ("ipv4", "http", "hls", "ts")
             }
+
             queue.append(candidate)
             ranking.append({
                 "identity": (channel, candidate["normalized_url"]),
@@ -564,7 +597,6 @@ def prioritize_candidates_for_globalping(
     return _prioritize_candidates_for_globalping(
         candidates,
         channels,
-        require_local_pass=True,
     )
 
 
@@ -607,8 +639,6 @@ def _prepare_candidate(
     if category_map:
         result["category"] = category_map[channel]
 
-    # 国内真实网络验证与本地、Globalping 检测分别记录。
-    # 没有实测证据时绝不标记为国内实播通过。
     if "domestic_verification" not in result:
         result["domestic_verification"] = {
             "status": "NOT_VERIFIED",
@@ -640,6 +670,8 @@ def _channel_counts(
             counts[channel] += 1
 
     return counts
+
+
 def process_batch(
     candidates: list[dict[str, Any]],
     accepted_routes: list[dict[str, Any]],
@@ -688,7 +720,6 @@ def process_batch(
             "每个频道最多保留线路数必须符合 MASTER_PLAN.md：2"
         )
 
-    # 先保留此前批次已经准入的线路。
     existing = []
 
     for route in accepted_routes:
@@ -712,8 +743,6 @@ def process_batch(
     prepared = []
     results = [None] * len(candidates)
 
-    # 按原始候选索引预留结果位置，确保所有结果严格保持输入顺序。
-    # priority 和 source_order 仅作为来源元数据，不参与最终质量排序。
     for candidate_index, candidate in enumerate(candidates):
         route, reason = _prepare_candidate(candidate, channels)
 
@@ -738,7 +767,6 @@ def process_batch(
         seen_urls.add(url)
         prepared.append((candidate_index, route))
 
-    # 历史准入线路和本批新候选统一参与质量竞争。
     combined = _rank_routes(
         existing + [route for _, route in prepared],
         channels,
@@ -776,7 +804,6 @@ def process_batch(
         if route["normalized_url"] not in existing_urls
     }
 
-    # 回填本批候选结果；索引槽位保证无效、重复和合格候选顺序一致。
     for candidate_index, item in prepared:
         url = item["normalized_url"]
 
@@ -884,7 +911,6 @@ def build_subscriptions(
         for index, channel in enumerate(channels)
     }
 
-    # 只按频道配置顺序排列；稳定排序保留 publisher 已确定的频道内顺序。
     ordered.sort(
         key=lambda route: channel_index[route["channel"]]
     )
@@ -1012,7 +1038,6 @@ def validate_subscriptions(
         m3u_entries.append((channel, url))
         index += 2
 
-    # 没有任何有效频道线路时，不能把空订阅视为校验通过。
     if not m3u_entries:
         raise PublisherError("订阅没有任何有效线路")
 
@@ -1052,6 +1077,8 @@ def validate_subscriptions(
         raise PublisherError("订阅超过每频道 2 条线路上限")
 
     return True
+
+
 def _subscription_snapshot(m3u_text, txt_text):
     """从旧订阅自身提取频道和线路数量，并检查两份文件一致性。"""
     if not isinstance(m3u_text, str) or not isinstance(txt_text, str):
@@ -1265,7 +1292,6 @@ def publish_subscriptions(
     staged = []
 
     try:
-        # 先准备好两份临时文件。
         for target, data in zip(targets, new_data):
             staged.append(
                 _write_temp_file(
@@ -1276,11 +1302,9 @@ def publish_subscriptions(
             )
 
         try:
-            # 依次替换正式文件。
             for temp_file, target in zip(staged, targets):
                 os.replace(temp_file, target)
 
-            # 重新读取正式文件。
             actual_m3u = targets[0].read_text(
                 encoding="utf-8-sig"
             )
