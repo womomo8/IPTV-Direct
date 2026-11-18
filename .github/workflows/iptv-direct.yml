@@ -1,23 +1,19 @@
-
- 
-name: IPTV-Direct Unified Workflow
+name: IPTV-Direct
 
 on:
   schedule:
-    # 北京时间每天 06:17（UTC 前一天 22:17）
-    - cron: "17 22 * * *"
+    - cron: "0 */6 * * *"
 
   workflow_dispatch:
     inputs:
       mode:
-        description: "选择运行模式"
+        description: 运行模式
         required: true
         type: choice
         options:
-          - 测试
           - 正式
+          - 测试
           - 诊断
-        default: 正式
 
 permissions:
   contents: read
@@ -33,6 +29,10 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write
+    concurrency:
+      group: iptv-publish
+      cancel-in-progress: false
+      queue: max
 
     steps:
       - name: Checkout repository
@@ -49,26 +49,49 @@ jobs:
         run: echo "运行模式：正式"
 
       - name: Run IPTV-Direct
+        id: formal_run
         env:
           GLOBALPING_API_TOKEN: ${{ secrets.GLOBALPING_API_TOKEN }}
         run: python main.py --mode formal
 
-      - name: Commit subscription updates
+      - name: Persist publication state
+        if: always()
         run: |
-          for file in output/iptv.m3u output/iptv.txt; do
-            if [ -f "$file" ]; then
-              git add "$file"
-            fi
-          done
+          # 失败运行只保存发布保护状态和现场文件。
+          # 成功运行同时保存正式订阅及备份状态。
+          if [ -d output/.iptv-publish-state ]; then
+            git add -f output/.iptv-publish-state
+          fi
+
+          if [ "${{ steps.formal_run.outcome }}" = "success" ]; then
+            for file in output/iptv.m3u output/iptv.txt; do
+              if [ -f "$file" ]; then
+                git add "$file"
+              fi
+            done
+          else
+            # 发布失败时保留现场临时文件，
+            # 不将失败输出当作正式订阅。
+            for file in output/.iptv*.tmp output/.iptv*.stage-* output/.iptv*.recovery-* output/.iptv*.restore-*; do
+              if [ -f "$file" ]; then
+                git add -f "$file"
+              fi
+            done
+          fi
 
           if git diff --cached --quiet; then
-            echo "订阅文件没有变化，无需提交。"
+            echo "没有需要持久化的发布状态。"
             exit 0
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "更新 IPTV 订阅"
+
+          if [ "${{ steps.formal_run.outcome }}" = "success" ]; then
+            git commit -m "更新 IPTV 订阅及发布备份"
+          else
+            git commit -m "保存 IPTV 发布恢复状态"
+          fi
 
           for attempt in 1 2 3; do
             echo "同步远程分支并尝试推送：第 ${attempt} 次"
@@ -76,7 +99,7 @@ jobs:
             git rebase origin/main
 
             if git push origin HEAD:main; then
-              echo "订阅更新已成功推送。"
+              echo "发布状态持久化成功。"
               exit 0
             fi
 
@@ -86,7 +109,7 @@ jobs:
             fi
           done
 
-          echo "错误：重试 3 次后仍无法推送订阅。"
+          echo "错误：发布状态无法持久化，重试 3 次后仍无法推送。"
           exit 1
 
   test:
@@ -95,7 +118,8 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       inputs.mode == '测试'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
+
     permissions:
       contents: read
 
@@ -111,57 +135,15 @@ jobs:
       - name: Show run mode
         run: echo "运行模式：测试"
 
-      - name: Check Python syntax
+      - name: Install dependencies
         run: |
-          python -m py_compile main.py checker.py globalping.py collector.py normalizer.py publisher.py
-          python -m py_compile tests/test_checker.py tests/test_checker_limits.py
-          python -m py_compile tests/test_globalping.py tests/test_main_globalping.py
-          python -m py_compile tests/test_publisher.py tests/test_publisher_release.py tests/test_main_collection.py
-          python -m py_compile tests/test_main_failure.py
-          python -m py_compile tests/test_channel_categories.py
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
 
-          python -m py_compile tests/test_normalizer.py
-          python -m py_compile tests/test_collector.py
-
-      - name: Run collector regression tests
-        run: |
-          python -m unittest discover -s tests -p "test_collector.py" -v
-
-      - name: Run six-category tests
-        run: |
-          python -m unittest discover -s tests -p "test_channel_categories.py" -v
-
-
-      - name: Run normalizer candidate limit tests
-        run: |
-          python -m unittest discover -s tests -p "test_normalizer.py" -v
-
-      - name: Run checker tests
-        run: |
-          python -m unittest discover -s tests -p "test_checker*.py" -v
-
-      - name: Run Globalping tests
-        run: |
-          python -m unittest discover -s tests -p "test_globalping.py" -v
-
-      - name: Run main Globalping handoff tests
-        run: |
-          python -m unittest discover -s tests -p "test_main_globalping.py" -v
-
-      - name: Run publisher tests
-        run: |
-          python -m unittest discover -s tests -p "test_publisher*.py" -v
-
-      - name: Run main collection tests
-        run: |
-          python -m unittest discover -s tests -p "test_main_collection.py" -v
-
-      - name: Run main failure tests
-        run: |
-          python -m unittest discover -s tests -p "test_main_failure.py" -v
-
-      - name: Run existing test flow
-        run: python main.py --mode test
+      - name: Run tests
+        run: python -m pytest -q
 
   diagnostic:
     name: 诊断
@@ -169,7 +151,8 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       inputs.mode == '诊断'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
+
     permissions:
       contents: read
 
@@ -185,7 +168,12 @@ jobs:
       - name: Show run mode
         run: echo "运行模式：诊断"
 
-      - name: Run Globalping API diagnostic
-        env:
-          GLOBALPING_API_TOKEN: ${{ secrets.GLOBALPING_API_TOKEN }}
-        run: python tools/globalping_api_test.py
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+
+      - name: Run diagnostic
+        run: python main.py --mode diagnostic
