@@ -196,8 +196,7 @@ class Detector:
                 FAIL, "HTTP 206 的范围或总长度无效", connected
             )
         return start, end, total
-
-    @staticmethod
+            @staticmethod
     def _abort(conn):
         """shutdown 能中断其他线程中的阻塞读取；单纯 close 不可靠。"""
         sock = getattr(conn, "sock", None)
@@ -458,8 +457,7 @@ class Detector:
                     current = urljoin(current, location)
                     redirects += 1
                     continue
-
-                if response.status not in (200, 206):
+                                    if response.status not in (200, 206):
                     status = FAIL if response.status < 500 else INCOMPLETE
                     raise CheckError(
                         status,
@@ -708,8 +706,7 @@ class Detector:
             )
 
         return lines
-
-    def _complete_manifest(self, result, label):
+            def _complete_manifest(self, result, label):
         length = result["content_length"]
         total = result["range_total"]
         if (
@@ -840,6 +837,7 @@ class Detector:
                 f"媒体清单及 {min(3, len(segments))} 个 TS 分片通过"
             ),
         }
+
     def check_one(self, candidate, submitted_at):
         result = {
             **candidate,
@@ -902,17 +900,16 @@ class Detector:
             wait = queue_deadline - queue_started
             slot_acquired = wait > 0 and slot.acquire(timeout=wait)
             first_queue_wait = max(0.0, time.monotonic() - queue_started)
-            result["quality"]["total_queue_wait_seconds"] += first_queue_wait
             result["quality"]["queue_wait_samples"].append({
                 "stage": "initial_response", "wait_seconds": round(first_queue_wait, 6),
                 "outcome": "ACQUIRED" if slot_acquired else "TIMEOUT",
             })
             if not slot_acquired:
+                result["quality"]["total_queue_wait_seconds"] += first_queue_wait
                 result["quality"]["queue_timeout_count"] += 1
                 raise CheckError(INCOMPLETE,
                     f"等待主机并发槽位超过 {self.settings['max_queue_seconds']} 秒",
                     queue_timeout=True)
-
 
             deadline = time.monotonic() + self.budget
             first_slot, slot = slot, None
@@ -929,7 +926,7 @@ class Detector:
                 stage="initial_response",
                 first_queue_wait_seconds=first_queue_wait,
             )
-            result["checks"]["ipv4"] = {
+                        result["checks"]["ipv4"] = {
                 "status": PASS,
                 "reason": "已建立最终目标的真实 IPv4 连接",
             }
@@ -1068,9 +1065,7 @@ def local_checks_passed(candidate):
         and checks[name].get("status") == PASS
         for name in required
     )
-
-
-def check_candidates(candidates, settings):
+    def check_candidates(candidates, settings):
     """按输入顺序检测候选；settings 接收 settings.json 的 detection 区段。"""
     required = (
         "local_concurrency",
