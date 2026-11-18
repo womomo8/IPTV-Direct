@@ -870,7 +870,7 @@ class CheckerLocalTests(unittest.TestCase):
 
     def test_queue_wait_is_excluded_from_network_elapsed(self):
         """并发排队耗时必须独立记录，不得计入网络请求耗时。"""
-                detector = Detector(
+        detector = Detector(
             self.settings(per_host_concurrency=1)
         )
         slot = detector._slot("127.0.0.1")
@@ -964,7 +964,7 @@ class CheckerLocalTests(unittest.TestCase):
 
     def test_redirect_queue_timeout_is_not_network_timeout(self):
         """重定向阶段排队超时不能计入网络请求超时。"""
-                detector = Detector(
+        detector = Detector(
             self.settings(per_host_concurrency=1)
         )
         slot = detector._slot("127.0.0.1")
