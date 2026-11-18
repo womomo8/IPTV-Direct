@@ -2022,7 +2022,7 @@ def _subscription_snapshot(
         "channel_count": len(unique_channels),
         "route_count": route_count,
     }
-    _PUBLISH_STATE_DIR = ".iptv-publish-state"
+_PUBLISH_STATE_DIR = ".iptv-publish-state"
 _PUBLISH_UNKNOWN_FILE = "UNKNOWN.json"
 _PUBLISH_LATEST_FILE = "latest.json"
 
