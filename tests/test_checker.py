@@ -1028,7 +1028,6 @@ class CheckerLocalTests(unittest.TestCase):
                 per_host_concurrency=1,
             )
         )
-        )
         slot = detector._slot("127.0.0.1")
         self.assertTrue(slot.acquire(blocking=False))
 
