@@ -2106,12 +2106,14 @@ def _load_latest_backup(
             "最近一次已知良好备份索引损坏，禁止发布"
         ) from exc
 
+    if not isinstance(manifest, dict):
+        raise GlobalpingError("最近一次已知良好备份索引格式无效")
+
     generation = manifest.get("generation")
 
     if (
         not isinstance(generation, str)
-        or not generation
-        or Path(generation).name != generation
+        or re.fullmatch(r"[0-9a-f]{32}", generation) is None
     ):
         raise GlobalpingError("备份索引中的版本标识无效")
 
