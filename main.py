@@ -1175,6 +1175,14 @@ def run_formal_flow(config: dict[str, Any]) -> int:
         )
         return 1
 
+    if publish_result.get("published") is not True:
+        print(
+            "Publisher 未确认正式订阅发布成功；"
+            "本轮不能视为发布成功。",
+            file=sys.stderr,
+        )
+        return 1
+
     print(
         f"正式订阅发布成功："
         f"频道 {publish_result['channel_count']} 个；"
