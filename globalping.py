@@ -10,12 +10,14 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import ipaddress
 import json
 import os
 import re
 import time
 import tempfile
+import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -2019,4 +2021,580 @@ def _subscription_snapshot(
     return {
         "channel_count": len(unique_channels),
         "route_count": route_count,
+    }
+    _PUBLISH_STATE_DIR = ".iptv-publish-state"
+_PUBLISH_UNKNOWN_FILE = "UNKNOWN.json"
+_PUBLISH_LATEST_FILE = "latest.json"
+
+
+def _write_temp_file(
+    directory: Path,
+    prefix: str,
+    data: bytes,
+) -> Path:
+    """在目标目录写入并同步临时文件。"""
+    fd, filename = tempfile.mkstemp(
+        prefix=prefix,
+        suffix=".tmp",
+        dir=str(directory),
+    )
+    path = Path(filename)
+
+    try:
+        with os.fdopen(fd, "wb") as file:
+            file.write(data)
+            file.flush()
+            os.fsync(file.fileno())
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+
+    return path
+
+
+def _write_durable_file(path: Path, data: bytes) -> None:
+    """通过同目录临时文件替换持久化文件。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = _write_temp_file(
+        path.parent,
+        f".{path.name}.",
+        data,
+    )
+
+    try:
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _read_subscription_pair(
+    m3u_data: bytes,
+    txt_data: bytes,
+    channels: list[str],
+) -> tuple[str, str, dict[str, int]]:
+    """读取并完整验证一组备份订阅。"""
+    try:
+        m3u_text = m3u_data.decode("utf-8-sig")
+        txt_text = txt_data.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise GlobalpingError("订阅备份不是有效 UTF-8 文件") from exc
+
+    validate_subscriptions(
+        m3u_text,
+        txt_text,
+        channels,
+    )
+
+    snapshot = _subscription_snapshot(
+        m3u_text,
+        txt_text,
+    )
+
+    return m3u_text, txt_text, snapshot
+
+
+def _load_latest_backup(
+    state_dir: Path,
+    channels: list[str],
+) -> tuple[Path, bytes, bytes, dict[str, int]] | None:
+    """读取最近一次已知良好备份，并验证其内容。"""
+    manifest_path = state_dir / _PUBLISH_LATEST_FILE
+
+    if not manifest_path.is_file():
+        return None
+
+    try:
+        manifest = json.loads(
+            manifest_path.read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise GlobalpingError(
+            "最近一次已知良好备份索引损坏，禁止发布"
+        ) from exc
+
+    generation = manifest.get("generation")
+
+    if (
+        not isinstance(generation, str)
+        or not generation
+        or Path(generation).name != generation
+    ):
+        raise GlobalpingError("备份索引中的版本标识无效")
+
+    backup_dir = state_dir / generation
+    m3u_path = backup_dir / "iptv.m3u"
+    txt_path = backup_dir / "iptv.txt"
+
+    try:
+        m3u_data = m3u_path.read_bytes()
+        txt_data = txt_path.read_bytes()
+    except OSError as exc:
+        raise GlobalpingError(
+            "最近一次已知良好备份文件缺失或无法读取"
+        ) from exc
+
+    _m3u, _txt, snapshot = _read_subscription_pair(
+        m3u_data,
+        txt_data,
+        channels,
+    )
+
+    expected_hashes = manifest.get("sha256")
+
+    actual_hashes = {
+        "iptv.m3u": hashlib.sha256(m3u_data).hexdigest(),
+        "iptv.txt": hashlib.sha256(txt_data).hexdigest(),
+    }
+
+    if expected_hashes != actual_hashes:
+        raise GlobalpingError("最近一次已知良好备份校验值不一致")
+
+    return backup_dir, m3u_data, txt_data, snapshot
+
+
+def _save_known_good_backup(
+    state_dir: Path,
+    m3u_data: bytes,
+    txt_data: bytes,
+    channels: list[str],
+) -> None:
+    """保存一组已验证的双文件备份，并最后更新备份索引。"""
+    _read_subscription_pair(
+        m3u_data,
+        txt_data,
+        channels,
+    )
+
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    generation = uuid.uuid4().hex
+    backup_dir = state_dir / generation
+    backup_dir.mkdir()
+
+    _write_durable_file(
+        backup_dir / "iptv.m3u",
+        m3u_data,
+    )
+    _write_durable_file(
+        backup_dir / "iptv.txt",
+        txt_data,
+    )
+
+    saved_m3u = (backup_dir / "iptv.m3u").read_bytes()
+    saved_txt = (backup_dir / "iptv.txt").read_bytes()
+
+    if saved_m3u != m3u_data or saved_txt != txt_data:
+        raise GlobalpingError("备份写入后的内容核验失败")
+
+    _read_subscription_pair(
+        saved_m3u,
+        saved_txt,
+        channels,
+    )
+
+    manifest = {
+        "generation": generation,
+        "sha256": {
+            "iptv.m3u": hashlib.sha256(saved_m3u).hexdigest(),
+            "iptv.txt": hashlib.sha256(saved_txt).hexdigest(),
+        },
+    }
+
+    manifest_data = (
+        json.dumps(
+            manifest,
+            ensure_ascii=False,
+            sort_keys=True,
+        ) + "\n"
+    ).encode("utf-8")
+
+    _write_durable_file(
+        state_dir / _PUBLISH_LATEST_FILE,
+        manifest_data,
+    )
+
+
+def _write_publish_unknown(
+    state_dir: Path,
+    reason: str,
+) -> None:
+    """持久化发布状态未知标记。"""
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    marker = {
+        "status": "UNKNOWN",
+        "reason": str(reason),
+        "timestamp": int(time.time()),
+    }
+
+    data = (
+        json.dumps(
+            marker,
+            ensure_ascii=False,
+            sort_keys=True,
+        ) + "\n"
+    ).encode("utf-8")
+
+    _write_durable_file(
+        state_dir / _PUBLISH_UNKNOWN_FILE,
+        data,
+    )
+
+
+def _verify_published_pair(
+    targets: list[Path],
+    expected_m3u: bytes,
+    expected_txt: bytes,
+    channels: list[str],
+) -> dict[str, int]:
+    """重新读取正式文件并核验内容和统计。"""
+    try:
+        actual_m3u = targets[0].read_bytes()
+        actual_txt = targets[1].read_bytes()
+    except OSError as exc:
+        raise GlobalpingError("正式订阅文件无法重新读取") from exc
+
+    if actual_m3u != expected_m3u or actual_txt != expected_txt:
+        raise GlobalpingError("正式文件内容与预期不一致")
+
+    _m3u, _txt, snapshot = _read_subscription_pair(
+        actual_m3u,
+        actual_txt,
+        channels,
+    )
+
+    return snapshot
+
+
+def _restore_known_good_backup(
+    targets: list[Path],
+    state_dir: Path,
+    channels: list[str],
+) -> dict[str, int]:
+    """从最近一次已知良好备份恢复，并重新读取核验。"""
+    backup = _load_latest_backup(
+        state_dir,
+        channels,
+    )
+
+    if backup is None:
+        raise GlobalpingError(
+            "发布状态未知，且没有可用的已知良好备份，禁止自动发布"
+        )
+
+    _backup_dir, m3u_data, txt_data, snapshot = backup
+
+    staged = []
+
+    try:
+        for target, data in zip(
+            targets,
+            (m3u_data, txt_data),
+        ):
+            staged.append(
+                _write_temp_file(
+                    target.parent,
+                    f".{target.name}.recovery-",
+                    data,
+                )
+            )
+
+        for temporary, target in zip(staged, targets):
+            os.replace(temporary, target)
+
+        actual = _verify_published_pair(
+            targets,
+            m3u_data,
+            txt_data,
+            channels,
+        )
+
+        if actual != snapshot:
+            raise GlobalpingError("恢复后的订阅数量核验失败")
+
+    finally:
+        for temporary in staged:
+            temporary.unlink(missing_ok=True)
+
+    return snapshot
+
+
+def _recover_unknown_publish_state(
+    targets: list[Path],
+    state_dir: Path,
+    channels: list[str],
+) -> dict[str, int] | None:
+    """发现上次发布状态未知时，必须先恢复再允许新发布。"""
+    marker_path = state_dir / _PUBLISH_UNKNOWN_FILE
+
+    if not marker_path.exists():
+        return None
+
+    try:
+        marker = json.loads(
+            marker_path.read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise GlobalpingError(
+            "发布状态未知标记损坏，禁止自动覆盖"
+        ) from exc
+
+    if not isinstance(marker, dict) or marker.get("status") != "UNKNOWN":
+        raise GlobalpingError(
+            "发布状态未知标记内容无效，禁止自动覆盖"
+        )
+
+    snapshot = _restore_known_good_backup(
+        targets,
+        state_dir,
+        channels,
+    )
+
+    marker_path.unlink()
+
+    return snapshot
+
+
+def _restore_previous_publish(
+    targets: list[Path],
+    old_data: list[bytes | None],
+    state_dir: Path,
+    channels: list[str],
+) -> None:
+    """恢复上一版订阅；恢复前先核验持久化备份。"""
+    if old_data[0] is None and old_data[1] is None:
+        for target in targets:
+            target.unlink(missing_ok=True)
+
+        if any(target.exists() for target in targets):
+            raise GlobalpingError("首次发布失败后的文件清理核验失败")
+
+        return
+
+    backup = _load_latest_backup(
+        state_dir,
+        channels,
+    )
+
+    if backup is None:
+        raise GlobalpingError("没有可核验的旧版本备份，无法安全回滚")
+
+    _backup_dir, m3u_data, txt_data, snapshot = backup
+
+    if old_data != [m3u_data, txt_data]:
+        raise GlobalpingError(
+            "旧文件与已知良好备份不一致，拒绝自动回滚"
+        )
+
+    _restore_known_good_backup(
+        targets,
+        state_dir,
+        channels,
+    )
+
+    actual = _verify_published_pair(
+        targets,
+        m3u_data,
+        txt_data,
+        channels,
+    )
+
+    if actual != snapshot:
+        raise GlobalpingError("回滚后的数量核验失败")
+
+
+def publish_subscriptions(
+    subscriptions: dict[str, Any],
+    channels: list[str],
+    output_dir: str | Path = "output",
+) -> dict[str, Any]:
+    """执行正式订阅生成后的安全发布、备份、核验和失败恢复。"""
+    if not isinstance(subscriptions, dict):
+        raise GlobalpingError("订阅数据格式错误")
+
+    m3u_text = subscriptions.get("m3u")
+    txt_text = subscriptions.get("txt")
+
+    validate_subscriptions(
+        m3u_text,
+        txt_text,
+        channels,
+    )
+
+    new_snapshot = _subscription_snapshot(
+        m3u_text,
+        txt_text,
+    )
+
+    if subscriptions.get("route_count") != new_snapshot["route_count"]:
+        raise GlobalpingError("订阅线路数量统计不一致")
+
+    directory = Path(output_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+
+    targets = [
+        directory / "iptv.m3u",
+        directory / "iptv.txt",
+    ]
+
+    state_dir = directory / _PUBLISH_STATE_DIR
+
+    # 必须先处理上次运行留下的未知状态。
+    recovered_snapshot = _recover_unknown_publish_state(
+        targets,
+        state_dir,
+        channels,
+    )
+
+    old_data = []
+
+    for target in targets:
+        try:
+            old_data.append(target.read_bytes())
+        except FileNotFoundError:
+            old_data.append(None)
+
+    has_m3u = old_data[0] is not None
+    has_txt = old_data[1] is not None
+
+    if has_m3u != has_txt:
+        raise GlobalpingError(
+            "旧订阅只有一份存在有效内容，阻止发布"
+        )
+
+    both_empty = (
+        old_data[0] == b""
+        and old_data[1] == b""
+    )
+
+    first_publish = (
+        (not has_m3u and not has_txt)
+        or both_empty
+    )
+
+    old_snapshot = None
+
+    if not first_publish:
+        old_m3u, old_txt, old_snapshot = _read_subscription_pair(
+            old_data[0],
+            old_data[1],
+            channels,
+        )
+
+        if (
+            new_snapshot["channel_count"] * 2
+            < old_snapshot["channel_count"]
+        ):
+            raise GlobalpingError(
+                "频道数量下降超过50%，阻止发布"
+            )
+
+        if (
+            new_snapshot["route_count"] * 2
+            < old_snapshot["route_count"]
+        ):
+            raise GlobalpingError(
+                "线路数量下降超过50%，阻止发布"
+            )
+
+        # 替换正式文件之前，先把当前有效版本保存为持久化备份。
+        _save_known_good_backup(
+            state_dir,
+            old_data[0],
+            old_data[1],
+            channels,
+        )
+
+    new_data = [
+        m3u_text.encode("utf-8"),
+        txt_text.encode("utf-8"),
+    ]
+
+    staged = []
+    rollback_error = None
+    publish_error = None
+
+    try:
+        for target, data in zip(targets, new_data):
+            staged.append(
+                _write_temp_file(
+                    directory,
+                    f".{target.name}.stage-",
+                    data,
+                )
+            )
+
+        for temporary, target in zip(staged, targets):
+            os.replace(temporary, target)
+
+        actual_snapshot = _verify_published_pair(
+            targets,
+            new_data[0],
+            new_data[1],
+            channels,
+        )
+
+        if actual_snapshot != new_snapshot:
+            raise GlobalpingError("正式文件数量核验失败")
+
+        # 只有正式文件全部核验通过，才将新版本登记为已知良好版本。
+        _save_known_good_backup(
+            state_dir,
+            new_data[0],
+            new_data[1],
+            channels,
+        )
+
+    except Exception as exc:
+        publish_error = exc
+
+        try:
+            _restore_previous_publish(
+                targets,
+                old_data,
+                state_dir,
+                channels,
+            )
+        except Exception as restore_exc:
+            rollback_error = restore_exc
+
+            try:
+                _write_publish_unknown(
+                    state_dir,
+                    f"发布失败：{publish_error}；回滚失败：{rollback_error}",
+                )
+            except Exception as marker_exc:
+                raise GlobalpingError(
+                    "发布失败且回滚失败；发布状态未知标记也无法持久化："
+                    f"{marker_exc}"
+                ) from publish_error
+
+        if rollback_error is not None:
+            # 回滚失败时保留临时文件，供人工检查。
+            raise GlobalpingError(
+                "发布失败，回滚失败，发布状态未知；"
+                f"发布错误：{publish_error}；回滚错误：{rollback_error}"
+            ) from publish_error
+
+        raise GlobalpingError(
+            f"发布失败，旧文件已恢复：{publish_error}"
+        ) from publish_error
+
+    finally:
+        if rollback_error is None:
+            for temporary in staged:
+                temporary.unlink(missing_ok=True)
+
+    return {
+        "published": True,
+        "status": "PUBLISHED",
+        "channel_count": new_snapshot["channel_count"],
+        "route_count": new_snapshot["route_count"],
+        "m3u_path": str(targets[0]),
+        "txt_path": str(targets[1]),
+        "first_publish": first_publish,
+        "recovered_previous_unknown_state": (
+            recovered_snapshot is not None
+        ),
+        "verified": True,
     }
