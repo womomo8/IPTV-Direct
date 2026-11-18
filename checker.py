@@ -33,12 +33,14 @@ class CheckError(Exception):
         connected=False,
         ts_status=INCOMPLETE,
         ts_reason="TS 分片尚未完成实际检测",
+        queue_timeout=False,
     ):
         super().__init__(reason)
         self.status = status
         self.connected = connected
         self.ts_status = ts_status
         self.ts_reason = ts_reason
+        self.queue_timeout = queue_timeout
 
 
 class DeadlineResolver:
@@ -251,8 +253,9 @@ class Detector:
         first_slot=None,
         quality=None,
         stage="request",
+        first_queue_wait_seconds=0.0,
     ):
-        """执行一次请求，并记录不含 URL/主机信息的质量数据。"""
+        """执行一次请求，并分别记录排队与网络请求质量数据。"""
         started = time.monotonic()
         metrics = {}
         result = None
@@ -273,7 +276,10 @@ class Detector:
             raise
         finally:
             finished = time.monotonic()
-            elapsed = max(0.0, finished - started)
+            internal_queue_wait = max(0.0, metrics.get("queue_wait_seconds", 0.0))
+                        internal_queue_wait = max(0.0, metrics.get("queue_wait_seconds", 0.0))
+            elapsed = max(0.0, finished - started - internal_queue_wait)
+            queue_wait_seconds = max(0.0, first_queue_wait_seconds) + internal_queue_wait
             read_seconds = max(0.0, metrics.get("read_seconds", 0.0))
             data = result.get("data", b"") if result else b""
             bytes_read = len(data) if result else metrics.get("bytes_read", 0)
@@ -289,8 +295,10 @@ class Detector:
             # 这样即使底层 socket 被期限定时器中断，异常文字没有出现
             # “timeout/超时”，也不会漏记超时质量数据。
             deadline_exhausted = finished >= deadline - 0.1
+            is_queue_timeout = bool(getattr(error, "queue_timeout", False))
             is_timeout = (
-                outcome == INCOMPLETE
+                not is_queue_timeout
+                and outcome == INCOMPLETE
                 and (
                     isinstance(error, (socket.timeout, TimeoutError))
                     or "超时" in reason
@@ -308,6 +316,7 @@ class Detector:
                     else metrics.get("status_code")
                 ),
                 "elapsed_seconds": round(elapsed, 6),
+                "queue_wait_seconds": round(queue_wait_seconds, 6),
                 "read_seconds": round(read_seconds, 6),
                 "bytes_read": bytes_read,
                 "bytes_per_second": (
@@ -321,6 +330,9 @@ class Detector:
             if quality is not None:
                 quality["request_count"] += 1
                 quality["total_elapsed_seconds"] += elapsed
+                quality["total_queue_wait_seconds"] += queue_wait_seconds
+                quality["queue_timeout_count"] += metrics.get("queue_timeout_count", 0)
+                quality["queue_wait_samples"].extend(metrics.get("queue_wait_samples", []))
                 quality["total_read_seconds"] += read_seconds
                 quality["total_bytes_read"] += bytes_read
                 if result is not None:
@@ -371,13 +383,18 @@ class Detector:
                 host = parsed.hostname
                 if slot is None:
                     slot = self._slot(host)
-                    wait = min(queue_deadline, deadline) - time.monotonic()
-                    if wait <= 0 or not slot.acquire(timeout=wait):
-                        raise CheckError(
-                            INCOMPLETE,
-                            "等待主机并发槽位超过剩余时间预算",
-                        )
-                    acquired = True
+                    queue_started = time.monotonic()
+                    wait = min(queue_deadline, deadline) - queue_started
+                    acquired = wait > 0 and slot.acquire(timeout=wait)
+                    waited = max(0.0, time.monotonic() - queue_started)
+                    metrics["queue_wait_seconds"] = metrics.get("queue_wait_seconds", 0.0) + waited
+                    metrics.setdefault("queue_wait_samples", []).append({
+                        "stage": "redirect", "wait_seconds": round(waited, 6),
+                        "outcome": "ACQUIRED" if acquired else "TIMEOUT",
+                    })
+                    if not acquired:
+                        metrics["queue_timeout_count"] = metrics.get("queue_timeout_count", 0) + 1
+                        raise CheckError(INCOMPLETE, "等待主机并发槽位超过剩余时间预算", queue_timeout=True)
 
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -507,88 +524,7 @@ class Detector:
                     and content_length is not None
                     and content_length > limit
                     and len(data) < limit
-                ):
-                    raise CheckError(
-                        INCOMPLETE,
-                        "HTTP 正文未达到读取上限且提前结束",
-                        connected,
-                    )
-
-                if response.status == 206:
-                    total = range_info[2]
-                    complete = (
-                        total is not None
-                        and range_info[1] + 1 == total
-                        and len(data) == total
-                    )
-                elif content_length is not None:
-                    complete = content_length == len(data)
-                else:
-                    complete = len(data) < limit
-
-                return {
-                    "data": data,
-                    "url": current,
-                    "status": response.status,
-                    "content_type": response.getheader(
-                        "Content-Type", ""
-                    ),
-                    "content_length": content_length,
-                    "content_range": response.getheader(
-                        "Content-Range", ""
-                    ),
-                    "range_total": (
-                        range_info[2] if range_info else None
-                    ),
-                    "complete": complete,
-                    "connected": connected,
-                    "read_seconds": metrics.get("read_seconds", 0.0),
-                    "redirect_count": redirects,
-                }
-
-            except CheckError as exc:
-                if not exc.connected and conn is not None:
-                    exc.connected = bool(
-                        getattr(conn, "ipv4_connected", False)
-                    )
-                raise
-            except (socket.timeout, TimeoutError) as exc:
-                connected = bool(
-                    getattr(conn, "ipv4_connected", False)
-                )
-                raise CheckError(
-                    INCOMPLETE,
-                    f"连接或读取超时：{exc}",
-                    connected,
-                ) from exc
-            except (
-                OSError,
-                ssl.SSLError,
-                http.client.HTTPException,
-                ValueError,
-            ) as exc:
-                connected = bool(
-                    getattr(conn, "ipv4_connected", False)
-                )
-                status = (
-                    INCOMPLETE
-                    if time.monotonic() >= deadline
-                    else FAIL
-                )
-                raise CheckError(
-                    status,
-                    f"IPv4/HTTP 请求失败：{exc}",
-                    connected,
-                ) from exc
-            finally:
-                if timer:
-                    timer.cancel()
-                if conn:
-                    conn.close()
-                if acquired:
-                    slot.release()
-
-    @staticmethod
+                   @staticmethod
     def _ts_ok(data):
         if len(data) < 188 * 4 + 1:
             return False
@@ -824,8 +760,7 @@ class Detector:
                 f"媒体清单及 {min(3, len(segments))} 个 TS 分片通过"
             ),
         }
-
-    def check_one(self, candidate, submitted_at):
+            def check_one(self, candidate, submitted_at):
         result = {
             **candidate,
             "media_type": "UNKNOWN",
@@ -834,6 +769,9 @@ class Detector:
                 "request_success_count": 0,
                 "request_failure_count": 0,
                 "timeout_count": 0,
+                "queue_timeout_count": 0,
+                "total_queue_wait_seconds": 0.0,
+                "queue_wait_samples": [],
                 "total_bytes_read": 0,
                 "total_elapsed_seconds": 0.0,
                 "total_read_seconds": 0.0,
@@ -880,13 +818,21 @@ class Detector:
             queue_deadline = (
                 submitted_at + self.settings["max_queue_seconds"]
             )
-            wait = queue_deadline - time.monotonic()
-            if wait <= 0 or not slot.acquire(timeout=wait):
-                raise CheckError(
-                    INCOMPLETE,
+            queue_started = time.monotonic()
+            wait = queue_deadline - queue_started
+            slot_acquired = wait > 0 and slot.acquire(timeout=wait)
+            first_queue_wait = max(0.0, time.monotonic() - queue_started)
+            result["quality"]["total_queue_wait_seconds"] += first_queue_wait
+            result["quality"]["queue_wait_samples"].append({
+                "stage": "initial_response", "wait_seconds": round(first_queue_wait, 6),
+                "outcome": "ACQUIRED" if slot_acquired else "TIMEOUT",
+            })
+            if not slot_acquired:
+                result["quality"]["queue_timeout_count"] += 1
+                raise CheckError(INCOMPLETE,
                     f"等待主机并发槽位超过 {self.settings['max_queue_seconds']} 秒",
-                )
-            slot_acquired = True
+                    queue_timeout=True)
+
 
             deadline = time.monotonic() + self.budget
             first_slot, slot = slot, None
@@ -901,6 +847,7 @@ class Detector:
                 first_slot=first_slot,
                 quality=result["quality"],
                 stage="initial_response",
+                first_queue_wait_seconds=first_queue_wait,
             )
             result["checks"]["ipv4"] = {
                 "status": PASS,
@@ -1103,6 +1050,9 @@ def check_candidates(candidates, settings):
                             "request_success_count": 0,
                             "request_failure_count": 0,
                             "timeout_count": 0,
+                            "queue_timeout_count": 0,
+                            "total_queue_wait_seconds": 0.0,
+                            "queue_wait_samples": [],
                             "total_bytes_read": 0,
                             "total_elapsed_seconds": 0.0,
                             "total_read_seconds": 0.0,
