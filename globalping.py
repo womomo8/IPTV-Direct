@@ -1207,7 +1207,7 @@ def check_candidates(
     candidates: list[dict[str, Any]],
     settings: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """检测候选列表；settings 接收 settings.json 的 globalping 区段。"""
+    """检测 Publisher 传入的完整本地优选队列。"""
     if not isinstance(candidates, list):
         raise TypeError("candidates 必须是列表。")
 
@@ -1225,45 +1225,152 @@ def check_candidates(
 
     max_probes = min(max_probes, 3)
 
-    output: list[dict[str, Any] | None] = [None] * len(candidates)
-    eligible: list[tuple[int, dict[str, Any]]] = []
+    # 先完整核验输入队列。任何一条不符合 Publisher 契约，
+    # 都拒绝整个队列，绝不把输入错误伪装成线路检测 FAIL。
+    identities: set[tuple[str, str]] = set()
 
-    # 先按本地 checker 已确认的媒体类型筛除不支持项；
-    # 未知类型和无效 URL 不消耗任何 Globalping 额度。
     for index, candidate in enumerate(candidates):
         if not isinstance(candidate, dict):
-            raise TypeError("每条候选线路必须是对象。")
+            raise TypeError(
+                f"第 {index + 1} 条候选线路必须是对象。"
+            )
+
+        channel = candidate.get("channel")
+
+        if (
+            not isinstance(channel, str)
+            or not channel
+            or channel != channel.strip()
+        ):
+            raise ValueError(
+                f"第 {index + 1} 条候选线路缺少有效频道名称。"
+            )
 
         media_type = candidate.get("media_type")
 
         if media_type not in ("HLS", "DIRECT_TS"):
-            output[index] = _failed_candidate(
-                candidate,
-                "未知或不支持的媒体类型，不允许 Globalping 准入。",
+            raise ValueError(
+                f"第 {index + 1} 条候选线路媒体类型无效："
+                f"{media_type!r}。"
             )
-            continue
 
         url = candidate.get("normalized_url")
 
-        if not isinstance(url, str) or not url:
-            output[index] = _failed_candidate(
-                candidate,
-                "缺少规范化 URL。",
+        if (
+            not isinstance(url, str)
+            or not url
+            or url != url.strip()
+            or any(char.isspace() for char in url)
+        ):
+            raise ValueError(
+                f"第 {index + 1} 条候选线路缺少有效规范化 URL。"
             )
-            continue
 
         try:
+            parsed = urllib.parse.urlsplit(url)
+            scheme = parsed.scheme.lower()
+            host = parsed.hostname
+            port = parsed.port
+
+            if (
+                scheme not in ("http", "https")
+                or not host
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.fragment
+                or parsed.netloc.endswith(":")
+                or not parsed.path
+                or not parsed.path.startswith("/")
+            ):
+                raise ValueError("URL 格式不符合规范。")
+
+            host = host.lower()
+
+            if ":" in host:
+                host = f"[{host}]"
+
+            expected_netloc = host
+
+            if port is not None and not (
+                (scheme == "http" and port == 80)
+                or (scheme == "https" and port == 443)
+            ):
+                if not 1 <= port <= 65535:
+                    raise ValueError("URL 端口无效。")
+                expected_netloc += f":{port}"
+
+            expected_url = (
+                f"{scheme}://{expected_netloc}{parsed.path}"
+            )
+
+            if parsed.query:
+                expected_url += f"?{parsed.query}"
+
+            if parsed.scheme != scheme or parsed.netloc != expected_netloc:
+                raise ValueError("URL 尚未规范化。")
+
+            if url != expected_url:
+                raise ValueError("URL 不是规范化后的完整地址。")
+
+            # 同时执行 Globalping 自身的 URL 和 IPv4 目标校验。
             _split_url(url)
-        except GlobalpingError as exc:
-            output[index] = _failed_candidate(candidate, str(exc))
-            continue
 
-        eligible.append((index, candidate))
+        except (TypeError, ValueError, GlobalpingError) as exc:
+            raise ValueError(
+                f"第 {index + 1} 条候选线路 URL 无效：{exc}"
+            ) from exc
 
-    if not eligible:
-        return [item for item in output if item is not None]
+        identity = (channel, url)
 
-    # 每轮只读取一次额度；后续测量由本地预算统一管理。
+        if identity in identities:
+            raise ValueError(
+                f"候选队列存在重复线路：频道 {channel}，URL {url}。"
+            )
+
+        identities.add(identity)
+
+        checks = candidate.get("checks")
+
+        if not isinstance(checks, dict):
+            raise ValueError(
+                f"第 {index + 1} 条候选线路缺少本地 checks 检测结果。"
+            )
+
+        if media_type == "HLS":
+            required_checks = ("ipv4", "http", "hls", "ts")
+        else:
+            required_checks = ("ipv4", "http", "ts")
+
+            hls_check = checks.get("hls")
+
+            if (
+                not isinstance(hls_check, dict)
+                or hls_check.get("status") != NA
+            ):
+                raise ValueError(
+                    f"第 {index + 1} 条 DIRECT_TS 候选线路的 "
+                    "本地 HLS 状态必须为 N/A。"
+                )
+
+        for name in required_checks:
+            item = checks.get(name)
+
+            if not isinstance(item, dict) or item.get("status") != PASS:
+                state = (
+                    item.get("status")
+                    if isinstance(item, dict)
+                    else "缺少结果"
+                )
+                raise ValueError(
+                    f"第 {index + 1} 条候选线路本地 "
+                    f"{name.upper()} 检测未通过：{state}。"
+                )
+
+    # 空队列直接返回，不访问 Globalping API。
+    if not candidates:
+        return []
+
+    # 输入契约全部通过后，才允许访问 Globalping。
     try:
         limits = read_limits()
 
@@ -1275,10 +1382,10 @@ def check_candidates(
         )
 
     except GlobalpingError as exc:
-        for index, candidate in eligible:
-            output[index] = incomplete_result(candidate, str(exc))
-
-        return [item for item in output if item is not None]
+        return [
+            incomplete_result(candidate, str(exc))
+            for candidate in candidates
+        ]
 
     probe_count = sum(
         int(item.get("limit", 1))
@@ -1291,17 +1398,19 @@ def check_candidates(
         "halted": False,
     }
 
-    for index, candidate in eligible:
+    output: list[dict[str, Any]] = []
+
+    for candidate in candidates:
         if budget["halted"]:
-            output[index] = incomplete_result(
-                candidate,
-                "Globalping 返回 HTTP 429，已停止本轮后续测量创建。",
+            output.append(
+                incomplete_result(
+                    candidate,
+                    "Globalping 返回 HTTP 429，已停止本轮后续测量创建。",
+                )
             )
             continue
 
-        # HLS 最多两个阶段：主清单、媒体子清单；不再远程下载 TS 二进制。
-        # 启动前预留完整两阶段预算，避免 Master 清单检测到一半额度耗尽。
-        # Direct TS 只需要一个轻量 HTTP Range 阶段。
+        # 保留现有阶段预算逻辑，本轮只核验输入契约。
         if candidate["media_type"] == "HLS":
             required_stages = 2
         else:
@@ -1310,13 +1419,15 @@ def check_candidates(
         required_budget = probe_count * required_stages
 
         if budget["remaining"] < required_budget:
-            output[index] = incomplete_result(
-                candidate,
-                (
-                    "Globalping 剩余额度不足以完成整条线路："
-                    f"剩余 {budget['remaining']}，"
-                    f"预计至少需要 {required_budget}。"
-                ),
+            output.append(
+                incomplete_result(
+                    candidate,
+                    (
+                        "Globalping 剩余额度不足以完成整条线路："
+                        f"剩余 {budget['remaining']}，"
+                        f"预计至少需要 {required_budget}。"
+                    ),
+                )
             )
             continue
 
@@ -1326,9 +1437,11 @@ def check_candidates(
             result = _run_direct_ts(candidate, locations, budget)
 
         result["status"] = _overall_status(result["checks"])
-        output[index] = {
+
+        output.append({
             **candidate,
             "globalping": result,
-        }
+        })
 
-    return [item for item in output if item is not None]
+    return output
+
