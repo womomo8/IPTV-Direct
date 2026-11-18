@@ -971,6 +971,82 @@ class MainPublisherHandoffIntegrationTests(unittest.TestCase):
 
         self.assertFalse(remote_called)
 
+    def test_publisher_ranking_order_mismatch_is_rejected_before_globalping(self):
+        candidates = [
+            make_candidate(
+                url="https://example.com/first.m3u8",
+            ),
+            make_candidate(
+                url="https://example.com/second.m3u8",
+            ),
+        ]
+
+        remote_called = False
+
+        def invalid_ranking(local_results, channels):
+            first, second = local_results
+
+            return {
+                "queue": [
+                    first,
+                    second,
+                ],
+                "excluded": [],
+                "ranking": [
+                    {
+                        "identity": (
+                            second["channel"],
+                            second["normalized_url"],
+                        ),
+                        "priority_order": 1,
+                    },
+                    {
+                        "identity": (
+                            first["channel"],
+                            first["normalized_url"],
+                        ),
+                        "priority_order": 2,
+                    },
+                ],
+            }
+
+        def remote_check(items, settings):
+            nonlocal remote_called
+            remote_called = True
+            return items
+
+        original_prioritizer = (
+            publisher.prioritize_candidates_for_globalping
+        )
+
+        try:
+            publisher.prioritize_candidates_for_globalping = (
+                invalid_ranking
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "publisher 排序依据与完整优选队列不一致",
+            ):
+                main.run_detection_pipeline(
+                    candidates=candidates,
+                    settings={
+                        "detection": {},
+                        "globalping": {},
+                    },
+                    local_check=lambda items, settings: items,
+                    remote_check=remote_check,
+                    channels=CHANNELS,
+                )
+
+        finally:
+            publisher.prioritize_candidates_for_globalping = (
+                original_prioritizer
+            )
+
+        self.assertFalse(remote_called)
+
+
 class PublisherGlobalpingPrioritizationTests(unittest.TestCase):
     """验证 publisher 的本地优选职责，不涉及正式准入和发布。"""
 
