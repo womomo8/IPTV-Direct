@@ -1544,6 +1544,23 @@ def _prepare_admission_candidate(
     if not _valid_admission_url(url):
         return None, "缺少有效的规范化播放 URL"
 
+    priority = candidate.get("priority")
+    source_order = candidate.get("source_order")
+
+    if (
+        isinstance(priority, bool)
+        or not isinstance(priority, int)
+        or priority < 0
+    ):
+        return None, "候选线路缺少有效来源优先级"
+
+    if (
+        isinstance(source_order, bool)
+        or not isinstance(source_order, int)
+        or source_order < 0
+    ):
+        return None, "候选线路缺少有效来源顺序"
+
     reason = _local_admission_reason(candidate)
 
     if reason:
