@@ -1,3 +1,4 @@
+
 """IPTV-Direct：线路正式准入、频道统计和订阅内容生成。"""
 
 from __future__ import annotations
@@ -248,8 +249,8 @@ def _candidate_quality_key(
     """
     使用 checker 已记录的真实质量数据分层比较。
 
-    与 main.py 的质量比较规则保持一致：
     不计算综合分数，不改变 PASS/FAIL/INCOMPLETE 结果。
+    该键只用于同频道、同媒体类型组内的稳定质量比较。
     """
     quality = candidate.get("quality")
 
@@ -379,6 +380,192 @@ def _rank_routes(
         ranked.extend(reordered)
 
     return ranked
+
+
+def _priority_key_for_audit(key: tuple[Any, ...]) -> list[dict[str, Any]]:
+    """把分层质量键转换为可审计且不丢失未知状态的记录。"""
+    return [
+        {
+            "known": part[0] == 0,
+            "value": part[1] if part[0] == 0 else None,
+        }
+        for part in key
+    ]
+
+
+def _prioritize_candidates_for_globalping(
+    candidates: list[dict[str, Any]],
+    channels: list[str],
+    *,
+    require_local_pass: bool,
+) -> dict[str, Any]:
+    """构建完整优选队列；公开入口始终要求本地适用检测全部通过。"""
+    if not isinstance(candidates, list):
+        raise PublisherError("Globalping 优选输入必须是候选列表")
+
+    if (
+        not isinstance(channels, list)
+        or any(not isinstance(channel, str) or not channel for channel in channels)
+        or len(channels) != len(set(channels))
+    ):
+        raise PublisherError("Globalping 优选频道顺序无效")
+
+    groups: dict[tuple[str, str], list[tuple[int, dict[str, Any]]]] = {}
+    first_channel_position: dict[str, int] = {}
+    first_group_position: dict[tuple[str, str], int] = {}
+    excluded: list[dict[str, Any]] = []
+    seen_identities: set[tuple[Any, Any]] = set()
+
+    for original_index, candidate in enumerate(candidates):
+        if not isinstance(candidate, dict):
+            raise PublisherError(
+                f"Globalping 优选输入第 {original_index + 1} 条不是候选对象"
+            )
+
+        channel = candidate.get("channel")
+        url = candidate.get("normalized_url")
+        media_type = candidate.get("media_type")
+
+        if (
+            not isinstance(channel, str)
+            or not channel
+            or not isinstance(url, str)
+            or not url
+        ):
+            raise PublisherError(
+                f"Globalping 优选输入第 {original_index + 1} 条缺少候选身份"
+            )
+
+        identity = (channel, url)
+
+        if identity in seen_identities:
+            raise PublisherError(
+                f"Globalping 优选输入存在重复候选身份：{channel}"
+            )
+
+        seen_identities.add(identity)
+        first_channel_position.setdefault(channel, len(first_channel_position))
+
+        if isinstance(media_type, str) and media_type:
+            first_group_position.setdefault(
+                (channel, media_type),
+                original_index,
+            )
+
+        if require_local_pass:
+            reason = _local_admission_reason(candidate)
+            if reason is not None:
+                excluded.append({
+                    "candidate": candidate,
+                    "identity": identity,
+                    "reason": reason,
+                })
+                continue
+
+        if not isinstance(media_type, str) or not media_type:
+            excluded.append({
+                "candidate": candidate,
+                "identity": identity,
+                "reason": "缺少有效媒体类型，不能建立媒体类型优选组",
+            })
+            continue
+
+        group_key = (channel, media_type)
+        groups.setdefault(group_key, []).append((original_index, candidate))
+
+    configured_position = {
+        channel: index
+        for index, channel in enumerate(channels)
+    }
+
+    group_keys = sorted(
+        groups,
+        key=lambda key: (
+            configured_position.get(key[0], len(channels)),
+            (
+                0
+                if key[0] in configured_position
+                else first_channel_position[key[0]] + 1
+            ),
+            first_group_position[key],
+        ),
+    )
+
+    queues: list[tuple[tuple[str, str], list[tuple[int, dict[str, Any]]]]] = []
+
+    for group_key in group_keys:
+        indexed_candidates = groups[group_key]
+        # Python 稳定排序：所有质量键相同或同样缺失时保留原始顺序。
+        ranked_group = sorted(
+            indexed_candidates,
+            key=lambda item: _candidate_quality_key(item[1]),
+        )
+        queues.append((group_key, ranked_group))
+
+    queue: list[dict[str, Any]] = []
+    ranking: list[dict[str, Any]] = []
+    depth = 0
+
+    while True:
+        added = False
+
+        for (channel, media_type), group in queues:
+            if depth >= len(group):
+                continue
+
+            original_index, candidate = group[depth]
+            quality_key = _candidate_quality_key(candidate)
+            checks = candidate.get("checks")
+            local_status = {
+                name: _status(checks, name)
+                for name in ("ipv4", "http", "hls", "ts")
+            }
+            queue.append(candidate)
+            ranking.append({
+                "identity": (channel, candidate["normalized_url"]),
+                "original_index": original_index,
+                "priority_order": len(queue),
+                "group": {
+                    "channel": channel,
+                    "media_type": media_type,
+                },
+                "local_status": local_status,
+                "quality_key": _priority_key_for_audit(quality_key),
+                "quality_data": (
+                    dict(candidate["quality"])
+                    if isinstance(candidate.get("quality"), dict)
+                    else {}
+                ),
+            })
+            added = True
+
+        if not added:
+            break
+
+        depth += 1
+
+    return {
+        "queue": queue,
+        "excluded": excluded,
+        "ranking": ranking,
+    }
+
+
+def prioritize_candidates_for_globalping(
+    candidates: list[dict[str, Any]],
+    channels: list[str],
+) -> dict[str, Any]:
+    """
+    publisher 唯一公开的本地优选入口。
+
+    只允许本地适用检测全部 PASS 的候选进入完整优选队列；
+    返回完整候补、排除原因和逐项可复核的排序依据。
+    """
+    return _prioritize_candidates_for_globalping(
+        candidates,
+        channels,
+        require_local_pass=True,
+    )
 
 
 def _prepare_candidate(
