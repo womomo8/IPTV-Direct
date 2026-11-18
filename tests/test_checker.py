@@ -868,5 +868,185 @@ class CheckerLocalTests(unittest.TestCase):
         )
 
 
+    def test_queue_wait_is_excluded_from_network_elapsed(self):
+        """并发排队耗时必须独立记录，不得计入网络请求耗时。"""
+        detector = Detector(self.settings())
+        slot = detector._slot("127.0.0.1")
+        self.assertTrue(slot.acquire(blocking=False))
+
+        wait_started = threading.Event()
+        tracked_slot = Mock()
+
+        def tracked_acquire(timeout=None):
+            wait_started.set()
+            return slot.acquire(timeout=timeout)
+
+        tracked_slot.acquire.side_effect = tracked_acquire
+        tracked_slot.release.side_effect = slot.release
+
+        quality = {
+            "request_count": 0,
+            "request_success_count": 0,
+            "request_failure_count": 0,
+            "timeout_count": 0,
+            "queue_timeout_count": 0,
+            "total_queue_wait_seconds": 0.0,
+            "queue_wait_samples": [],
+            "total_bytes_read": 0,
+            "total_elapsed_seconds": 0.0,
+            "total_read_seconds": 0.0,
+            "request_samples": [],
+        }
+        outcome = {}
+        errors = []
+
+        def run_request():
+            try:
+                started = time.monotonic()
+                outcome["result"] = detector._request(
+                    self.base_url + "/direct.ts",
+                    started + 3,
+                    started + 3,
+                    65536,
+                    quality=quality,
+                    stage="queue_wait_test",
+                )
+            except Exception as exc:
+                errors.append(exc)
+
+        worker = threading.Thread(
+            target=run_request,
+            daemon=True,
+        )
+
+        try:
+            with patch.object(
+                detector,
+                "_slot",
+                return_value=tracked_slot,
+            ):
+                worker.start()
+                self.assertTrue(wait_started.wait(timeout=2))
+                time.sleep(0.2)
+        finally:
+            slot.release()
+
+        worker.join(timeout=4)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(errors, [])
+        self.assertIn("result", outcome)
+
+        sample = quality["request_samples"][0]
+
+        self.assertGreaterEqual(
+            sample["queue_wait_seconds"],
+            0.15,
+        )
+        self.assertLess(
+            sample["elapsed_seconds"],
+            sample["queue_wait_seconds"],
+        )
+        self.assertAlmostEqual(
+            quality["total_elapsed_seconds"],
+            sample["elapsed_seconds"],
+            places=5,
+        )
+        self.assertAlmostEqual(
+            quality["total_queue_wait_seconds"],
+            sample["queue_wait_seconds"],
+            places=5,
+        )
+        self.assertEqual(quality["timeout_count"], 0)
+        self.assertEqual(quality["request_success_count"], 1)
+
+    def test_redirect_queue_timeout_is_not_network_timeout(self):
+        """重定向阶段排队超时不能计入网络请求超时。"""
+        detector = Detector(self.settings())
+        slot = detector._slot("127.0.0.1")
+        self.assertTrue(slot.acquire(blocking=False))
+
+        quality = {
+            "request_count": 0,
+            "request_success_count": 0,
+            "request_failure_count": 0,
+            "timeout_count": 0,
+            "queue_timeout_count": 0,
+            "total_queue_wait_seconds": 0.0,
+            "queue_wait_samples": [],
+            "total_bytes_read": 0,
+            "total_elapsed_seconds": 0.0,
+            "total_read_seconds": 0.0,
+            "request_samples": [],
+        }
+
+        try:
+            with patch.object(
+                detector,
+                "_slot",
+                return_value=slot,
+            ):
+                started = time.monotonic()
+
+                with self.assertRaises(Exception) as raised:
+                    detector._request(
+                        self.base_url + "/direct.ts",
+                        started + 3,
+                        started + 0.2,
+                        65536,
+                        quality=quality,
+                        stage="queue_timeout_test",
+                    )
+        finally:
+            slot.release()
+
+        self.assertTrue(
+            getattr(raised.exception, "queue_timeout", False)
+        )
+        self.assertEqual(quality["request_count"], 1)
+        self.assertEqual(quality["request_success_count"], 0)
+        self.assertEqual(quality["request_failure_count"], 1)
+        self.assertEqual(quality["queue_timeout_count"], 1)
+        self.assertEqual(quality["timeout_count"], 0)
+
+        sample = quality["request_samples"][0]
+        self.assertEqual(sample["outcome"], "INCOMPLETE")
+        self.assertGreaterEqual(
+            sample["queue_wait_seconds"],
+            0.15,
+        )
+
+    def test_initial_queue_timeout_is_not_network_timeout(self):
+        """初始请求排队超时不能计入网络请求超时。"""
+        detector = Detector(
+            self.settings(max_queue_seconds=1)
+        )
+        slot = detector._slot("127.0.0.1")
+        self.assertTrue(slot.acquire(blocking=False))
+
+        try:
+            result = detector.check_one(
+                self.candidate("/direct.ts"),
+                time.monotonic(),
+            )
+        finally:
+            slot.release()
+
+        quality = result["quality"]
+
+        self.assertEqual(quality["request_count"], 0)
+        self.assertEqual(quality["request_success_count"], 0)
+        self.assertEqual(quality["request_failure_count"], 0)
+        self.assertEqual(quality["queue_timeout_count"], 1)
+        self.assertEqual(quality["timeout_count"], 0)
+        self.assertEqual(
+            quality["queue_wait_samples"][0]["outcome"],
+            "TIMEOUT",
+        )
+
+        self.assert_status(result, "http", "INCOMPLETE")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
