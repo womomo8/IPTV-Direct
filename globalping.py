@@ -1705,6 +1705,8 @@ def process_admission_batch(
             })
             continue
 
+        seen_urls.add(url)
+
         if counts[channel] >= MAX_ROUTES_PER_CHANNEL:
             results.append({
                 "candidate": route,
@@ -1713,7 +1715,6 @@ def process_admission_batch(
             })
             continue
 
-        seen_urls.add(url)
         retained.append(route)
         counts[channel] += 1
 
