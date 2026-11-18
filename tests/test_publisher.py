@@ -1191,6 +1191,148 @@ class PublisherGlobalpingPrioritizationTests(unittest.TestCase):
             hls_best["quality"],
         )
 
+    def test_partial_quality_fields_remain_unknown(self):
+        unknown_quality = self._quality(
+            segment_success=3,
+            timeout_count=0,
+            elapsed=1.0,
+        )
+        unknown_quality.pop("timeout_count")
+
+        unknown = make_candidate(
+            url="https://example.com/unknown.m3u8",
+            quality=unknown_quality,
+        )
+        known = make_candidate(
+            url="https://example.com/known.m3u8",
+            quality=self._quality(
+                segment_success=3,
+                timeout_count=0,
+                elapsed=1.0,
+            ),
+        )
+
+        result = publisher.prioritize_candidates_for_globalping(
+            [unknown, known],
+            CHANNELS,
+        )
+
+        self.assertEqual(
+            [
+                item["normalized_url"]
+                for item in result["queue"]
+            ],
+            [
+                "https://example.com/known.m3u8",
+                "https://example.com/unknown.m3u8",
+            ],
+        )
+
+        self.assertEqual(
+            result["ranking"][0]["quality_key"][2],
+            {"known": True, "value": 0.0},
+        )
+        self.assertEqual(
+            result["ranking"][1]["quality_key"][2],
+            {"known": False, "value": None},
+        )
+
+    def test_multiple_unconfigured_channels_keep_first_seen_order(self):
+        candidates = [
+            make_candidate(
+                url="https://example.com/zeta-first.m3u8",
+                channel="ZETA",
+                quality=self._quality(3, 0, 1.0),
+            ),
+            make_candidate(
+                url="https://example.com/alpha-first.m3u8",
+                channel="ALPHA",
+                quality=self._quality(3, 0, 1.0),
+            ),
+            make_candidate(
+                url="https://example.com/zeta.ts",
+                channel="ZETA",
+                media_type="DIRECT_TS",
+                quality=self._quality(0, 0, 1.0),
+            ),
+            make_candidate(
+                url="https://example.com/alpha.ts",
+                channel="ALPHA",
+                media_type="DIRECT_TS",
+                quality=self._quality(0, 0, 1.0),
+            ),
+            make_candidate(
+                url="https://example.com/zeta-second.m3u8",
+                channel="ZETA",
+                quality=self._quality(2, 0, 2.0),
+            ),
+            make_candidate(
+                url="https://example.com/alpha-second.m3u8",
+                channel="ALPHA",
+                quality=self._quality(2, 0, 2.0),
+            ),
+        ]
+
+        result = publisher.prioritize_candidates_for_globalping(
+            candidates,
+            CHANNELS,
+        )
+
+        self.assertEqual(
+            [
+                item["normalized_url"]
+                for item in result["queue"]
+            ],
+            [
+                "https://example.com/zeta-first.m3u8",
+                "https://example.com/zeta.ts",
+                "https://example.com/alpha-first.m3u8",
+                "https://example.com/alpha.ts",
+                "https://example.com/zeta-second.m3u8",
+                "https://example.com/alpha-second.m3u8",
+            ],
+        )
+
+    def test_quality_comparison_is_hierarchical_not_weighted(self):
+        lower_segment = make_candidate(
+            url="https://example.com/lower-segment.m3u8",
+            quality=self._quality(
+                segment_success=1,
+                timeout_count=0,
+                elapsed=0.1,
+                request_success=3,
+            ),
+        )
+        higher_segment = make_candidate(
+            url="https://example.com/higher-segment.m3u8",
+            quality=self._quality(
+                segment_success=2,
+                timeout_count=3,
+                elapsed=30.0,
+                request_success=1,
+            ),
+        )
+
+        result = publisher.prioritize_candidates_for_globalping(
+            [lower_segment, higher_segment],
+            CHANNELS,
+        )
+
+        self.assertEqual(
+            [
+                item["normalized_url"]
+                for item in result["queue"]
+            ],
+            [
+                "https://example.com/higher-segment.m3u8",
+                "https://example.com/lower-segment.m3u8",
+            ],
+        )
+
+        self.assertLess(
+            result["ranking"][0]["quality_key"][0]["value"],
+            result["ranking"][1]["quality_key"][0]["value"],
+        )
 
 if __name__ == "__main__":
     unittest.main()
