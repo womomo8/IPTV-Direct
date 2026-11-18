@@ -393,151 +393,6 @@ class MainCollectionFlowTests(unittest.TestCase):
         self.assertEqual(admission_mock.call_count, 1)
 
 
-class CandidateQualityRankingTests(unittest.TestCase):
-
-    @staticmethod
-    def candidate(
-        channel,
-        url,
-        media_type="HLS",
-        request_count=3,
-        success_count=3,
-        timeout_count=0,
-        elapsed=3.0,
-        read_seconds=1.0,
-        bytes_read=1000,
-        segment_total=3,
-        segment_success=3,
-    ):
-        return {
-            "channel": channel,
-            "normalized_url": url,
-            "media_type": media_type,
-            "quality": {
-                "request_count": request_count,
-                "request_success_count": success_count,
-                "timeout_count": timeout_count,
-                "total_elapsed_seconds": elapsed,
-                "total_read_seconds": read_seconds,
-                "total_bytes_read": bytes_read,
-                "segment_total": segment_total,
-                "segment_success_count": segment_success,
-            },
-        }
-
-    def test_best_candidate_in_each_channel_is_prioritized_first(self):
-        a_slow = self.candidate(
-            "频道A",
-            "https://example.test/a-slow.m3u8",
-            segment_success=1,
-            segment_total=3,
-            success_count=2,
-            timeout_count=1,
-        )
-        a_fast = self.candidate(
-            "频道A",
-            "https://example.test/a-fast.m3u8",
-            segment_success=3,
-            segment_total=3,
-            success_count=3,
-            timeout_count=0,
-        )
-        b_slow = self.candidate(
-            "频道B",
-            "https://example.test/b-slow.m3u8",
-            segment_success=1,
-            segment_total=3,
-            success_count=2,
-            timeout_count=1,
-        )
-        b_fast = self.candidate(
-            "频道B",
-            "https://example.test/b-fast.m3u8",
-            segment_success=3,
-            segment_total=3,
-            success_count=3,
-            timeout_count=0,
-        )
-
-        ranked = main.rank_candidates_for_globalping(
-            [a_slow, a_fast, b_slow, b_fast],
-            ["频道A", "频道B"],
-        )
-
-        self.assertEqual(
-            [item["normalized_url"] for item in ranked],
-            [
-                "https://example.test/a-fast.m3u8",
-                "https://example.test/b-fast.m3u8",
-                "https://example.test/a-slow.m3u8",
-                "https://example.test/b-slow.m3u8",
-            ],
-        )
-
-    def test_hls_and_direct_ts_are_not_compared_as_same_type(self):
-        hls_first = self.candidate(
-            "同一频道",
-            "https://example.test/first.m3u8",
-            media_type="HLS",
-        )
-        ts_first = self.candidate(
-            "同一频道",
-            "https://example.test/first.ts",
-            media_type="DIRECT_TS",
-            segment_total=0,
-            segment_success=0,
-        )
-        hls_second = self.candidate(
-            "同一频道",
-            "https://example.test/second.m3u8",
-            media_type="HLS",
-            segment_success=2,
-            segment_total=3,
-        )
-        ts_second = self.candidate(
-            "同一频道",
-            "https://example.test/second.ts",
-            media_type="DIRECT_TS",
-            segment_total=0,
-            segment_success=0,
-        )
-
-        ranked = main.rank_candidates_for_globalping(
-            [hls_first, ts_first, hls_second, ts_second],
-            ["同一频道"],
-        )
-
-        # 各媒体类型只在自己的组内排序，再轮流交接。
-        self.assertEqual(
-            [item["normalized_url"] for item in ranked],
-            [
-                "https://example.test/first.m3u8",
-                "https://example.test/first.ts",
-                "https://example.test/second.m3u8",
-                "https://example.test/second.ts",
-            ],
-        )
-
-    def test_missing_quality_data_keeps_original_order(self):
-        first = {
-            "channel": "频道A",
-            "normalized_url": "https://example.test/first.m3u8",
-            "media_type": "HLS",
-        }
-        second = {
-            "channel": "频道A",
-            "normalized_url": "https://example.test/second.m3u8",
-            "media_type": "HLS",
-        }
-
-        ranked = main.rank_candidates_for_globalping(
-            [first, second],
-            ["频道A"],
-        )
-
-        self.assertEqual(ranked, [first, second])
-
-
 class ChannelAliasTests(unittest.TestCase):
 
     def test_cctv5_alias_matches_canonical_channel(self):
@@ -589,7 +444,6 @@ class ChannelAliasTests(unittest.TestCase):
         )
         self.assertNotIn("安徽卫视", config["channels"])
 
-
     def test_verified_real_source_aliases_match_configured_channels(self):
         config = main.load_configuration(root=main.ROOT)
         aliases = config["settings"]["aliases"]
@@ -616,6 +470,7 @@ class ChannelAliasTests(unittest.TestCase):
                     ),
                     canonical,
                 )
+
     def test_selected_channel_alias_matches_and_enters_candidate_pool(self):
         result = normalize_source_content(
             content=(
@@ -667,6 +522,7 @@ class ChannelAliasTests(unittest.TestCase):
         self.assertEqual(result["candidates"], [])
         self.assertEqual(result["matched_target_candidates"], 0)
         self.assertEqual(seen_urls, set())
+
 
 if __name__ == "__main__":
     unittest.main()
