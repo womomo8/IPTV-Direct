@@ -523,7 +523,88 @@ class Detector:
                     and content_length is not None
                     and content_length > limit
                     and len(data) < limit
-                   @staticmethod
+                ):
+                    raise CheckError(
+                        INCOMPLETE,
+                        "HTTP 正文未达到读取上限且提前结束",
+                        connected,
+                    )
+
+                if response.status == 206:
+                    total = range_info[2]
+                    complete = (
+                        total is not None
+                        and range_info[1] + 1 == total
+                        and len(data) == total
+                    )
+                elif content_length is not None:
+                    complete = content_length == len(data)
+                else:
+                    complete = len(data) < limit
+
+                return {
+                    "data": data,
+                    "url": current,
+                    "status": response.status,
+                    "content_type": response.getheader(
+                        "Content-Type", ""
+                    ),
+                    "content_length": content_length,
+                    "content_range": response.getheader(
+                        "Content-Range", ""
+                    ),
+                    "range_total": (
+                        range_info[2] if range_info else None
+                    ),
+                    "complete": complete,
+                    "connected": connected,
+                    "read_seconds": metrics.get("read_seconds", 0.0),
+                    "redirect_count": redirects,
+                }
+
+            except CheckError as exc:
+                if not exc.connected and conn is not None:
+                    exc.connected = bool(
+                        getattr(conn, "ipv4_connected", False)
+                    )
+                raise
+            except (socket.timeout, TimeoutError) as exc:
+                connected = bool(
+                    getattr(conn, "ipv4_connected", False)
+                )
+                raise CheckError(
+                    INCOMPLETE,
+                    f"连接或读取超时：{exc}",
+                    connected,
+                ) from exc
+            except (
+                OSError,
+                ssl.SSLError,
+                http.client.HTTPException,
+                ValueError,
+            ) as exc:
+                connected = bool(
+                    getattr(conn, "ipv4_connected", False)
+                )
+                status = (
+                    INCOMPLETE
+                    if time.monotonic() >= deadline
+                    else FAIL
+                )
+                raise CheckError(
+                    status,
+                    f"IPv4/HTTP 请求失败：{exc}",
+                    connected,
+                ) from exc
+            finally:
+                if timer:
+                    timer.cancel()
+                if conn:
+                    conn.close()
+                if acquired:
+                    slot.release()
+
+    @staticmethod
     def _ts_ok(data):
         if len(data) < 188 * 4 + 1:
             return False
