@@ -276,7 +276,7 @@ class Detector:
             raise
         finally:
             finished = time.monotonic()
-            internal_queue_wait = max(0.0, metrics.get("queue_wait_seconds", 0.0))
+                        internal_queue_wait = max(0.0, metrics.get("queue_wait_seconds", 0.0))
                         internal_queue_wait = max(0.0, metrics.get("queue_wait_seconds", 0.0))
             elapsed = max(0.0, finished - started - internal_queue_wait)
             queue_wait_seconds = max(0.0, first_queue_wait_seconds) + internal_queue_wait
