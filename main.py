@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """IPTV-Direct 总入口：多来源汇集、统一检测、优选和订阅发布。"""
@@ -9,7 +10,6 @@ import json
 import re
 import sys
 import unittest
-from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -186,119 +186,11 @@ def load_configuration(
 
 
 # ----------------------------------------------------------------------
-# 候选身份与质量优选
+# 候选身份与 publisher 结果交接
 # ----------------------------------------------------------------------
 
 def _identity(item: dict[str, Any]) -> tuple[Any, Any]:
     return item.get("channel"), item.get("normalized_url")
-
-
-def _quality_number(
-    quality: dict[str, Any],
-    key: str,
-) -> float | None:
-    value = quality.get(key)
-
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-
-    return float(value)
-
-
-def _known_first(
-    value: float | None,
-    reverse: bool = False,
-) -> tuple[int, float]:
-    """已测得的数据优先；缺失数据不伪装成 0 或最好值。"""
-    if value is None:
-        return (1, 0.0)
-
-    return (0, -value if reverse else value)
-
-
-def _candidate_quality_key(
-    candidate: dict[str, Any],
-) -> tuple[Any, ...]:
-    """
-    使用 checker 已记录的真实质量数据分层比较。
-    不计算综合分数，也不改变任何 PASS/FAIL/INCOMPLETE 结果。
-    """
-    quality = candidate.get("quality")
-
-    if not isinstance(quality, dict):
-        quality = {}
-
-    media_type = candidate.get("media_type")
-
-    request_count = _quality_number(quality, "request_count")
-    success_count = _quality_number(quality, "request_success_count")
-    timeout_count = _quality_number(quality, "timeout_count")
-
-    total_elapsed = _quality_number(quality, "total_elapsed_seconds")
-    total_read = _quality_number(quality, "total_read_seconds")
-    total_bytes = _quality_number(quality, "total_bytes_read")
-
-    success_ratio = None
-    if (
-        request_count is not None
-        and request_count > 0
-        and success_count is not None
-    ):
-        success_ratio = success_count / request_count
-
-    average_elapsed = None
-    if (
-        request_count is not None
-        and request_count > 0
-        and total_elapsed is not None
-    ):
-        average_elapsed = total_elapsed / request_count
-
-    average_read = None
-    if (
-        request_count is not None
-        and request_count > 0
-        and total_read is not None
-    ):
-        average_read = total_read / request_count
-
-    throughput = None
-    if (
-        total_read is not None
-        and total_read > 0
-        and total_bytes is not None
-    ):
-        throughput = total_bytes / total_read
-
-    parts: list[tuple[int, float]] = []
-
-    # HLS 比较实际媒体分片成功情况；直接 TS 不使用此指标。
-    if media_type == "HLS":
-        segment_total = _quality_number(quality, "segment_total")
-        segment_success = _quality_number(
-            quality,
-            "segment_success_count",
-        )
-
-        segment_ratio = None
-
-        if (
-            segment_total is not None
-            and segment_total > 0
-            and segment_success is not None
-        ):
-            segment_ratio = segment_success / segment_total
-
-        parts.append(_known_first(segment_ratio, reverse=True))
-        parts.append(_known_first(segment_success, reverse=True))
-
-    parts.append(_known_first(timeout_count))
-    parts.append(_known_first(success_ratio, reverse=True))
-    parts.append(_known_first(average_elapsed))
-    parts.append(_known_first(average_read))
-    parts.append(_known_first(throughput, reverse=True))
-
-    return tuple(parts)
 
 
 def rank_candidates_for_globalping(
@@ -306,78 +198,16 @@ def rank_candidates_for_globalping(
     channels: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """
-    同频道、同媒体类型内优选。
+    兼容旧测试/调用方的委托入口；质量比较和排序全部由 publisher 执行。
 
-    各频道/媒体类型组轮流交接，避免某个频道的候选
-    一次性占满 Globalping 额度。
+    正式检测流程直接调用 publisher 的完整结果接口，并核对排除记录。
     """
-    if not candidates:
-        return []
-
-    channel_order = {
-        channel: index
-        for index, channel in enumerate(channels or [])
-    }
-
-    groups: OrderedDict[
-        tuple[str, str],
-        list[tuple[int, dict[str, Any]]],
-    ] = OrderedDict()
-
-    for index, candidate in enumerate(candidates):
-        channel = str(candidate.get("channel", ""))
-        media_type = str(candidate.get("media_type", "UNKNOWN"))
-        key = (channel, media_type)
-        groups.setdefault(key, []).append((index, candidate))
-
-    # 先固定每组首次出现顺序，再排序；不在排序过程中反查列表。
-    original_group_order = {
-        key: index
-        for index, key in enumerate(groups.keys())
-    }
-
-    group_keys = sorted(
-        groups.keys(),
-        key=lambda key: (
-            channel_order.get(key[0], len(channel_order)),
-            original_group_order[key],
-        ),
+    result = publisher._prioritize_candidates_for_globalping(
+        candidates,
+        channels or [],
+        require_local_pass=False,
     )
-
-    queues: list[list[dict[str, Any]]] = []
-
-    for key in group_keys:
-        indexed = groups[key]
-
-        indexed.sort(
-            key=lambda pair: (
-                _candidate_quality_key(pair[1]),
-                pair[0],
-            )
-        )
-
-        queues.append([
-            candidate
-            for _, candidate in indexed
-        ])
-
-    ranked: list[dict[str, Any]] = []
-    depth = 0
-
-    while True:
-        added = False
-
-        for queue in queues:
-            if depth < len(queue):
-                ranked.append(queue[depth])
-                added = True
-
-        if not added:
-            break
-
-        depth += 1
-
-    return ranked
+    return result["queue"]
 
 
 # ----------------------------------------------------------------------
@@ -394,8 +224,8 @@ def run_detection_pipeline(
     """
     全部候选统一执行本地检测。
 
-    本地适用检测全部 PASS 后，才按质量优先顺序交给 Globalping。
-    返回结果恢复候选池原始顺序，不改变 publisher 的来源政策。
+    本地适用检测全部 PASS 后，才由 publisher 生成完整优选队列并交给 Globalping。
+    返回结果恢复候选池原始顺序，不改变 publisher 确定的远程检测顺序。
     """
     if not candidates:
         return []
@@ -445,39 +275,97 @@ def run_detection_pipeline(
             for item in candidates
         ]
 
-    eligible_indices = [
-        index
-        for index, item in enumerate(local_results)
-        if checker.local_checks_passed(item)
-    ]
+    # publisher 独占本地适用检测筛选、质量比较、分组和完整队列组织。
+    # main 只核对输入是否被完整分区、身份是否唯一以及返回顺序是否自洽。
+    output: list[dict[str, Any] | None] = [None] * len(local_results)
 
-    eligible = [
-        local_results[index]
-        for index in eligible_indices
-    ]
+    try:
+        prioritization = publisher.prioritize_candidates_for_globalping(
+            local_results,
+            channels or [],
+        )
 
-    eligible_set = set(eligible_indices)
-    output: list[dict[str, Any] | None] = [
-        None
-    ] * len(local_results)
+        if not isinstance(prioritization, dict):
+            raise ValueError("publisher 未返回有效优选结果对象")
 
-    for index, item in enumerate(local_results):
-        if index not in eligible_set:
-            output[index] = globalping.incomplete_result(
-                item,
+        ranked = prioritization.get("queue")
+        excluded = prioritization.get("excluded")
+        ranking = prioritization.get("ranking")
+
+        if (
+            not isinstance(ranked, list)
+            or not isinstance(excluded, list)
+            or not isinstance(ranking, list)
+        ):
+            raise ValueError("publisher 优选结果缺少完整队列、排除记录或排序依据")
+
+        original_ids = [_identity(item) for item in local_results]
+        ranked_ids = [
+            _identity(item)
+            for item in ranked
+            if isinstance(item, dict)
+        ]
+        excluded_ids = []
+        for record in excluded:
+            if not isinstance(record, dict):
+                raise ValueError("publisher 排除记录格式错误")
+            candidate = record.get("candidate")
+            reason = record.get("reason")
+            if not isinstance(candidate, dict) or not isinstance(reason, str) or not reason:
+                raise ValueError("publisher 排除记录缺少候选或排除原因")
+            excluded_ids.append(_identity(candidate))
+
+        ranking_ids = []
+        for position, record in enumerate(ranking, 1):
+            if not isinstance(record, dict):
+                raise ValueError("publisher 排序依据记录格式错误")
+            identity = record.get("identity")
+            if (
+                not isinstance(identity, (tuple, list))
+                or len(identity) != 2
+                or record.get("priority_order") != position
+            ):
+                raise ValueError("publisher 优选顺序或候选身份记录无效")
+            ranking_ids.append(tuple(identity))
+
+        if (
+            len(ranked_ids) != len(ranked)
+            or len(original_ids) != len(set(original_ids))
+            or len(ranked_ids) != len(set(ranked_ids))
+            or len(excluded_ids) != len(set(excluded_ids))
+            or set(ranked_ids) & set(excluded_ids)
+            or len(ranked_ids) + len(excluded_ids) != len(original_ids)
+            or set(ranked_ids) | set(excluded_ids) != set(original_ids)
+        ):
+            raise ValueError("publisher 返回的候选数量、身份或完整分区不匹配")
+
+        if ranking_ids != ranked_ids or len(ranking) != len(ranked):
+            raise ValueError("publisher 排序依据与完整优选队列不一致")
+
+        original_index_by_id = {
+            identity: index
+            for index, identity in enumerate(original_ids)
+        }
+
+        for record in excluded:
+            candidate = record["candidate"]
+            original_index = original_index_by_id[_identity(candidate)]
+            output[original_index] = globalping.incomplete_result(
+                local_results[original_index],
                 (
-                    "本地检测未全部通过，未提交 Globalping；"
-                    "不代表远程检测失败。"
+                    "本地适用检测未通过或结果不完整，未提交 Globalping；"
+                    f"publisher 排除原因：{record['reason']}"
                 ),
             )
 
-    if eligible:
-        ranked = rank_candidates_for_globalping(
-            eligible,
-            channels,
-        )
+    except Exception as exc:
+        raise ValueError(
+            f"publisher 优选调用或结果核对失败：{exc}"
+        ) from exc
 
+    if ranked:
         try:
+            # 不重新排序、不截断；按 publisher 返回的完整队列原样交接。
             remote_results = remote_check(
                 ranked,
                 settings["globalping"],
@@ -516,8 +404,9 @@ def run_detection_pipeline(
                 for result in remote_results
             }
 
-            for original_index in eligible_indices:
-                identity = _identity(local_results[original_index])
+            for candidate in ranked:
+                identity = _identity(candidate)
+                original_index = original_index_by_id[identity]
                 output[original_index] = remote_by_identity[identity]
 
         except Exception as exc:
@@ -525,7 +414,8 @@ def run_detection_pipeline(
                 f"Globalping 调用异常或结果校验失败：{exc}"
             )
 
-            for original_index in eligible_indices:
+            for candidate in ranked:
+                original_index = original_index_by_id[_identity(candidate)]
                 output[original_index] = globalping.incomplete_result(
                     local_results[original_index],
                     reason,
