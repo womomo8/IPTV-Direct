@@ -1458,7 +1458,7 @@ def check_candidates(
             )
             continue
 
-         # 第一阶段只需要当前探针数量的额度。
+        # 第一阶段只需要当前探针数量的额度。
         # HLS 是否需要第二阶段，要等第一阶段解析出 Master 清单后才能确定。
         # 第二阶段额度由 _create_measurement() 在真正创建测量前单独核验。
         required_budget = probe_count
