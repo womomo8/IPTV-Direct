@@ -802,6 +802,96 @@ class HlsFlowTests(unittest.TestCase):
 
         self.assertNotEqual(result["checks"]["hls"]["status"], gp.PASS)
 
+    def test_hls_complete_http_206_is_success(self):
+        response = finished_http(
+            MEDIA_PLAYLIST,
+            206,
+            {
+                "Content-Range": (
+                    f"bytes 0-{len(MEDIA_PLAYLIST) - 1}/"
+                    f"{len(MEDIA_PLAYLIST)}"
+                ),
+            },
+        )
+
+        with patch.object(
+            gp,
+            "_stage",
+            return_value=("m1", measurement(result_item(response))),
+        ):
+            result = gp._run_hls(
+                {
+                    "media_type": "HLS",
+                    "normalized_url": "http://example.test/index.m3u8",
+                },
+                one_probe_location(),
+                {"remaining": 10, "probe_count": 1, "halted": False},
+            )
+
+        self.assertEqual(result["checks"]["hls"]["status"], gp.PASS)
+
+    def test_hls_partial_http_206_cannot_pass_even_if_parseable(self):
+        response = finished_http(
+            MEDIA_PLAYLIST,
+            206,
+            {
+                "Content-Range": (
+                    f"bytes 0-{len(MEDIA_PLAYLIST) - 1}/"
+                    f"{len(MEDIA_PLAYLIST) + 100}"
+                ),
+            },
+        )
+
+        with patch.object(
+            gp,
+            "_stage",
+            return_value=("m1", measurement(result_item(response))),
+        ):
+            result = gp._run_hls(
+                {
+                    "media_type": "HLS",
+                    "normalized_url": "http://example.test/index.m3u8",
+                },
+                one_probe_location(),
+                {"remaining": 10, "probe_count": 1, "halted": False},
+            )
+
+        self.assertEqual(
+            result["checks"]["hls"]["status"],
+            gp.INCOMPLETE,
+        )
+
+    def test_hls_http_206_rejects_invalid_content_range(self):
+        total = len(MEDIA_PLAYLIST)
+
+        invalid_headers = [
+            {},
+            {"Content-Range": "invalid"},
+            {"Content-Range": f"bytes 1-{total - 1}/{total}"},
+            {"Content-Range": f"bytes 0-{total - 2}/{total}"},
+            {"Content-Range": f"bytes 0-{total - 1}/{total + 1}"},
+        ]
+
+        for headers in invalid_headers:
+            with self.subTest(headers=headers):
+                response = finished_http(
+                    MEDIA_PLAYLIST,
+                    206,
+                    headers,
+                )
+
+                self.assertIsNone(gp._raw_body_bytes(response))
+
+        short_response = finished_http(
+            MEDIA_PLAYLIST[:-1],
+            206,
+            {
+                "Content-Range": f"bytes 0-{total - 1}/{total}",
+            },
+        )
+
+        self.assertIsNone(gp._raw_body_bytes(short_response))
+
     def test_hls_master_requires_same_probe_for_media_playlist(self):
         other_probe = dict(PROBE)
         other_probe["city"] = "Fuzhou"
