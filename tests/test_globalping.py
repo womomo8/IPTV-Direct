@@ -537,7 +537,7 @@ class BudgetBoundaryAndExceptionTests(unittest.TestCase):
         ) as request, patch.object(
             globalping.time,
             "monotonic",
-            side_effect=[0.0, 0.0, 0.1],
+            return_value=0.1,
         ), patch.object(
             globalping.time,
             "sleep",
