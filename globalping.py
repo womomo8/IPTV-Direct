@@ -93,10 +93,8 @@ def _retry_after_seconds(value: str | None) -> float | None:
     except (TypeError, ValueError, OverflowError, OSError):
         return None
 
-
 def _api_request(
 
-def _api_request(
     url: str,
     method: str = "GET",
     payload: dict[str, Any] | None = None,
