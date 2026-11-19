@@ -347,6 +347,158 @@ class DirectTSAndQuotaTests(unittest.TestCase):
         self.assertEqual(payload["locations"], "http-measurement")
         self.assertNotIn("limit", payload)
 
+class BudgetBoundaryAndExceptionTests(unittest.TestCase):
+    def _candidate(self):
+        return {
+            "channel": "CCTV-1",
+            "media_type": "DIRECT_TS",
+            "normalized_url": "https://example.com/live.ts",
+        }
+
+    def test_no_probes_refunds_reserved_quota(self):
+        budget = {"remaining": 3, "stop_new": 0}
+        stats = globalping.Counter()
+
+        with patch.object(
+            globalping,
+            "_create_measurement",
+            side_effect=globalping.GlobalpingError(
+                "no probes", no_probes=True
+            ),
+        ) as create:
+            result = globalping._candidate_remote(
+                self._candidate(), [], 3, 8, budget, stats
+            )
+
+        self.assertEqual(create.call_count, 1)
+        self.assertEqual(budget["remaining"], 3)
+        self.assertEqual(stats["actual_measurements"], 0)
+        self.assertEqual(stats["actual_probe_slots"], 0)
+        self.assertEqual(result["overall"], globalping.INCOMPLETE)
+
+    def test_http_429_refunds_quota_and_stops_new_measurements(self):
+        budget = {"remaining": 3, "stop_new": 0}
+        stats = globalping.Counter()
+
+        with patch.object(
+            globalping,
+            "_create_measurement",
+            side_effect=globalping.GlobalpingError(
+                "rate limited", status=429
+            ),
+        ) as create:
+            result = globalping._candidate_remote(
+                self._candidate(), [], 3, 8, budget, stats
+            )
+
+        self.assertEqual(create.call_count, 1)
+        self.assertEqual(budget["remaining"], 3)
+        self.assertEqual(budget["stop_new"], 1)
+        self.assertEqual(stats["actual_measurements"], 0)
+        self.assertEqual(stats["actual_probe_slots"], 0)
+        self.assertEqual(result["overall"], globalping.INCOMPLETE)
+
+    def test_uncertain_creation_keeps_reserved_quota_separate(self):
+        budget = {"remaining": 3, "stop_new": 0}
+        stats = globalping.Counter()
+
+        with patch.object(
+            globalping,
+            "_create_measurement",
+            side_effect=globalping.GlobalpingError(
+                "connection lost", uncertain=True
+            ),
+        ) as create:
+            result = globalping._candidate_remote(
+                self._candidate(), [], 3, 8, budget, stats
+            )
+
+        self.assertEqual(create.call_count, 1)
+        self.assertEqual(budget["remaining"], 0)
+        self.assertTrue(result["creation_uncertain"])
+        self.assertEqual(stats["creation_uncertain_candidates"], 1)
+        self.assertEqual(stats["quota_blocked_candidates"], 0)
+        self.assertEqual(stats["actual_measurements"], 0)
+        self.assertEqual(stats["actual_probe_slots"], 0)
+
+    def test_known_creation_failure_refunds_quota(self):
+        budget = {"remaining": 3, "stop_new": 0}
+        stats = globalping.Counter()
+
+        with patch.object(
+            globalping,
+            "_create_measurement",
+            side_effect=globalping.GlobalpingError("creation failed"),
+        ):
+            result = globalping._candidate_remote(
+                self._candidate(), [], 3, 8, budget, stats
+            )
+
+        self.assertEqual(budget["remaining"], 3)
+        self.assertEqual(stats["actual_measurements"], 0)
+        self.assertEqual(stats["actual_probe_slots"], 0)
+        self.assertEqual(result["overall"], globalping.INCOMPLETE)
+
+    def test_poll_boundary_keeps_created_measurement_in_statistics(self):
+        budget = {"remaining": 3, "stop_new": 0}
+        stats = globalping.Counter()
+
+        with patch.object(
+            globalping,
+            "_create_measurement",
+            return_value=("measurement-1", 2),
+        ), patch.object(
+            globalping,
+            "_poll",
+            return_value=({"status": "in-progress"}, "轮询边界耗尽"),
+        ), patch.object(
+            globalping,
+            "_http_aggregate",
+            return_value=(globalping.INCOMPLETE, [], []),
+        ):
+            result = globalping._candidate_remote(
+                self._candidate(), [], 3, 8, budget, stats
+            )
+
+        self.assertEqual(stats["actual_measurements"], 1)
+        self.assertEqual(stats["actual_probe_slots"], 2)
+        self.assertEqual(stats["incomplete_measurements"], 1)
+        self.assertEqual(stats["completed_measurements"], 0)
+        self.assertEqual(len(result["measurements"]), 1)
+        self.assertEqual(result["overall"], globalping.INCOMPLETE)
+        self.assertTrue(any(
+            "轮询边界耗尽" in reason
+            for reason in result.get("reasons", [])
+        ))
+
+    def test_retry_after_does_not_extend_poll_boundary(self):
+        error = globalping.urllib.error.HTTPError(
+            "https://api.globalping.io/v1/measurements/test",
+            429,
+            "Too Many Requests",
+            {"Retry-After": "2"},
+            None,
+        )
+
+        with patch.object(
+            globalping.urllib.request,
+            "urlopen",
+            side_effect=error,
+        ) as request, patch.object(
+            globalping.time,
+            "monotonic",
+            side_effect=[0.0, 0.0, 0.1],
+        ), patch.object(
+            globalping.time,
+            "sleep",
+        ) as sleep:
+            measurement, reason = globalping._poll("measurement-test", 1)
+
+        self.assertIsNone(measurement)
+        self.assertEqual(reason, "轮询边界耗尽")
+        self.assertEqual(request.call_count, 1)
+        sleep.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
