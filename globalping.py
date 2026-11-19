@@ -1303,6 +1303,9 @@ def incomplete_result(
 def check_candidates(
     candidates: list[dict[str, Any]],
     settings: dict[str, Any],
+    *,
+    _skip_candidate: Any = None,
+    _on_candidate_result: Any = None,
 ) -> list[dict[str, Any]]:
     """检测 Publisher 传入的完整本地优选队列。"""
     if not isinstance(candidates, list):
@@ -1467,6 +1470,14 @@ def check_candidates(
     if not candidates:
         return []
 
+    output: list[dict[str, Any]] = []
+
+    def emit_result(item: dict[str, Any]) -> None:
+        output.append(item)
+
+        if callable(_on_candidate_result):
+            _on_candidate_result(item)
+
     # 输入契约全部通过后，才允许访问 Globalping。
     try:
         limits = read_limits()
@@ -1479,10 +1490,9 @@ def check_candidates(
         )
 
     except GlobalpingError as exc:
-        return [
-            incomplete_result(candidate, str(exc))
-            for candidate in candidates
-        ]
+        for candidate in candidates:
+            emit_result(incomplete_result(candidate, str(exc)))
+        return output
 
     probe_count = sum(
         int(item.get("limit", 1))
@@ -1495,11 +1505,20 @@ def check_candidates(
         "halted": False,
     }
 
-    output: list[dict[str, Any]] = []
-
     for candidate in candidates:
+        if callable(_skip_candidate):
+            skip_reason = _skip_candidate(candidate)
+
+            if skip_reason:
+                emit_result({
+                    "candidate": candidate,
+                    "measurement_status": "SKIPPED_CAPACITY",
+                    "reason": str(skip_reason),
+                })
+                continue
+
         if budget["halted"]:
-            output.append(
+            emit_result(
                 incomplete_result(
                     candidate,
                     "Globalping 返回 HTTP 429，已停止本轮后续测量创建。",
@@ -1513,7 +1532,7 @@ def check_candidates(
         required_budget = probe_count
 
         if budget["remaining"] < required_budget:
-            output.append(
+            emit_result(
                 incomplete_result(
                     candidate,
                     (
@@ -1532,13 +1551,12 @@ def check_candidates(
 
         result["status"] = _overall_status(result["checks"])
 
-        output.append({
+        emit_result({
             **candidate,
             "globalping": result,
         })
 
     return output
-
 
 ACCEPTED = "ACCEPTED"
 REJECTED = "REJECTED"
