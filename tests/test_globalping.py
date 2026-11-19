@@ -183,6 +183,74 @@ class ApiRequestTests(unittest.TestCase):
         self.assertTrue(caught.exception.rate_limited)
         self.assertIn("429", str(caught.exception))
 
+    def test_retry_after_parses_seconds_and_http_date(self):
+        self.assertEqual(gp._retry_after_seconds("3"), 3.0)
+
+        with patch.object(gp.time, "time", return_value=100.0):
+            self.assertEqual(
+                gp._retry_after_seconds(
+                    "Thu, 01 Jan 1970 00:01:50 GMT"
+                ),
+                10.0,
+            )
+
+        self.assertIsNone(gp._retry_after_seconds("invalid"))
+
+    def test_wait_measurement_uses_exponential_backoff(self):
+        responses = [
+            (304, None, {}),
+            (200, {"status": "in-progress"}, {}),
+            (200, {"status": "finished", "results": []}, {}),
+        ]
+
+        with patch.object(
+            gp,
+            "_api_request",
+            side_effect=responses,
+        ):
+            with patch.object(gp.time, "monotonic", return_value=0.0):
+                with patch.object(gp.time, "sleep") as sleep:
+                    result = gp._wait_measurement(
+                        "m1",
+                        {"halted": False},
+                    )
+
+        self.assertEqual(result["status"], "finished")
+        self.assertEqual(
+            [call.args[0] for call in sleep.call_args_list],
+            [gp.POLL_INTERVAL, gp.POLL_INTERVAL * 2],
+        )
+
+    def test_wait_measurement_honors_retry_after_on_429(self):
+        error = gp.GlobalpingError(
+            "HTTP 429",
+            rate_limited=True,
+            response_headers={"retry-after": "3"},
+        )
+
+        responses = [
+            error,
+            (200, {"status": "finished", "results": []}, {}),
+        ]
+
+        budget = {"halted": False}
+
+        with patch.object(
+            gp,
+            "_api_request",
+            side_effect=responses,
+        ):
+            with patch.object(gp.time, "monotonic", return_value=0.0):
+                with patch.object(gp.time, "sleep") as sleep:
+                    result = gp._wait_measurement("m1", budget)
+
+        self.assertEqual(result["status"], "finished")
+        self.assertTrue(budget["halted"])
+        self.assertEqual(
+            [call.args[0] for call in sleep.call_args_list],
+            [3.0],
+        )
+
     def test_read_limits_parses_quota(self):
         payload = {
             "rateLimit": {
