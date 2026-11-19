@@ -556,57 +556,65 @@ def _failure_status(result: dict[str, Any]) -> str:
 def _aggregate_ipv4(
     results: dict[tuple[Any, ...], dict[str, Any]],
 ) -> dict[str, str]:
+    """按有效可达证据和明确目标端失败证据聚合 IPv4。"""
     items = [item["result"] for item in results.values()]
 
     if any(_ipv4_ok(item) for item in items):
         return _status(
             PASS,
-            "至少一个中国大陆探针通过 IPv4 目标解析并完成连接测量。",
+            "至少一个探针确认目标 IPv4 可达。",
         )
 
-    if any(
-        item.get("status") == "finished"
-        and isinstance(item.get("resolvedAddress"), str)
-        and item.get("resolvedAddress")
-        and not _ipv4_ok(item)
-        for item in items
-    ):
-        return _status(FAIL, "测量结果未取得 IPv4 目标地址。")
-
     if any(_failure_status(item) == FAIL for item in items):
-        return _status(FAIL, "目标端明确连接失败。")
+        return _status(
+            FAIL,
+            "存在能够确认的目标端 IPv4 连接失败证据。",
+        )
 
     return _status(
         INCOMPLETE,
-        "探针未能完成 IPv4 测量，不能确认连通性。",
+        "没有取得有效 IPv4 可达证据，也没有明确目标端失败证据。",
     )
 
 
 def _aggregate_http(
     results: dict[tuple[Any, ...], dict[str, Any]],
 ) -> dict[str, str]:
+    """按有效 HTTP 响应聚合，不把探针侧异常当作目标端失败。"""
     items = [item["result"] for item in results.values()]
 
     if any(_ipv4_ok(item) and _http_ok(item) for item in items):
-        return _status(PASS, "至少一个 IPv4 探针取得 HTTP 2xx 响应。")
+        return _status(
+            PASS,
+            "至少一个 IPv4 探针取得有效 HTTP 2xx 响应。",
+        )
 
     for item in items:
-        if item.get("status") == "finished":
-            try:
-                code = int(item.get("statusCode"))
-            except (TypeError, ValueError):
-                continue
+        if item.get("status") != "finished" or not _ipv4_ok(item):
+            continue
 
-            if code and not 200 <= code < 300:
-                return _status(
-                    FAIL,
-                    f"目标返回 HTTP {code}，不是成功响应。",
-                )
+        try:
+            code = int(item.get("statusCode"))
+        except (TypeError, ValueError):
+            continue
+
+        if code and not 200 <= code < 300:
+            return _status(
+                FAIL,
+                f"目标端实际返回 HTTP {code}，不是成功响应。",
+            )
 
     if any(_failure_status(item) == FAIL for item in items):
-        return _status(FAIL, "目标端 HTTP 请求明确失败。")
+        return _status(
+            FAIL,
+            "存在能够确认的目标端 HTTP 失败证据。",
+        )
 
-    return _status(INCOMPLETE, "探针未能完成 HTTP 请求。")
+    return _status(
+        INCOMPLETE,
+        "没有取得有效 HTTP 成功响应，也没有明确目标端失败证据。",
+    )
+
 
 def _raw_body_bytes(result: dict[str, Any]) -> bytes | None:
     """只接受完整且可无损还原的 UTF-8 HLS 清单正文。"""
