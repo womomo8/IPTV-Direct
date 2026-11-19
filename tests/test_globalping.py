@@ -90,14 +90,15 @@ class PublicationValidationTests(unittest.TestCase):
         self.assertFalse(valid)
         self.assertIn("最多两条", reason)
 
+
 class DirectTSAndQuotaTests(unittest.TestCase):
-    def test_direct_ts_uses_http_only_and_consumes_one_measurement(self):
+    def test_direct_ts_uses_http_only_and_consumes_actual_probe_quota(self):
         candidate = {
             "channel": "CCTV-1",
             "media_type": "DIRECT_TS",
             "normalized_url": "https://example.com/live.ts",
         }
-        budget = {"remaining": 2, "stop_new": 0}
+        budget = {"remaining": 4, "stop_new": 0}
         stats = globalping.Counter()
 
         with patch.object(
@@ -114,12 +115,7 @@ class DirectTSAndQuotaTests(unittest.TestCase):
             return_value=(globalping.PASS, [], [{"probe": {"city": "A"}}]),
         ):
             result = globalping._candidate_remote(
-                candidate,
-                [],
-                3,
-                8,
-                budget,
-                stats,
+                candidate, [], 3, 8, budget, stats
             )
 
         self.assertEqual(create.call_count, 1)
@@ -132,6 +128,83 @@ class DirectTSAndQuotaTests(unittest.TestCase):
         self.assertEqual(result["overall"], globalping.PASS)
         self.assertEqual(stats["actual_measurements"], 1)
         self.assertEqual(stats["actual_probe_slots"], 3)
+
+    def test_probe_request_is_limited_by_remaining_test_quota(self):
+        candidate = {
+            "channel": "CCTV-1",
+            "media_type": "DIRECT_TS",
+            "normalized_url": "https://example.com/live.ts",
+        }
+        budget = {"remaining": 2, "stop_new": 0}
+        stats = globalping.Counter()
+
+        with patch.object(
+            globalping,
+            "_create_measurement",
+            return_value=("measurement-1", 2),
+        ) as create, patch.object(
+            globalping,
+            "_poll",
+            return_value=({"status": "finished"}, None),
+        ), patch.object(
+            globalping,
+            "_http_aggregate",
+            return_value=(globalping.PASS, [], [{"probe": {"city": "A"}}]),
+        ):
+            result = globalping._candidate_remote(
+                candidate, [], 3, 8, budget, stats
+            )
+
+        self.assertEqual(create.call_args.args[3], 2)
+        self.assertEqual(budget["remaining"], 0)
+        self.assertEqual(result["overall"], globalping.PASS)
+        self.assertEqual(stats["actual_measurements"], 1)
+        self.assertEqual(stats["actual_probe_slots"], 2)
+
+    def test_hls_second_stage_is_blocked_without_full_probe_quota(self):
+        candidate = {
+            "channel": "CCTV-1",
+            "media_type": "HLS",
+            "normalized_url": "https://example.com/master.m3u8",
+        }
+        budget = {"remaining": 8, "stop_new": 0}
+        stats = globalping.Counter()
+        probe = {"probe": {"city": "A", "country": "CN", "asn": 9808}}
+
+        with patch.object(
+            globalping,
+            "_create_measurement",
+            side_effect=[
+                ("ipv4-measurement", 3),
+                ("http-measurement", 3),
+            ],
+        ) as create, patch.object(
+            globalping,
+            "_poll",
+            return_value=({"status": "finished"}, None),
+        ), patch.object(
+            globalping,
+            "_ping_aggregate",
+            return_value=(globalping.PASS, [probe]),
+        ), patch.object(
+            globalping,
+            "_http_aggregate",
+            return_value=(globalping.PASS, [probe], [probe]),
+        ), patch.object(
+            globalping,
+            "_master_child_url",
+            return_value="https://example.com/child.m3u8",
+        ):
+            result = globalping._candidate_remote(
+                candidate, [], 3, 8, budget, stats
+            )
+
+        self.assertEqual(create.call_count, 2)
+        self.assertEqual(budget["remaining"], 2)
+        self.assertEqual(result["checks"]["hls"], globalping.INCOMPLETE)
+        self.assertEqual(result["overall"], globalping.INCOMPLETE)
+        self.assertEqual(stats["actual_measurements"], 2)
+        self.assertEqual(stats["actual_probe_slots"], 6)
 
 
 if __name__ == "__main__":
