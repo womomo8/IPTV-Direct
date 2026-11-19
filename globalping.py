@@ -1106,6 +1106,39 @@ def run_globalping(queue: list[dict[str, Any]], settings: dict[str, Any],
         records.append({"identity": list(identity), "priority_order": priority,
                         "remote": remote, "admission": admission, "reason": reason})
 
+    # 记录被跳过、被拒绝及 INCOMPLETE 降级的具体原因。
+    # 只记录频道和优先级，不记录线路 URL，避免泄露敏感参数。
+    for record in records:
+        remote = record.get("remote")
+        if (
+            record.get("admission") != "ADMITTED"
+            or (
+                isinstance(remote, dict)
+                and remote.get("overall") == INCOMPLETE
+            )
+        ):
+            identity = record.get("identity")
+            channel = (
+                identity[0]
+                if isinstance(identity, (list, tuple)) and identity
+                else "未知"
+            )
+            remote_reasons = (
+                remote.get("reasons", [])
+                if isinstance(remote, dict)
+                else []
+            )
+            LOG.warning(
+                "候选处理：优先级=%s，频道=%s，准入=%s，原因=%s，远程原因=%s",
+                record.get("priority_order"),
+                channel,
+                record.get("admission"),
+                record.get("reason", "未提供"),
+                "；".join(str(item) for item in remote_reasons)
+                if isinstance(remote_reasons, list) and remote_reasons
+                else "无",
+            )
+
     stats["accepted_routes"] = len(accepted)
     stats["accepted_channels"] = len(channel_counts)
     publication = _publish(accepted, output_dir, channels,
