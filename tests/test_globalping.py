@@ -651,6 +651,5 @@ class PublicationUnknownRecoveryTests(unittest.TestCase):
                 expected_txt,
             )
 
-
 if __name__ == "__main__":
     unittest.main()
