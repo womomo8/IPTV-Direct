@@ -1110,11 +1110,6 @@ def run_globalping(queue: list[dict[str, Any]], settings: dict[str, Any],
     stats["accepted_channels"] = len(channel_counts)
     publication = _publish(accepted, output_dir, channels,
                            category_by_channel or {}, category_order or [])
-
-    stats["accepted_routes"] = len(accepted)
-    stats["accepted_channels"] = len(channel_counts)
-    publication = _publish(accepted, output_dir, channels,
-                           category_by_channel or {}, category_order or [])
     LOG.info("Globalping 统计：%s", json.dumps(dict(stats), ensure_ascii=False, sort_keys=True))
     LOG.info("订阅发布状态：%s；原因：%s", publication.get("status"), publication.get("reason"))
     return {"input_queue_identities": input_identities, "results": records,
