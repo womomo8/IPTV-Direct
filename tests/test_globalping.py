@@ -637,8 +637,7 @@ class PublicationUnknownRecoveryTests(unittest.TestCase):
             }]
 
             result = globalping._publish(
-                accepted, output_dir, ["CCTV-1"], {}, []
-            )
+                accepted, output_dir, [], {}, []
 
             self.assertIn(result["status"], {"unchanged", "published"})
             self.assertFalse(marker.exists())
