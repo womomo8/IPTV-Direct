@@ -649,5 +649,381 @@ class PublicationUnknownRecoveryTests(unittest.TestCase):
                 expected_txt,
             )
 
+class PublicationProtectionAndRollbackTests(unittest.TestCase):
+    def _items(self, channel_count, routes_per_channel=1, prefix="old"):
+        items = []
+        for channel_index in range(channel_count):
+            channel = f"CH-{channel_index + 1}"
+            for route_index in range(routes_per_channel):
+                items.append({
+                    "channel": channel,
+                    "normalized_url": (
+                        f"https://{prefix}.example/"
+                        f"{channel}-{route_index + 1}.m3u8"
+                    ),
+                })
+        return items
+
+    def _write_old(self, output_dir, items):
+        m3u_lines = ["#EXTM3U"]
+        txt_lines = []
+
+        for item in items:
+            channel = item["channel"]
+            url = item["normalized_url"]
+            m3u_lines.extend([
+                f"#EXTINF:-1,{channel}",
+                url,
+            ])
+            txt_lines.append(f"{channel},{url}")
+
+        m3u_path = output_dir / "iptv.m3u"
+        txt_path = output_dir / "iptv.txt"
+
+        m3u_path.write_text(
+            "\n".join(m3u_lines) + "\n",
+            encoding="utf-8",
+        )
+        txt_path.write_text(
+            "\n".join(txt_lines) + "\n",
+            encoding="utf-8",
+        )
+
+        return (
+            m3u_path.read_text(encoding="utf-8"),
+            txt_path.read_text(encoding="utf-8"),
+        )
+
+    def _publish(self, output_dir, accepted):
+        channels = list(dict.fromkeys(
+            item["channel"] for item in accepted
+        ))
+        category_by_channel = {
+            channel: "全部" for channel in channels
+        }
+        return globalping._publish(
+            accepted,
+            output_dir,
+            channels,
+            category_by_channel,
+            ["全部"],
+        )
+
+    def test_both_old_files_missing_are_first_publication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+
+            valid, channels, routes, reason = globalping._parse_existing(
+                output_dir / "iptv.m3u",
+                output_dir / "iptv.txt",
+            )
+
+            self.assertTrue(valid)
+            self.assertEqual(channels, 0)
+            self.assertEqual(routes, 0)
+            self.assertIn("首次发布", reason)
+
+    def test_both_old_files_empty_are_first_publication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            m3u_path = output_dir / "iptv.m3u"
+            txt_path = output_dir / "iptv.txt"
+            m3u_path.touch()
+            txt_path.touch()
+
+            valid, channels, routes, reason = globalping._parse_existing(
+                m3u_path,
+                txt_path,
+            )
+
+            self.assertTrue(valid)
+            self.assertEqual(channels, 0)
+            self.assertEqual(routes, 0)
+            self.assertIn("首次发布", reason)
+
+    def test_one_missing_or_empty_old_file_blocks_publication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            old_items = self._items(1)
+            self._write_old(output_dir, old_items)
+
+            (output_dir / "iptv.txt").unlink()
+
+            valid, _, _, reason = globalping._parse_existing(
+                output_dir / "iptv.m3u",
+                output_dir / "iptv.txt",
+            )
+
+            self.assertFalse(valid)
+            self.assertIn("缺失/为空", reason)
+
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            old_items = self._items(1)
+            self._write_old(output_dir, old_items)
+
+            (output_dir / "iptv.txt").write_text(
+                "",
+                encoding="utf-8",
+            )
+
+            valid, _, _, reason = globalping._parse_existing(
+                output_dir / "iptv.m3u",
+                output_dir / "iptv.txt",
+            )
+
+            self.assertFalse(valid)
+            self.assertIn("缺失/为空", reason)
+
+    def test_invalid_or_inconsistent_old_subscriptions_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            self._write_old(output_dir, self._items(1))
+
+            (output_dir / "iptv.m3u").write_text(
+                "INVALID M3U\n",
+                encoding="utf-8",
+            )
+
+            valid, _, _, reason = globalping._parse_existing(
+                output_dir / "iptv.m3u",
+                output_dir / "iptv.txt",
+            )
+
+            self.assertFalse(valid)
+            self.assertIn("M3U", reason)
+
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            self._write_old(output_dir, self._items(1))
+
+            (output_dir / "iptv.txt").write_text(
+                "OTHER,https://other.example/live.m3u8\n",
+                encoding="utf-8",
+            )
+
+            valid, _, _, reason = globalping._parse_existing(
+                output_dir / "iptv.m3u",
+                output_dir / "iptv.txt",
+            )
+
+            self.assertFalse(valid)
+            self.assertIn("不一致", reason)
+
+    def test_channel_drop_over_50_percent_is_blocked(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            self._write_old(output_dir, self._items(3))
+
+            accepted = self._items(
+                1,
+                routes_per_channel=2,
+                prefix="new",
+            )
+
+            result = self._publish(output_dir, accepted)
+
+            self.assertEqual(result["status"], "blocked")
+            self.assertIn("频道数量下降超过 50%", result["reason"])
+
+    def test_channel_drop_exactly_50_percent_is_allowed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            self._write_old(output_dir, self._items(2))
+
+            accepted = self._items(1, prefix="new")
+
+            result = self._publish(output_dir, accepted)
+
+            self.assertEqual(result["status"], "published")
+
+    def test_route_drop_over_50_percent_is_blocked(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            self._write_old(
+                output_dir,
+                self._items(2, routes_per_channel=2),
+            )
+
+            accepted = self._items(1, prefix="new")
+
+            result = self._publish(output_dir, accepted)
+
+            self.assertEqual(result["status"], "blocked")
+            self.assertIn("线路数量下降超过 50%", result["reason"])
+
+    def test_route_drop_exactly_50_percent_is_allowed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            self._write_old(
+                output_dir,
+                self._items(2, routes_per_channel=2),
+            )
+
+            accepted = self._items(
+                2,
+                routes_per_channel=1,
+                prefix="new",
+            )
+
+            result = self._publish(output_dir, accepted)
+
+            self.assertEqual(result["status"], "published")
+
+    def test_consecutive_downgrade_uses_previous_published_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            self._write_old(output_dir, self._items(8))
+
+            first = self._publish(
+                output_dir,
+                self._items(6, prefix="first"),
+            )
+            self.assertEqual(first["status"], "published")
+
+            second = self._publish(
+                output_dir,
+                self._items(3, prefix="second"),
+            )
+            self.assertEqual(second["status"], "published")
+
+            third = self._publish(
+                output_dir,
+                self._items(1, prefix="third"),
+            )
+            self.assertEqual(third["status"], "blocked")
+            self.assertIn("50%", third["reason"])
+
+    def test_corrupt_backup_is_rejected_before_replacing_old_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            old_m3u, old_txt = self._write_old(
+                output_dir,
+                self._items(1),
+            )
+            real_copy2 = globalping.shutil.copy2
+
+            def corrupt_backup(source, destination):
+                result = real_copy2(source, destination)
+                destination = Path(destination)
+
+                if (
+                    destination.parent.name.startswith("backup-")
+                    and destination.name == "iptv.m3u"
+                ):
+                    destination.write_text(
+                        "BROKEN BACKUP\n",
+                        encoding="utf-8",
+                    )
+
+                return result
+
+            with patch.object(
+                globalping.shutil,
+                "copy2",
+                side_effect=corrupt_backup,
+            ):
+                result = self._publish(
+                    output_dir,
+                    self._items(1, prefix="new"),
+                )
+
+            self.assertEqual(result["status"], "rolled_back")
+            self.assertEqual(
+                (output_dir / "iptv.m3u").read_text(encoding="utf-8"),
+                old_m3u,
+            )
+            self.assertEqual(
+                (output_dir / "iptv.txt").read_text(encoding="utf-8"),
+                old_txt,
+            )
+
+    def test_failed_second_replace_restores_and_verifies_old_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            old_m3u, old_txt = self._write_old(
+                output_dir,
+                self._items(1),
+            )
+            real_replace = globalping.os.replace
+            calls = []
+
+            def fail_second_replace(source, destination):
+                calls.append((source, destination))
+                if len(calls) == 1:
+                    return real_replace(source, destination)
+                raise OSError("模拟第二份正式文件替换失败")
+
+            with patch.object(
+                globalping.os,
+                "replace",
+                side_effect=fail_second_replace,
+            ):
+                result = self._publish(
+                    output_dir,
+                    self._items(1, prefix="new"),
+                )
+
+            self.assertEqual(result["status"], "rolled_back")
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(
+                (output_dir / "iptv.m3u").read_text(encoding="utf-8"),
+                old_m3u,
+            )
+            self.assertEqual(
+                (output_dir / "iptv.txt").read_text(encoding="utf-8"),
+                old_txt,
+            )
+
+    def test_failed_rollback_keeps_unknown_marker_and_scene_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            self._write_old(output_dir, self._items(1))
+            real_replace = globalping.os.replace
+            calls = []
+
+            def corrupt_backup_and_fail(source, destination):
+                calls.append((source, destination))
+
+                if len(calls) == 1:
+                    return real_replace(source, destination)
+
+                backup_files = list(
+                    (
+                        output_dir / ".iptv-publish-state"
+                    ).glob("backup-*/iptv.m3u")
+                )
+                self.assertTrue(backup_files)
+
+                backup_files[0].write_text(
+                    "BROKEN BACKUP\n",
+                    encoding="utf-8",
+                )
+                raise OSError("模拟第二份正式文件替换失败")
+
+            with patch.object(
+                globalping.os,
+                "replace",
+                side_effect=corrupt_backup_and_fail,
+            ):
+                result = self._publish(
+                    output_dir,
+                    self._items(1, prefix="new"),
+                )
+
+            state_dir = output_dir / ".iptv-publish-state"
+            marker = state_dir / "publication-unknown.json"
+
+            self.assertEqual(result["status"], "unknown")
+            self.assertTrue(marker.exists())
+            self.assertTrue(list(state_dir.glob("backup-*")))
+            self.assertTrue((output_dir / ".iptv.txt.tmp").exists())
+
+            marker_data = globalping.json.loads(
+                marker.read_text(encoding="utf-8")
+            )
+            self.assertEqual(marker_data["status"], "unknown")
+
+
 if __name__ == "__main__":
     unittest.main()
