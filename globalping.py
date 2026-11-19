@@ -608,9 +608,8 @@ def _aggregate_http(
 
     return _status(INCOMPLETE, "探针未能完成 HTTP 请求。")
 
-
 def _raw_body_bytes(result: dict[str, Any]) -> bytes | None:
-    """只接受完整且可无损还原的 UTF-8 文本正文，供 HLS 清单解析使用。"""
+    """只接受完整且可无损还原的 UTF-8 HLS 清单正文。"""
     body = result.get("rawBody")
 
     if not isinstance(body, str) or result.get("truncated"):
@@ -621,14 +620,56 @@ def _raw_body_bytes(result: dict[str, Any]) -> bytes | None:
 
     try:
         data = body.encode("utf-8", errors="strict")
-    except UnicodeError:
+        status_code = int(result.get("statusCode"))
+    except (UnicodeError, TypeError, ValueError):
         return None
 
     if len(data) > MAX_BODY_BYTES:
         return None
 
-    return data
+    if status_code == 200:
+        return data
 
+    if status_code != 206:
+        return None
+
+    headers = result.get("headers")
+
+    if not isinstance(headers, dict):
+        return None
+
+    content_range = next(
+        (
+            value
+            for name, value in headers.items()
+            if isinstance(name, str) and name.lower() == "content-range"
+        ),
+        None,
+    )
+
+    if not isinstance(content_range, str):
+        return None
+
+    match = re.fullmatch(
+        r"bytes\s+(\d+)-(\d+)/(\d+)",
+        content_range.strip(),
+        flags=re.IGNORECASE,
+    )
+
+    if not match:
+        return None
+
+    start, end, total = map(int, match.groups())
+
+    if (
+        total <= 0
+        or start != 0
+        or end != total - 1
+        or len(data) != total
+    ):
+        return None
+
+    return data
 
 def _parse_playlist(body: bytes | None, base_url: str) -> dict[str, Any]:
     """按实际 HLS 标签识别清单；仅有 #EXTM3U/#EXTINF 的频道 M3U 不算 HLS。"""
