@@ -733,12 +733,14 @@ def _candidate_remote(candidate: dict[str, Any], locations: list[dict[str, Any]]
             result.setdefault("reasons", []).append(f"额度不足，未创建 {phase} 测量")
             stats["quota_blocked_candidates"] += 1
             break
-        expected = probe_limit
+        expected = min(probe_limit, budget["remaining"])
         try:
             stage_locations = _limit_locations(locations, expected)
+            budget["remaining"] -= expected
             measurement_id, probes_count = _create_measurement(kind, url, stage_locations, expected)
         except GlobalpingError as exc:
             if exc.no_probes:
+                budget["remaining"] += expected
                 result["checks"][phase] = INCOMPLETE
                 result.setdefault("reasons", []).append(f"无可用探针：{phase}；不再重复创建该候选测量")
                 return result
@@ -748,14 +750,16 @@ def _candidate_remote(candidate: dict[str, Any], locations: list[dict[str, Any]]
                 stats["creation_uncertain_candidates"] += 1
                 return result
             if exc.status == 429:
+                budget["remaining"] += expected
                 budget["stop_new"] = 1
                 result.setdefault("reasons", []).append("Globalping 创建测量触发 HTTP 429，停止新增测量")
                 return result
+            budget["remaining"] += expected
             result.setdefault("reasons", []).append(f"{phase} 创建失败：{exc}")
             continue
         stats["actual_measurements"] += 1
         stats["actual_probe_slots"] += probes_count
-        budget["remaining"] = max(0, budget["remaining"] - 1)
+        budget["remaining"] = max(0, budget["remaining"] + expected - probes_count)
         result["measurements"].append({"phase": phase, "id": measurement_id, "probes_count": probes_count})
         measurement, boundary_reason = _poll(measurement_id, boundary)
         if measurement and measurement.get("status") == "finished":
@@ -782,28 +786,26 @@ def _candidate_remote(candidate: dict[str, Any], locations: list[dict[str, Any]]
         http_evidence = result.get("probe_results", {}).get("http", [])
         child_url = _master_child_url(http_success, url)
         if child_url:
-            parent_measurement = next((item["id"] for item in result["measurements"]
-                                       if item.get("phase") == "http"), None)
+            parent_record = next((item for item in result["measurements"]
+                                  if item.get("phase") == "http"), None)
+            parent_measurement = parent_record.get("id") if parent_record else None
+            required_probe_slots = int(parent_record.get("probes_count", 0)) if parent_record else 0
             if not parent_measurement:
                 result["checks"]["hls"] = INCOMPLETE
                 result.setdefault("reasons", []).append("主播放清单缺少第一阶段测量身份")
-            elif budget["stop_new"] or budget["remaining"] <= 0:
+            elif budget["stop_new"] or required_probe_slots < 1 or budget["remaining"] < required_probe_slots:
                 result["checks"]["hls"] = INCOMPLETE
                 result.setdefault("reasons", []).append("主播放清单需要第二阶段，但额度不足")
             else:
                 try:
-                    parent_record = next(item for item in result["measurements"]
-                                         if item.get("phase") == "http")
-                    required_probe_slots = int(parent_record.get("probes_count", 0))
-                    if required_probe_slots < 1 or budget["remaining"] < 1:
-                        raise GlobalpingError("HLS 第二阶段缺少可用测量额度或第一阶段探针")
+                    budget["remaining"] -= required_probe_slots
                     child_id, child_probes = _create_measurement(
                         "http", child_url, _limit_locations(locations, required_probe_slots), required_probe_slots,
                         previous_measurement=parent_measurement,
                     )
                     stats["actual_measurements"] += 1
                     stats["actual_probe_slots"] += child_probes
-                    budget["remaining"] = max(0, budget["remaining"] - 1)
+                    budget["remaining"] = max(0, budget["remaining"] + required_probe_slots - child_probes)
                     result["measurements"].append({"phase": "hls_child", "id": child_id,
                                                     "probes_count": child_probes,
                                                     "parent_measurement_id": parent_measurement})
@@ -833,11 +835,14 @@ def _candidate_remote(candidate: dict[str, Any], locations: list[dict[str, Any]]
                         stats["creation_uncertain_candidates"] += 1
                         result.setdefault("reasons", []).append("HLS 第二阶段创建结果不确定")
                     elif exc.no_probes:
+                        budget["remaining"] += required_probe_slots
                         result.setdefault("reasons", []).append("HLS 第二阶段没有可用探针")
                     elif exc.status == 429:
+                        budget["remaining"] += required_probe_slots
                         budget["stop_new"] = 1
                         result.setdefault("reasons", []).append("HLS 第二阶段触发 HTTP 429")
                     else:
+                        budget["remaining"] += required_probe_slots
                         result.setdefault("reasons", []).append(f"HLS 第二阶段创建失败：{exc}")
                     result["checks"]["hls"] = INCOMPLETE
         else:
