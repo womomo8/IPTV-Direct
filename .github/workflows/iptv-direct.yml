@@ -15,7 +15,7 @@ on:
           - 测试
           - 正式
           - 诊断
-        default: 正式
+        default: 测试
 
 permissions:
   contents: read
