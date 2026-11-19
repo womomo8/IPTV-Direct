@@ -206,7 +206,7 @@ class DirectTSAndQuotaTests(unittest.TestCase):
         self.assertEqual(stats["actual_measurements"], 2)
         self.assertEqual(stats["actual_probe_slots"], 6)
 
-        def test_hls_second_stage_uncertain_creation_blocks_admission(self):
+    def test_hls_second_stage_uncertain_creation_blocks_admission(self):
         candidate = {
             "channel": "CCTV-1",
             "media_type": "HLS",
