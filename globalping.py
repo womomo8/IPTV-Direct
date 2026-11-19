@@ -645,75 +645,217 @@ def _publish(accepted: list[dict[str, Any]], output_dir: Path, channels: list[st
     staged_txt = output_dir / ".iptv.txt.tmp"
     backup_m3u, backup_txt = backup_dir / "iptv.m3u", backup_dir / "iptv.txt"
     had_m3u, had_txt = m3u_path.exists(), txt_path.exists()
+    m3u_replaced = False
+    txt_replaced = False
+    preserve_staged = False
+
     try:
         staged_m3u.write_text(m3u, encoding="utf-8")
         staged_txt.write_text(txt, encoding="utf-8")
+
         # 再读临时文件验证，避免写入不完整内容。
-        if staged_m3u.read_text(encoding="utf-8") != m3u or staged_txt.read_text(encoding="utf-8") != txt:
-            raise OSError("临时订阅写入后核验不一致")
-        if m3u_path.exists():
+        if staged_m3u.read_text(encoding="utf-8") != m3u:
+            raise OSError("临时 M3U 写入后核验不一致")
+        if staged_txt.read_text(encoding="utf-8") != txt:
+            raise OSError("临时 TXT 写入后核验不一致")
+
+        # 保存旧文件备份。
+        if had_m3u:
             shutil.copy2(m3u_path, backup_m3u)
-        if txt_path.exists():
+        if had_txt:
             shutil.copy2(txt_path, backup_txt)
+
+        # 正式替换之前，完整检查备份是否存在、可读、可解析且两份一致。
+        backup_valid, backup_channels, backup_routes, backup_reason = (
+            _parse_existing(backup_m3u, backup_txt)
+        )
+        if not backup_valid:
+            raise OSError(f"发布前备份核验失败：{backup_reason}")
+
+        if backup_m3u.exists() != had_m3u or backup_txt.exists() != had_txt:
+            raise OSError("发布前备份文件与原文件存在状态不一致")
+
+        if backup_channels != old_channels or backup_routes != old_routes:
+            raise OSError("发布前备份数量与原订阅数量不一致")
+
         # 两文件替换不是原子操作；任何异常都进入明确回滚路径。
         os.replace(staged_m3u, m3u_path)
+        m3u_replaced = True
+
         os.replace(staged_txt, txt_path)
-        if m3u_path.read_text(encoding="utf-8") != m3u or txt_path.read_text(encoding="utf-8") != txt:
-            raise OSError("正式文件替换后核验不一致")
-        # 保存当前正式文件作为最近一次已知良好版本，供状态未知恢复使用。
+        txt_replaced = True
+
+        # 正式文件替换后重新读取核验。
+        if m3u_path.read_text(encoding="utf-8") != m3u:
+            raise OSError("正式 M3U 替换后核验不一致")
+        if txt_path.read_text(encoding="utf-8") != txt:
+            raise OSError("正式 TXT 替换后核验不一致")
+
+        # 保存当前正式文件作为最近一次已知良好版本。
         known_good = state_dir / "known-good"
         known_good.mkdir(parents=True, exist_ok=True)
         shutil.copy2(m3u_path, known_good / "iptv.m3u")
         shutil.copy2(txt_path, known_good / "iptv.txt")
+
         (state_dir / "last-known-good.json").write_text(json.dumps({
             "backup_dir": str(backup_dir.relative_to(output_dir)),
-            "m3u": "iptv.m3u", "txt": "iptv.txt", "verified_at": stamp,
+            "m3u": "iptv.m3u",
+            "txt": "iptv.txt",
+            "verified_at": stamp,
         }, ensure_ascii=False, indent=2), encoding="utf-8")
-        return {"status": "published", "reason": "两份订阅已替换并重新读取核验",
-                "channels": new_channels, "routes": new_routes,
-                "backup": str(backup_dir.relative_to(output_dir))}
+
+        return {
+            "status": "published",
+            "reason": "两份订阅已替换并重新读取核验",
+            "channels": new_channels,
+            "routes": new_routes,
+            "backup": str(backup_dir.relative_to(output_dir)),
+        }
+
     except Exception as exc:
         rollback_ok = True
         rollback_errors = []
-        try:
-            if backup_m3u.exists():
-                # 先确认备份可读且格式正确，再恢复。
-                backup_text = backup_m3u.read_text(encoding="utf-8-sig")
-                if not backup_text.lstrip().startswith("#EXTM3U"):
-                    raise OSError("M3U 备份不可解析")
-                shutil.copy2(backup_m3u, m3u_path)
-            elif not had_m3u:
-                m3u_path.unlink(missing_ok=True)
-        except Exception as restore_exc:
-            rollback_ok = False
-            rollback_errors.append(f"M3U 恢复失败：{restore_exc}")
-        try:
-            if backup_txt.exists():
-                backup_text = backup_txt.read_text(encoding="utf-8-sig")
-                if not backup_text.strip() and accepted:
-                    raise OSError("TXT 备份为空")
-                shutil.copy2(backup_txt, txt_path)
-            elif not had_txt:
-                txt_path.unlink(missing_ok=True)
-        except Exception as restore_exc:
-            rollback_ok = False
-            rollback_errors.append(f"TXT 恢复失败：{restore_exc}")
+
+        # 如果尚未替换任何正式文件，只核验原文件仍然完整，
+        # 不使用可能尚未完成的备份覆盖原文件。
+        if not m3u_replaced and not txt_replaced:
+            current_valid, current_channels, current_routes, current_reason = (
+                _parse_existing(m3u_path, txt_path)
+            )
+
+            if (
+                not current_valid
+                or current_channels != old_channels
+                or current_routes != old_routes
+                or m3u_path.exists() != had_m3u
+                or txt_path.exists() != had_txt
+            ):
+                rollback_ok = False
+                rollback_errors.append(
+                    f"原文件状态核验失败：{current_reason}"
+                )
+
+        else:
+            # 发生过正式文件替换，必须先重新核验两份备份。
+            backup_valid, backup_channels, backup_routes, backup_reason = (
+                _parse_existing(backup_m3u, backup_txt)
+            )
+
+            if (
+                not backup_valid
+                or backup_channels != old_channels
+                or backup_routes != old_routes
+                or backup_m3u.exists() != had_m3u
+                or backup_txt.exists() != had_txt
+            ):
+                rollback_ok = False
+                rollback_errors.append(
+                    f"回滚备份核验失败：{backup_reason}"
+                )
+
+            # 备份完整有效后，才允许恢复。
+            if rollback_ok:
+                try:
+                    if had_m3u:
+                        shutil.copy2(backup_m3u, m3u_path)
+                    else:
+                        m3u_path.unlink(missing_ok=True)
+
+                    if had_txt:
+                        shutil.copy2(backup_txt, txt_path)
+                    else:
+                        txt_path.unlink(missing_ok=True)
+
+                except Exception as restore_exc:
+                    rollback_ok = False
+                    rollback_errors.append(
+                        f"旧文件恢复失败：{restore_exc}"
+                    )
+
+            # 恢复完成后，再次读取正式文件并检查两份内容。
+            if rollback_ok:
+                try:
+                    if (
+                        m3u_path.exists() != had_m3u
+                        or txt_path.exists() != had_txt
+                    ):
+                        raise OSError("恢复后文件存在状态不一致")
+
+                    restored_valid, restored_channels, restored_routes, restored_reason = (
+                        _parse_existing(m3u_path, txt_path)
+                    )
+
+                    if not restored_valid:
+                        raise OSError(
+                            f"恢复后订阅解析失败：{restored_reason}"
+                        )
+
+                    if (
+                        restored_channels != old_channels
+                        or restored_routes != old_routes
+                    ):
+                        raise OSError("恢复后频道数或线路数与旧版本不一致")
+
+                    if had_m3u:
+                        if (
+                            m3u_path.read_text(encoding="utf-8-sig")
+                            != backup_m3u.read_text(encoding="utf-8-sig")
+                        ):
+                            raise OSError("恢复后的 M3U 与备份不一致")
+
+                    if had_txt:
+                        if (
+                            txt_path.read_text(encoding="utf-8-sig")
+                            != backup_txt.read_text(encoding="utf-8-sig")
+                        ):
+                            raise OSError("恢复后的 TXT 与备份不一致")
+
+                except Exception as verify_exc:
+                    rollback_ok = False
+                    rollback_errors.append(
+                        f"恢复后核验失败：{verify_exc}"
+                    )
+
         if not rollback_ok:
-            unknown_marker.write_text(json.dumps({
-                "status": "unknown", "error": str(exc), "rollback_errors": rollback_errors,
-                "backup_dir": str(backup_dir.relative_to(output_dir)),
-            }, ensure_ascii=False, indent=2), encoding="utf-8")
-            return {"status": "unknown", "reason": f"发布失败且回滚失败：{exc}",
-                    "rollback_errors": rollback_errors, "backup": str(backup_dir.relative_to(output_dir))}
-        return {"status": "rolled_back", "reason": f"发布失败，已尝试恢复旧文件：{exc}",
-                "backup": str(backup_dir.relative_to(output_dir))}
-    finally:
-        # 成功/失败均保留备份；只清理尚未移动的临时文件。
-        for path in (staged_m3u, staged_txt):
+            # 回滚失败：保留临时文件、备份和现场，不允许 finally 清理。
+            preserve_staged = True
+
             try:
-                path.unlink(missing_ok=True)
-            except OSError:
-                pass
+                unknown_marker.write_text(json.dumps({
+                    "status": "unknown",
+                    "error": str(exc),
+                    "rollback_errors": rollback_errors,
+                    "backup_dir": str(backup_dir.relative_to(output_dir)),
+                    "staged_m3u": staged_m3u.name,
+                    "staged_txt": staged_txt.name,
+                }, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception as marker_exc:
+                rollback_errors.append(
+                    f"发布状态未知标记写入失败：{marker_exc}"
+                )
+
+            return {
+                "status": "unknown",
+                "reason": f"发布失败且回滚未能完成核验：{exc}",
+                "rollback_errors": rollback_errors,
+                "backup": str(backup_dir.relative_to(output_dir)),
+            }
+
+        return {
+            "status": "rolled_back",
+            "reason": f"发布失败，旧文件已恢复并重新核验：{exc}",
+            "backup": str(backup_dir.relative_to(output_dir)),
+        }
+
+    finally:
+        # 只有发布成功或回滚成功才清理临时文件。
+        # 回滚失败必须保留现场供后续恢复和人工检查。
+        if not preserve_staged:
+            for path in (staged_m3u, staged_txt):
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
 
 def _candidate_remote(candidate: dict[str, Any], locations: list[dict[str, Any]],
