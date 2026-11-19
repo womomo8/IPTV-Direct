@@ -972,7 +972,7 @@ def _candidate_remote(candidate: dict[str, Any], locations: list[dict[str, Any]]
                     result["probe_results"]["hls_child_http"] = child_evidence
                     if child_boundary:
                         result.setdefault("reasons", []).append(f"HLS 第二阶段 {child_boundary}")
-                           except GlobalpingError as exc:
+                except GlobalpingError as exc:
                     if exc.uncertain:
                         stats["creation_uncertain_candidates"] += 1
                         result["creation_uncertain"] = True
