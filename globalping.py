@@ -1504,3 +1504,364 @@ def check_candidates(
 
     return output
 
+
+ACCEPTED = "ACCEPTED"
+REJECTED = "REJECTED"
+MAX_ROUTES_PER_CHANNEL = 2
+
+
+def _admission_status(checks: Any, name: str) -> str | None:
+    """读取正式准入所需的单项检测状态。"""
+    if not isinstance(checks, dict):
+        return None
+
+    item = checks.get(name)
+
+    if not isinstance(item, dict):
+        return None
+
+    value = item.get("status")
+    return value if isinstance(value, str) else None
+
+
+def _admission_valid_url(value: Any) -> bool:
+    """核验正式准入候选的规范化 URL。"""
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or any(char.isspace() for char in value)
+    ):
+        return False
+
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        scheme = parsed.scheme.lower()
+        host = parsed.hostname
+        port = parsed.port
+
+        if (
+            scheme not in ("http", "https")
+            or not host
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.fragment
+            or parsed.netloc.endswith(":")
+            or not parsed.path
+            or not parsed.path.startswith("/")
+        ):
+            return False
+
+        if port is not None and not 1 <= port <= 65535:
+            return False
+
+        host = host.lower()
+
+        if ":" in host:
+            host = f"[{host}]"
+
+        expected_netloc = host
+
+        if port is not None and not (
+            (scheme == "http" and port == 80)
+            or (scheme == "https" and port == 443)
+        ):
+            expected_netloc += f":{port}"
+
+        return (
+            parsed.scheme == scheme
+            and parsed.netloc == expected_netloc
+        )
+
+    except (TypeError, ValueError):
+        return False
+
+
+def _admission_required_checks(
+    media_type: str,
+) -> tuple[str, ...] | None:
+    if media_type == "HLS":
+        return ("ipv4", "http", "hls", "ts")
+
+    if media_type == "DIRECT_TS":
+        return ("ipv4", "http", "ts")
+
+    return None
+
+
+def _local_admission_reason(
+    candidate: dict[str, Any],
+) -> str | None:
+    """保留原 publisher 的本地正式准入条件。"""
+    media_type = candidate.get("media_type")
+    required = _admission_required_checks(media_type)
+
+    if required is None:
+        return "未知或不支持的媒体类型，不允许准入"
+
+    checks = candidate.get("checks")
+
+    if not isinstance(checks, dict):
+        return "缺少本地检测结果"
+
+    if (
+        media_type == "DIRECT_TS"
+        and _admission_status(checks, "hls") != NA
+    ):
+        return "直接 TS 的 HLS 检测必须为 N/A"
+
+    for name in required:
+        state = _admission_status(checks, name)
+
+        if state != PASS:
+            return (
+                f"本地 {name.upper()} 检测未通过："
+                f"{state or '缺少结果'}"
+            )
+
+    return None
+
+
+def _globalping_admission_reason(
+    candidate: dict[str, Any],
+) -> str | None:
+    """保留原 publisher 的远程正式准入及状态一致性条件。"""
+    remote = candidate.get("globalping")
+
+    if not isinstance(remote, dict):
+        return "缺少 Globalping 检测结果"
+
+    overall = remote.get("status")
+
+    if overall == FAIL:
+        return "Globalping 检测明确失败"
+
+    if overall not in (PASS, INCOMPLETE):
+        return f"Globalping 总体状态无效：{overall}"
+
+    media_type = candidate.get("media_type")
+    required = _admission_required_checks(media_type)
+
+    if required is None:
+        return "未知或不支持的媒体类型，不允许准入"
+
+    checks = remote.get("checks")
+
+    if not isinstance(checks, dict):
+        return "缺少 Globalping 分项检测结果"
+
+    if (
+        media_type == "DIRECT_TS"
+        and _admission_status(checks, "hls") != NA
+    ):
+        return "Globalping 直接 TS 的 HLS 状态必须为 N/A"
+
+    states = [
+        _admission_status(checks, name)
+        for name in required
+    ]
+
+    if any(state is None for state in states):
+        return "Globalping 缺少适用检测项目的状态"
+
+    if FAIL in states:
+        return "Globalping 存在明确失败的检测项目"
+
+    if overall == PASS and any(state != PASS for state in states):
+        return "Globalping 总体 PASS 与分项检测结果不一致"
+
+    if overall == INCOMPLETE and any(
+        state not in (PASS, INCOMPLETE)
+        for state in states
+    ):
+        return "Globalping INCOMPLETE 状态与分项检测结果不一致"
+
+    return None
+
+
+def _prepare_admission_candidate(
+    candidate: dict[str, Any],
+    channels: list[str],
+    category_map: dict[str, str],
+) -> tuple[dict[str, Any] | None, str | None]:
+    """核验候选并生成正式准入记录，不执行质量排序。"""
+    if not isinstance(candidate, dict):
+        return None, "候选线路不是有效对象"
+
+    channel = candidate.get("channel")
+
+    if not isinstance(channel, str) or channel not in channels:
+        return None, "频道名称不属于目标频道配置"
+
+    if not _admission_valid_url(candidate.get("normalized_url")):
+        return None, "缺少有效的规范化播放 URL"
+
+    priority = candidate.get("priority")
+    source_order = candidate.get("source_order")
+
+    if (
+        isinstance(priority, bool)
+        or not isinstance(priority, int)
+        or priority < 0
+    ):
+        return None, "候选线路缺少有效来源优先级"
+
+    if (
+        isinstance(source_order, bool)
+        or not isinstance(source_order, int)
+        or source_order < 0
+    ):
+        return None, "候选线路缺少有效来源顺序"
+
+    reason = _local_admission_reason(candidate)
+
+    if reason:
+        return None, reason
+
+    reason = _globalping_admission_reason(candidate)
+
+    if reason:
+        return None, reason
+
+    result = dict(candidate)
+
+    if category_map:
+        result["category"] = category_map[channel]
+
+    if "domestic_verification" not in result:
+        result["domestic_verification"] = {
+            "status": "NOT_VERIFIED",
+            "reason": "本轮没有中国移动国内真实网络播放验证证据",
+        }
+
+    result["selection"] = {
+        "status": ACCEPTED,
+        "reason": (
+            "本地适用检测全部 PASS，"
+            f"Globalping 状态为 {result['globalping']['status']}"
+        ),
+    }
+
+    return result, None
+
+
+def admit_candidates(
+    candidates: list[dict[str, Any]],
+    channels: list[str],
+    settings: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    按输入的完整优选顺序执行正式准入和频道名额竞争。
+
+    本函数不执行质量比较、重新分组或排序。
+    """
+    if not isinstance(candidates, list):
+        raise ValueError("candidates 必须是列表")
+
+    if (
+        not isinstance(channels, list)
+        or not channels
+        or any(not isinstance(item, str) or not item for item in channels)
+        or len(channels) != len(set(channels))
+    ):
+        raise ValueError("channels 必须是有效且不重复的频道名称列表")
+
+    if not isinstance(settings, dict):
+        raise ValueError("settings 必须是配置对象")
+
+    selection = settings.get("selection")
+
+    if not isinstance(selection, dict):
+        raise ValueError("settings 缺少 selection 配置")
+
+    maximum = selection.get("max_routes_per_channel")
+
+    if maximum != MAX_ROUTES_PER_CHANNEL:
+        raise ValueError(
+            "每个频道最多保留线路数必须符合 MASTER_PLAN.md：2"
+        )
+
+    category_map = getattr(channels, "category_by_channel", None)
+
+    if category_map is None:
+        category_map = {}
+
+    if (
+        not isinstance(category_map, dict)
+        or (category_map and set(category_map) != set(channels))
+    ):
+        raise ValueError("频道分类映射与目标频道列表不一致")
+
+    counts = {channel: 0 for channel in channels}
+    accepted_routes = []
+    seen_urls = set()
+    results = []
+
+    for candidate in candidates:
+        route, reason = _prepare_admission_candidate(
+            candidate,
+            channels,
+            category_map,
+        )
+
+        if route is None:
+            results.append({
+                "candidate": candidate,
+                "status": REJECTED,
+                "reason": reason,
+            })
+            continue
+
+        url = route["normalized_url"]
+        channel = route["channel"]
+
+        if url in seen_urls:
+            results.append({
+                "candidate": candidate,
+                "status": REJECTED,
+                "reason": "线路 URL 已存在，不重复准入",
+            })
+            continue
+
+        seen_urls.add(url)
+
+        if counts[channel] >= MAX_ROUTES_PER_CHANNEL:
+            results.append({
+                "candidate": candidate,
+                "status": REJECTED,
+                "reason": "该频道已达到最多保留 2 条线路的上限",
+            })
+            continue
+
+        accepted_routes.append(route)
+        counts[channel] += 1
+
+        results.append({
+            "candidate": route,
+            "status": ACCEPTED,
+            "reason": route["selection"]["reason"],
+        })
+
+    if len(results) != len(candidates):
+        raise ValueError("正式准入结果数量与输入候选数量不一致")
+
+    accepted_count = sum(
+        item["status"] == ACCEPTED
+        for item in results
+    )
+    rejected_count = sum(
+        item["status"] == REJECTED
+        for item in results
+    )
+
+    return {
+        "results": results,
+        "accepted_routes": accepted_routes,
+        "channel_counts": counts,
+        "all_channels_reached": bool(channels) and all(
+            counts[channel] >= MAX_ROUTES_PER_CHANNEL
+            for channel in channels
+        ),
+        "accepted_count": accepted_count,
+        "rejected_count": rejected_count,
+    }
