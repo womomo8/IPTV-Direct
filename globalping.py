@@ -394,14 +394,12 @@ def _probe_fingerprint(record: dict[str, Any]) -> str:
     # locations=<previous measurement id> 复用机制，并比较 API 返回的完整探针描述。
     return json.dumps(probe, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
-
 def _hls_aggregate(successful_http: list[dict[str, Any]], all_http: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
     hls_evidence = []
     any_complete = False
     explicit_target_failure = False
     for record in all_http:
-        code = record.get("status_code")
-        if isinstance(code, int) and not 200 <= code < 300:
+        if record.get("target_failure_evidence") is True:
             explicit_target_failure = True
         if record not in successful_http:
             hls_evidence.append({"probe": record.get("probe"), "status": INCOMPLETE,
@@ -421,7 +419,6 @@ def _hls_aggregate(successful_http: list[dict[str, Any]], all_http: list[dict[st
     if explicit_target_failure:
         return FAIL, hls_evidence
     return INCOMPLETE, hls_evidence
-
 
 def _local_admission_reason(candidate: dict[str, Any]) -> str | None:
     media = candidate.get("media_type")
