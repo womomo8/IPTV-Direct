@@ -90,6 +90,49 @@ class PublicationValidationTests(unittest.TestCase):
         self.assertFalse(valid)
         self.assertIn("最多两条", reason)
 
+class DirectTSAndQuotaTests(unittest.TestCase):
+    def test_direct_ts_uses_http_only_and_consumes_one_measurement(self):
+        candidate = {
+            "channel": "CCTV-1",
+            "media_type": "DIRECT_TS",
+            "normalized_url": "https://example.com/live.ts",
+        }
+        budget = {"remaining": 2, "stop_new": 0}
+        stats = globalping.Counter()
+
+        with patch.object(
+            globalping,
+            "_create_measurement",
+            return_value=("measurement-1", 3),
+        ) as create, patch.object(
+            globalping,
+            "_poll",
+            return_value=({"status": "finished"}, None),
+        ), patch.object(
+            globalping,
+            "_http_aggregate",
+            return_value=(globalping.PASS, [], [{"probe": {"city": "A"}}]),
+        ):
+            result = globalping._candidate_remote(
+                candidate,
+                [],
+                3,
+                8,
+                budget,
+                stats,
+            )
+
+        self.assertEqual(create.call_count, 1)
+        self.assertEqual(create.call_args.args[0], "http")
+        self.assertEqual(create.call_args.args[3], 3)
+        self.assertEqual(budget["remaining"], 1)
+        self.assertEqual(result["checks"]["ipv4"], globalping.NA)
+        self.assertEqual(result["checks"]["http"], globalping.PASS)
+        self.assertEqual(result["checks"]["hls"], globalping.NA)
+        self.assertEqual(result["overall"], globalping.PASS)
+        self.assertEqual(stats["actual_measurements"], 1)
+        self.assertEqual(stats["actual_probe_slots"], 3)
+
 
 if __name__ == "__main__":
     unittest.main()
