@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import email.utils
 import gzip
 import ipaddress
 import json
@@ -29,7 +30,7 @@ INCOMPLETE = "INCOMPLETE"
 NA = "N/A"
 
 REQUEST_TIMEOUT = 30
-POLL_INTERVAL = 0.8
+POLL_INTERVAL = 0.5
 MAX_POLL_SECONDS = 120
 MAX_BODY_BYTES = 10 * 1024
 
@@ -70,12 +71,30 @@ class GlobalpingError(RuntimeError):
 def _status(status: str, reason: str) -> dict[str, str]:
     return {"status": status, "reason": reason}
 
-
 def _headers_lower(headers: Any) -> dict[str, str]:
     if not hasattr(headers, "items"):
         return {}
     return {str(key).lower(): str(value).strip() for key, value in headers.items()}
 
+
+def _retry_after_seconds(value: str | None) -> float | None:
+    """解析 Retry-After 的秒数或 HTTP 日期格式。"""
+    if not value:
+        return None
+
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        retry_at = email.utils.parsedate_to_datetime(value)
+        return max(0.0, retry_at.timestamp() - time.time())
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def _api_request(
 
 def _api_request(
     url: str,
@@ -425,12 +444,29 @@ def _create_measurement(
 
     return measurement_id
 
-
 def _wait_measurement(measurement_id: str, budget: dict[str, Any]) -> dict[str, Any]:
-    """轮询单个测量；每次响应后等待 800 ms，处理 ETag/304。"""
+    """有界指数退避轮询单个测量，协调 Retry-After 并处理 ETag/304。"""
     url = f"{API_BASE}/measurements/{measurement_id}"
     started = time.monotonic()
     etag: str | None = None
+    poll_interval = POLL_INTERVAL
+
+    def wait_for_next_poll(minimum_delay: float = 0.0) -> bool:
+        nonlocal poll_interval
+
+        remaining = MAX_POLL_SECONDS - (time.monotonic() - started)
+
+        if remaining <= 0:
+            return False
+
+        delay = max(poll_interval, minimum_delay)
+        time.sleep(min(delay, remaining))
+
+        poll_interval = min(
+            poll_interval * 2,
+            MAX_POLL_SECONDS,
+        )
+        return True
 
     while time.monotonic() - started < MAX_POLL_SECONDS:
         headers = {"If-None-Match": etag} if etag else None
@@ -444,15 +480,26 @@ def _wait_measurement(measurement_id: str, budget: dict[str, Any]) -> dict[str, 
             if exc.rate_limited:
                 budget["halted"] = True
 
+                retry_after = _retry_after_seconds(
+                    exc.response_headers.get("retry-after")
+                )
+
+                if not wait_for_next_poll(retry_after or 0.0):
+                    break
+
+                continue
+
             raise GlobalpingError(
                 f"查询测量结果失败：{exc}",
-                rate_limited=exc.rate_limited,
+                rate_limited=False,
+                response_headers=exc.response_headers,
             ) from exc
 
         etag = response_headers.get("etag") or etag
 
         if status == 304:
-            time.sleep(POLL_INTERVAL)
+            if not wait_for_next_poll():
+                break
             continue
 
         if not isinstance(data, dict):
@@ -461,12 +508,12 @@ def _wait_measurement(measurement_id: str, budget: dict[str, Any]) -> dict[str, 
         if data.get("status") != "in-progress":
             return data
 
-        time.sleep(POLL_INTERVAL)
+        if not wait_for_next_poll():
+            break
 
     raise GlobalpingError(
         f"测量任务 {measurement_id} 等待超过 {MAX_POLL_SECONDS} 秒。"
     )
-
 
 def _probe_key(probe: dict[str, Any]) -> tuple[Any, ...]:
     """使用公开探针元数据匹配复用测量；Globalping 不公开稳定 probe ID。"""
