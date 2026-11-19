@@ -1197,6 +1197,14 @@ def _run_direct_ts(
         if exc.rate_limited:
             budget["halted"] = True
 
+        boundary_recorded = _record_boundary_exhaustion(
+            exc,
+            stages,
+            probes,
+            measurements,
+            "direct_ts_http",
+        )
+
         for name in ("ipv4", "http", "ts"):
             if (
                 checks[name]["status"] == INCOMPLETE
@@ -1204,10 +1212,11 @@ def _run_direct_ts(
             ):
                 checks[name] = _status(exc.status, str(exc))
 
-        stages.setdefault(
-            "interrupted",
-            _stage_record(None, exc.status, str(exc)),
-        )
+        if not boundary_recorded:
+            stages.setdefault(
+                "interrupted",
+                _stage_record(None, exc.status, str(exc)),
+            )
 
         return {
             "checks": checks,
@@ -1216,7 +1225,6 @@ def _run_direct_ts(
             "measurements": measurements,
             "error": str(exc),
         }
-
 
 def _overall_status(checks: dict[str, dict[str, str]]) -> str:
     applicable = [
