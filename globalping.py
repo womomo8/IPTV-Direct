@@ -87,8 +87,20 @@ def _read_limits() -> dict[str, int]:
     _, body, _ = _api_request(f"{API}/limits")
     try:
         item = body["rateLimit"]["measurements"]["create"]
-        return {"limit": int(item["limit"]), "remaining": int(item["remaining"]),
-                "reset": int(item.get("reset", 0))}
+        credits = body.get("credits") or {}
+        if not isinstance(credits, dict):
+            raise TypeError("credits 格式异常")
+
+        rate_remaining = max(0, int(item["remaining"]))
+        credits_remaining = max(0, int(credits.get("remaining", 0)))
+
+        return {
+            "limit": int(item["limit"]),
+            "remaining": rate_remaining + credits_remaining,
+            "rate_remaining": rate_remaining,
+            "credits_remaining": credits_remaining,
+            "reset": int(item.get("reset", 0)),
+        }
     except (KeyError, TypeError, ValueError) as exc:
         raise GlobalpingError("无法读取 Globalping 创建额度；为避免超额，停止新增测量") from exc
 
@@ -1095,5 +1107,9 @@ def run_globalping(queue: list[dict[str, Any]], settings: dict[str, Any],
     return {"input_queue_identities": input_identities, "results": records,
             "accepted": [{"channel": item["channel"], "normalized_url": item["normalized_url"]} for item in accepted],
             "stats": dict(stats), "publication": publication,
-            "limits": {"remaining_at_start": limits["remaining"],
-                       "probes_per_measurement_requested": probe_limit}}
+            "limits": {
+                "remaining_at_start": limits["remaining"],
+                "rate_limit_remaining_at_start": limits["rate_remaining"],
+                "credits_remaining_at_start": limits["credits_remaining"],
+                "probes_per_measurement_requested": probe_limit,
+            }}
