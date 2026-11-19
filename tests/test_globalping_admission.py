@@ -315,6 +315,104 @@ class GlobalpingAdmissionTests(unittest.TestCase):
         self.assertEqual(run_direct_ts.call_count, 1)
         self.assertEqual(callback_results, results)
 
+    def test_check_and_admit_stops_full_channel_and_continues_others(self):
+        candidates = [
+            make_candidate(
+                "https://example.test/cctv1-1.ts",
+                channel="CCTV-1",
+                media_type="DIRECT_TS",
+            ),
+            make_candidate(
+                "https://example.test/cctv1-2.ts",
+                channel="CCTV-1",
+                media_type="DIRECT_TS",
+            ),
+            make_candidate(
+                "https://example.test/cctv1-3.ts",
+                channel="CCTV-1",
+                media_type="DIRECT_TS",
+            ),
+            make_candidate(
+                "https://example.test/cctv5-1.ts",
+                channel="CCTV-5",
+                media_type="DIRECT_TS",
+            ),
+            make_candidate(
+                "https://example.test/cctv5-2.ts",
+                channel="CCTV-5",
+                media_type="DIRECT_TS",
+            ),
+            make_candidate(
+                "https://example.test/cctv5-3.ts",
+                channel="CCTV-5",
+                media_type="DIRECT_TS",
+            ),
+        ]
+
+        settings = {
+            "globalping": {"max_probes": 1},
+            "selection": {"max_routes_per_channel": 2},
+        }
+
+        remote_result = {
+            "checks": {
+                "ipv4": {"status": "PASS"},
+                "http": {"status": "PASS"},
+                "hls": {"status": "N/A"},
+                "ts": {"status": "PASS"},
+            },
+            "stages": {},
+            "probes": {},
+            "measurements": [],
+        }
+
+        with patch.object(
+            globalping,
+            "read_limits",
+            return_value={"remaining": 20},
+        ), patch.object(
+            globalping,
+            "choose_probes",
+            return_value=[{"limit": 1}],
+        ), patch.object(
+            globalping,
+            "_run_direct_ts",
+            return_value=remote_result,
+        ) as run_direct_ts:
+            result = globalping.check_and_admit_candidates(
+                candidates,
+                CHANNELS,
+                settings,
+            )
+
+        self.assertEqual(
+            [item["status"] for item in result["results"]],
+            [
+                "ACCEPTED",
+                "ACCEPTED",
+                "SKIPPED_CAPACITY",
+                "ACCEPTED",
+                "ACCEPTED",
+                "SKIPPED_CAPACITY",
+            ],
+        )
+
+        self.assertEqual(run_direct_ts.call_count, 4)
+        self.assertEqual(result["accepted_count"], 4)
+        self.assertEqual(result["rejected_count"], 0)
+        self.assertEqual(result["skipped_capacity_count"], 2)
+
+        self.assertEqual(
+            result["channel_counts"],
+            {
+                "CCTV-1": 2,
+                "CCTV-5": 2,
+            },
+        )
+
+        self.assertTrue(result["all_channels_reached"])
+
+
 if __name__ == "__main__":
     unittest.main()
     
