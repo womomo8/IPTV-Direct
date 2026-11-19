@@ -1263,37 +1263,7 @@ def incomplete_result(
             "measurements": [],
             "error": reason,
         },
-    }
-
-
-def _failed_candidate(
-    candidate: dict[str, Any],
-    reason: str,
-) -> dict[str, Any]:
-    media_type = candidate.get("media_type")
-
-    checks = {
-        "ipv4": _status(FAIL, reason),
-        "http": _status(FAIL, reason),
-        "hls": (
-            _status(NA, "直接 TS 不适用 HLS 检测。")
-            if media_type == "DIRECT_TS"
-            else _status(FAIL, reason)
-        ),
-        "ts": _status(FAIL, reason),
-    }
-
-    result = {
-        "status": FAIL,
-        "checks": checks,
-        "stages": {},
-        "probes": {},
-        "measurements": [],
-        "error": reason,
-    }
-
-    return {**candidate, "globalping": result}
-
+    }  
 
 def check_candidates(
     candidates: list[dict[str, Any]],
