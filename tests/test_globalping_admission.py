@@ -254,6 +254,67 @@ class GlobalpingAdmissionTests(unittest.TestCase):
         self.assertEqual(measurement_id, "measurement-1")
         self.assertEqual(budget["measurements_created"], 1)
         self.assertEqual(budget["remaining"], 9)
+    def test_check_candidates_skips_capacity_candidate(self):
+        first = make_candidate(
+            "https://example.test/skip.ts",
+            media_type="DIRECT_TS",
+        )
+        second = make_candidate(
+            "https://example.test/check.ts",
+            media_type="DIRECT_TS",
+        )
+
+        callback_results = []
+
+        def skip_candidate(candidate):
+            if candidate["normalized_url"].endswith("skip.ts"):
+                return "该频道已达到最多保留 2 条线路的上限"
+            return None
+
+        remote_result = {
+            "checks": {
+                "ipv4": {"status": "PASS"},
+                "http": {"status": "PASS"},
+                "hls": {"status": "N/A"},
+                "ts": {"status": "PASS"},
+            },
+            "stages": {},
+            "probes": {},
+            "measurements": [],
+        }
+
+        with patch.object(
+            globalping,
+            "read_limits",
+            return_value={"remaining": 10},
+        ), patch.object(
+            globalping,
+            "choose_probes",
+            return_value=[{"limit": 1}],
+        ), patch.object(
+            globalping,
+            "_run_direct_ts",
+            return_value=remote_result,
+        ) as run_direct_ts:
+            results = globalping.check_candidates(
+                [first, second],
+                {"max_probes": 1},
+                _skip_candidate=skip_candidate,
+                _on_candidate_result=callback_results.append,
+            )
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual(
+            results[0]["measurement_status"],
+            "SKIPPED_CAPACITY",
+        )
+        self.assertEqual(
+            results[1]["globalping"]["status"],
+            globalping.PASS,
+        )
+        self.assertEqual(run_direct_ts.call_count, 1)
+        self.assertEqual(callback_results, results)
 
 if __name__ == "__main__":
     unittest.main()
+    
