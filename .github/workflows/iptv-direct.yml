@@ -142,10 +142,10 @@ jobs:
           python -m py_compile main.py checker.py globalping.py collector.py normalizer.py publisher.py
           python -m py_compile tests/test_checker.py tests/test_checker_limits.py
           python -m py_compile tests/test_globalping.py tests/test_main_globalping.py
+          python -m py_compile tests/test_globalping_admission.py
           python -m py_compile tests/test_publisher.py tests/test_publisher_release.py tests/test_main_collection.py
           python -m py_compile tests/test_main_failure.py
           python -m py_compile tests/test_channel_categories.py
-
           python -m py_compile tests/test_normalizer.py
           python -m py_compile tests/test_collector.py
 
@@ -168,6 +168,7 @@ jobs:
       - name: Run Globalping tests
         run: |
           python -m unittest discover -s tests -p "test_globalping.py" -v
+          python -m unittest discover -s tests -p "test_globalping_admission.py" -v
 
       - name: Run main Globalping handoff tests
         run: |
