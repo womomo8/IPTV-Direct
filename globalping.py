@@ -212,7 +212,6 @@ def _retry_seconds(value: str | None, fallback: float) -> float:
             pass
     return fallback
 
-
 def _poll(measurement_id: str, boundary_seconds: float) -> tuple[dict[str, Any] | None, str | None]:
     """单阶段独立轮询边界；429 的 Retry-After 不延长边界。"""
     deadline = time.monotonic() + max(1.0, boundary_seconds)
@@ -225,8 +224,13 @@ def _poll(measurement_id: str, boundary_seconds: float) -> tuple[dict[str, Any] 
             headers["If-None-Match"] = etag
         request = urllib.request.Request(f"{API}/measurements/{measurement_id}", headers=headers)
         retry_after = None
+        request_remaining = deadline - time.monotonic()
+        if request_remaining <= 0:
+            break
         try:
-            with urllib.request.urlopen(request, timeout=10) as response:
+            with urllib.request.urlopen(
+                request, timeout=min(10.0, request_remaining)
+            ) as response:
                 raw = response.read()
                 if response.headers.get("Content-Encoding", "").lower() == "gzip":
                     raw = gzip.decompress(raw)
@@ -243,6 +247,8 @@ def _poll(measurement_id: str, boundary_seconds: float) -> tuple[dict[str, Any] 
         except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
             LOG.warning("读取测量 %s 结果暂时失败：%s", measurement_id, exc)
 
+        if time.monotonic() >= deadline:
+            break
         if latest and latest.get("status") == "finished":
             return latest, None
         wait = _retry_seconds(retry_after, delay)
@@ -252,7 +258,6 @@ def _poll(measurement_id: str, boundary_seconds: float) -> tuple[dict[str, Any] 
         time.sleep(wait)
         delay = min(delay * 2, 2.0)
     return latest, "轮询边界耗尽"
-
 
 def _probe_name(item: dict[str, Any]) -> dict[str, Any]:
     probe = item.get("probe") or {}
