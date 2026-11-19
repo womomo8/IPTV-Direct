@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-import email.utils
 import gzip
 import ipaddress
 import json
@@ -30,7 +29,7 @@ INCOMPLETE = "INCOMPLETE"
 NA = "N/A"
 
 REQUEST_TIMEOUT = 30
-POLL_INTERVAL = 0.5
+POLL_INTERVAL = 0.8
 MAX_POLL_SECONDS = 120
 MAX_BODY_BYTES = 10 * 1024
 
@@ -50,6 +49,7 @@ HEADERS = {
     "User-Agent": USER_AGENT,
 }
 
+
 class GlobalpingError(RuntimeError):
     """Globalping API 或测量流程异常。"""
 
@@ -59,17 +59,17 @@ class GlobalpingError(RuntimeError):
         status: str = INCOMPLETE,
         *,
         rate_limited: bool = False,
-        creation_uncertain: bool = False,
         response_headers: dict[str, str] | None = None,
     ) -> None:
         super().__init__(message)
         self.status = status
         self.rate_limited = rate_limited
-        self.creation_uncertain = creation_uncertain
         self.response_headers = response_headers or {}
+
 
 def _status(status: str, reason: str) -> dict[str, str]:
     return {"status": status, "reason": reason}
+
 
 def _headers_lower(headers: Any) -> dict[str, str]:
     if not hasattr(headers, "items"):
@@ -77,24 +77,7 @@ def _headers_lower(headers: Any) -> dict[str, str]:
     return {str(key).lower(): str(value).strip() for key, value in headers.items()}
 
 
-def _retry_after_seconds(value: str | None) -> float | None:
-    """解析 Retry-After 的秒数或 HTTP 日期格式。"""
-    if not value:
-        return None
-
-    try:
-        return max(0.0, float(value))
-    except (TypeError, ValueError):
-        pass
-
-    try:
-        retry_at = email.utils.parsedate_to_datetime(value)
-        return max(0.0, retry_at.timestamp() - time.time())
-    except (TypeError, ValueError, OverflowError, OSError):
-        return None
-
 def _api_request(
-
     url: str,
     method: str = "GET",
     payload: dict[str, Any] | None = None,
@@ -163,15 +146,10 @@ def _api_request(
         ) from exc
 
     except urllib.error.URLError as exc:
-        raise GlobalpingError(
-            f"无法连接 Globalping API：{exc}",
-            creation_uncertain=method.upper() == "POST",
-        ) from exc
+        raise GlobalpingError(f"无法连接 Globalping API：{exc}") from exc
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise GlobalpingError(
-            f"Globalping API 响应处理失败：{exc}",
-            creation_uncertain=method.upper() == "POST",
-        ) from exc
+        raise GlobalpingError(f"Globalping API 响应处理失败：{exc}") from exc
+
 
 def read_limits() -> dict[str, int]:
     """读取当前调用方的实时测量创建额度。"""
@@ -423,44 +401,14 @@ def _create_measurement(
     except GlobalpingError as exc:
         if exc.rate_limited:
             budget["halted"] = True
-        elif exc.creation_uncertain:
-            budget["creation_uncertain_count"] = (
-                budget.get("creation_uncertain_count", 0) + 1
-            )
-            # 创建结果不确定时，保守预留可能已经消耗的额度。
-            # 不重试本次创建请求。
-            budget["remaining"] = max(0, remaining - estimated)
         raise
 
-    if status != 202:
-        raise GlobalpingError(
-            "Globalping 未返回有效的 202 测量创建响应。"
-        )
-
-    if not isinstance(data, dict):
-        budget["creation_uncertain_count"] = (
-            budget.get("creation_uncertain_count", 0) + 1
-        )
-        budget["remaining"] = max(0, remaining - estimated)
-        raise GlobalpingError(
-            "Globalping 已返回 202，但创建响应无法识别，结果不确定。",
-            creation_uncertain=True,
-        )
+    if status != 202 or not isinstance(data, dict):
+        raise GlobalpingError("Globalping 未返回有效的 202 测量创建响应。")
 
     measurement_id = data.get("id")
     if not isinstance(measurement_id, str) or not measurement_id:
-        budget["creation_uncertain_count"] = (
-            budget.get("creation_uncertain_count", 0) + 1
-        )
-        budget["remaining"] = max(0, remaining - estimated)
-        raise GlobalpingError(
-            "Globalping 已返回 202，但缺少有效测量 ID，创建结果不确定。",
-            creation_uncertain=True,
-        )
-
-    budget["measurements_created"] = (
-        budget.get("measurements_created", 0) + 1
-    )
+        raise GlobalpingError("Globalping 创建响应缺少有效测量 ID。")
 
     try:
         actual_count = int(data.get("probesCount", estimated))
@@ -477,29 +425,12 @@ def _create_measurement(
 
     return measurement_id
 
+
 def _wait_measurement(measurement_id: str, budget: dict[str, Any]) -> dict[str, Any]:
-    """有界指数退避轮询单个测量，协调 Retry-After 并处理 ETag/304。"""
+    """轮询单个测量；每次响应后等待 800 ms，处理 ETag/304。"""
     url = f"{API_BASE}/measurements/{measurement_id}"
     started = time.monotonic()
     etag: str | None = None
-    poll_interval = POLL_INTERVAL
-
-    def wait_for_next_poll(minimum_delay: float = 0.0) -> bool:
-        nonlocal poll_interval
-
-        remaining = MAX_POLL_SECONDS - (time.monotonic() - started)
-
-        if remaining <= 0:
-            return False
-
-        delay = max(poll_interval, minimum_delay)
-        time.sleep(min(delay, remaining))
-
-        poll_interval = min(
-            poll_interval * 2,
-            MAX_POLL_SECONDS,
-        )
-        return True
 
     while time.monotonic() - started < MAX_POLL_SECONDS:
         headers = {"If-None-Match": etag} if etag else None
@@ -513,26 +444,15 @@ def _wait_measurement(measurement_id: str, budget: dict[str, Any]) -> dict[str, 
             if exc.rate_limited:
                 budget["halted"] = True
 
-                retry_after = _retry_after_seconds(
-                    exc.response_headers.get("retry-after")
-                )
-
-                if not wait_for_next_poll(retry_after or 0.0):
-                    break
-
-                continue
-
             raise GlobalpingError(
                 f"查询测量结果失败：{exc}",
-                rate_limited=False,
-                response_headers=exc.response_headers,
+                rate_limited=exc.rate_limited,
             ) from exc
 
         etag = response_headers.get("etag") or etag
 
         if status == 304:
-            if not wait_for_next_poll():
-                break
+            time.sleep(POLL_INTERVAL)
             continue
 
         if not isinstance(data, dict):
@@ -541,12 +461,12 @@ def _wait_measurement(measurement_id: str, budget: dict[str, Any]) -> dict[str, 
         if data.get("status") != "in-progress":
             return data
 
-        if not wait_for_next_poll():
-            break
+        time.sleep(POLL_INTERVAL)
 
     raise GlobalpingError(
         f"测量任务 {measurement_id} 等待超过 {MAX_POLL_SECONDS} 秒。"
     )
+
 
 def _probe_key(probe: dict[str, Any]) -> tuple[Any, ...]:
     """使用公开探针元数据匹配复用测量；Globalping 不公开稳定 probe ID。"""
@@ -636,68 +556,61 @@ def _failure_status(result: dict[str, Any]) -> str:
 def _aggregate_ipv4(
     results: dict[tuple[Any, ...], dict[str, Any]],
 ) -> dict[str, str]:
-    """按有效可达证据和明确目标端失败证据聚合 IPv4。"""
     items = [item["result"] for item in results.values()]
 
     if any(_ipv4_ok(item) for item in items):
         return _status(
             PASS,
-            "至少一个探针确认目标 IPv4 可达。",
+            "至少一个中国大陆探针通过 IPv4 目标解析并完成连接测量。",
         )
 
+    if any(
+        item.get("status") == "finished"
+        and isinstance(item.get("resolvedAddress"), str)
+        and item.get("resolvedAddress")
+        and not _ipv4_ok(item)
+        for item in items
+    ):
+        return _status(FAIL, "测量结果未取得 IPv4 目标地址。")
+
     if any(_failure_status(item) == FAIL for item in items):
-        return _status(
-            FAIL,
-            "存在能够确认的目标端 IPv4 连接失败证据。",
-        )
+        return _status(FAIL, "目标端明确连接失败。")
 
     return _status(
         INCOMPLETE,
-        "没有取得有效 IPv4 可达证据，也没有明确目标端失败证据。",
+        "探针未能完成 IPv4 测量，不能确认连通性。",
     )
 
 
 def _aggregate_http(
     results: dict[tuple[Any, ...], dict[str, Any]],
 ) -> dict[str, str]:
-    """按有效 HTTP 响应聚合，不把探针侧异常当作目标端失败。"""
     items = [item["result"] for item in results.values()]
 
     if any(_ipv4_ok(item) and _http_ok(item) for item in items):
-        return _status(
-            PASS,
-            "至少一个 IPv4 探针取得有效 HTTP 2xx 响应。",
-        )
+        return _status(PASS, "至少一个 IPv4 探针取得 HTTP 2xx 响应。")
 
     for item in items:
-        if item.get("status") != "finished" or not _ipv4_ok(item):
-            continue
+        if item.get("status") == "finished":
+            try:
+                code = int(item.get("statusCode"))
+            except (TypeError, ValueError):
+                continue
 
-        try:
-            code = int(item.get("statusCode"))
-        except (TypeError, ValueError):
-            continue
-
-        if code and not 200 <= code < 300:
-            return _status(
-                FAIL,
-                f"目标端实际返回 HTTP {code}，不是成功响应。",
-            )
+            if code and not 200 <= code < 300:
+                return _status(
+                    FAIL,
+                    f"目标返回 HTTP {code}，不是成功响应。",
+                )
 
     if any(_failure_status(item) == FAIL for item in items):
-        return _status(
-            FAIL,
-            "存在能够确认的目标端 HTTP 失败证据。",
-        )
+        return _status(FAIL, "目标端 HTTP 请求明确失败。")
 
-    return _status(
-        INCOMPLETE,
-        "没有取得有效 HTTP 成功响应，也没有明确目标端失败证据。",
-    )
+    return _status(INCOMPLETE, "探针未能完成 HTTP 请求。")
 
 
 def _raw_body_bytes(result: dict[str, Any]) -> bytes | None:
-    """只接受完整且可无损还原的 UTF-8 HLS 清单正文。"""
+    """只接受完整且可无损还原的 UTF-8 文本正文，供 HLS 清单解析使用。"""
     body = result.get("rawBody")
 
     if not isinstance(body, str) or result.get("truncated"):
@@ -708,56 +621,14 @@ def _raw_body_bytes(result: dict[str, Any]) -> bytes | None:
 
     try:
         data = body.encode("utf-8", errors="strict")
-        status_code = int(result.get("statusCode"))
-    except (UnicodeError, TypeError, ValueError):
+    except UnicodeError:
         return None
 
     if len(data) > MAX_BODY_BYTES:
         return None
 
-    if status_code == 200:
-        return data
-
-    if status_code != 206:
-        return None
-
-    headers = result.get("headers")
-
-    if not isinstance(headers, dict):
-        return None
-
-    content_range = next(
-        (
-            value
-            for name, value in headers.items()
-            if isinstance(name, str) and name.lower() == "content-range"
-        ),
-        None,
-    )
-
-    if not isinstance(content_range, str):
-        return None
-
-    match = re.fullmatch(
-        r"bytes\s+(\d+)-(\d+)/(\d+)",
-        content_range.strip(),
-        flags=re.IGNORECASE,
-    )
-
-    if not match:
-        return None
-
-    start, end, total = map(int, match.groups())
-
-    if (
-        total <= 0
-        or start != 0
-        or end != total - 1
-        or len(data) != total
-    ):
-        return None
-
     return data
+
 
 def _parse_playlist(body: bytes | None, base_url: str) -> dict[str, Any]:
     """按实际 HLS 标签识别清单；仅有 #EXTM3U/#EXTINF 的频道 M3U 不算 HLS。"""
@@ -1168,6 +1039,7 @@ def _run_direct_ts(
             url,
             locations,
             budget,
+            headers={"Range": "bytes=0-0"},
         )
 
         measurements.append(measurement_id)
@@ -1252,6 +1124,7 @@ def _run_direct_ts(
             "error": str(exc),
         }
 
+
 def _overall_status(checks: dict[str, dict[str, str]]) -> str:
     applicable = [
         item["status"]
@@ -1298,16 +1171,43 @@ def incomplete_result(
             "measurements": [],
             "error": reason,
         },
-    }  
+    }
+
+
+def _failed_candidate(
+    candidate: dict[str, Any],
+    reason: str,
+) -> dict[str, Any]:
+    media_type = candidate.get("media_type")
+
+    checks = {
+        "ipv4": _status(FAIL, reason),
+        "http": _status(FAIL, reason),
+        "hls": (
+            _status(NA, "直接 TS 不适用 HLS 检测。")
+            if media_type == "DIRECT_TS"
+            else _status(FAIL, reason)
+        ),
+        "ts": _status(FAIL, reason),
+    }
+
+    result = {
+        "status": FAIL,
+        "checks": checks,
+        "stages": {},
+        "probes": {},
+        "measurements": [],
+        "error": reason,
+    }
+
+    return {**candidate, "globalping": result}
+
 
 def check_candidates(
     candidates: list[dict[str, Any]],
     settings: dict[str, Any],
-    *,
-    _skip_candidate: Any = None,
-    _on_candidate_result: Any = None,
 ) -> list[dict[str, Any]]:
-    """检测 Publisher 传入的完整本地优选队列。"""
+    """检测候选列表；settings 接收 settings.json 的 globalping 区段。"""
     if not isinstance(candidates, list):
         raise TypeError("candidates 必须是列表。")
 
@@ -1325,160 +1225,45 @@ def check_candidates(
 
     max_probes = min(max_probes, 3)
 
-    # 先完整核验输入队列。任何一条不符合 Publisher 契约，
-    # 都拒绝整个队列，绝不把输入错误伪装成线路检测 FAIL。
-    identities: set[tuple[str, str]] = set()
+    output: list[dict[str, Any] | None] = [None] * len(candidates)
+    eligible: list[tuple[int, dict[str, Any]]] = []
 
+    # 先按本地 checker 已确认的媒体类型筛除不支持项；
+    # 未知类型和无效 URL 不消耗任何 Globalping 额度。
     for index, candidate in enumerate(candidates):
         if not isinstance(candidate, dict):
-            raise TypeError(
-                f"第 {index + 1} 条候选线路必须是对象。"
-            )
-
-        channel = candidate.get("channel")
-
-        if (
-            not isinstance(channel, str)
-            or not channel
-            or channel != channel.strip()
-        ):
-            raise ValueError(
-                f"第 {index + 1} 条候选线路缺少有效频道名称。"
-            )
+            raise TypeError("每条候选线路必须是对象。")
 
         media_type = candidate.get("media_type")
 
         if media_type not in ("HLS", "DIRECT_TS"):
-            raise ValueError(
-                f"第 {index + 1} 条候选线路媒体类型无效："
-                f"{media_type!r}。"
+            output[index] = _failed_candidate(
+                candidate,
+                "未知或不支持的媒体类型，不允许 Globalping 准入。",
             )
+            continue
 
         url = candidate.get("normalized_url")
 
-        if (
-            not isinstance(url, str)
-            or not url
-            or url != url.strip()
-            or any(char.isspace() for char in url)
-        ):
-            raise ValueError(
-                f"第 {index + 1} 条候选线路缺少有效规范化 URL。"
+        if not isinstance(url, str) or not url:
+            output[index] = _failed_candidate(
+                candidate,
+                "缺少规范化 URL。",
             )
+            continue
 
         try:
-            parsed = urllib.parse.urlsplit(url)
-            scheme = parsed.scheme.lower()
-            host = parsed.hostname
-            port = parsed.port
-
-            if (
-                scheme not in ("http", "https")
-                or not host
-                or parsed.username is not None
-                or parsed.password is not None
-                or parsed.fragment
-                or parsed.netloc.endswith(":")
-                or not parsed.path
-                or not parsed.path.startswith("/")
-            ):
-                raise ValueError("URL 格式不符合规范。")
-
-            host = host.lower()
-
-            if ":" in host:
-                host = f"[{host}]"
-
-            expected_netloc = host
-
-            if port is not None and not (
-                (scheme == "http" and port == 80)
-                or (scheme == "https" and port == 443)
-            ):
-                if not 1 <= port <= 65535:
-                    raise ValueError("URL 端口无效。")
-                expected_netloc += f":{port}"
-
-            expected_url = (
-                f"{scheme}://{expected_netloc}{parsed.path}"
-            )
-
-            if parsed.query:
-                expected_url += f"?{parsed.query}"
-
-            if parsed.scheme != scheme or parsed.netloc != expected_netloc:
-                raise ValueError("URL 尚未规范化。")
-
-            if url != expected_url:
-                raise ValueError("URL 不是规范化后的完整地址。")
-
-            # 同时执行 Globalping 自身的 URL 和 IPv4 目标校验。
             _split_url(url)
+        except GlobalpingError as exc:
+            output[index] = _failed_candidate(candidate, str(exc))
+            continue
 
-        except (TypeError, ValueError, GlobalpingError) as exc:
-            raise ValueError(
-                f"第 {index + 1} 条候选线路 URL 无效：{exc}"
-            ) from exc
+        eligible.append((index, candidate))
 
-        identity = (channel, url)
+    if not eligible:
+        return [item for item in output if item is not None]
 
-        if identity in identities:
-            raise ValueError(
-                f"候选队列存在重复线路：频道 {channel}，URL {url}。"
-            )
-
-        identities.add(identity)
-
-        checks = candidate.get("checks")
-
-        if not isinstance(checks, dict):
-            raise ValueError(
-                f"第 {index + 1} 条候选线路缺少本地 checks 检测结果。"
-            )
-
-        if media_type == "HLS":
-            required_checks = ("ipv4", "http", "hls", "ts")
-        else:
-            required_checks = ("ipv4", "http", "ts")
-
-            hls_check = checks.get("hls")
-
-            if (
-                not isinstance(hls_check, dict)
-                or hls_check.get("status") != NA
-            ):
-                raise ValueError(
-                    f"第 {index + 1} 条 DIRECT_TS 候选线路的 "
-                    "本地 HLS 状态必须为 N/A。"
-                )
-
-        for name in required_checks:
-            item = checks.get(name)
-
-            if not isinstance(item, dict) or item.get("status") != PASS:
-                state = (
-                    item.get("status")
-                    if isinstance(item, dict)
-                    else "缺少结果"
-                )
-                raise ValueError(
-                    f"第 {index + 1} 条候选线路本地 "
-                    f"{name.upper()} 检测未通过：{state}。"
-                )
-
-    # 空队列直接返回，不访问 Globalping API。
-    if not candidates:
-        return []
-
-    output: list[dict[str, Any]] = []
-
-    def emit_result(item: dict[str, Any]) -> None:
-        output.append(item)
-
-        if callable(_on_candidate_result):
-            _on_candidate_result(item)
-
-    # 输入契约全部通过后，才允许访问 Globalping。
+    # 每轮只读取一次额度；后续测量由本地预算统一管理。
     try:
         limits = read_limits()
 
@@ -1490,9 +1275,10 @@ def check_candidates(
         )
 
     except GlobalpingError as exc:
-        for candidate in candidates:
-            emit_result(incomplete_result(candidate, str(exc)))
-        return output
+        for index, candidate in eligible:
+            output[index] = incomplete_result(candidate, str(exc))
+
+        return [item for item in output if item is not None]
 
     probe_count = sum(
         int(item.get("limit", 1))
@@ -1505,42 +1291,32 @@ def check_candidates(
         "halted": False,
     }
 
-    for candidate in candidates:
-        if callable(_skip_candidate):
-            skip_reason = _skip_candidate(candidate)
-
-            if skip_reason:
-                emit_result({
-                    "candidate": candidate,
-                    "measurement_status": "SKIPPED_CAPACITY",
-                    "reason": str(skip_reason),
-                })
-                continue
-
+    for index, candidate in eligible:
         if budget["halted"]:
-            emit_result(
-                incomplete_result(
-                    candidate,
-                    "Globalping 返回 HTTP 429，已停止本轮后续测量创建。",
-                )
+            output[index] = incomplete_result(
+                candidate,
+                "Globalping 返回 HTTP 429，已停止本轮后续测量创建。",
             )
             continue
 
-        # 第一阶段只需要当前探针数量的额度。
-        # HLS 是否需要第二阶段，要等第一阶段解析出 Master 清单后才能确定。
-        # 第二阶段额度由 _create_measurement() 在真正创建测量前单独核验。
-        required_budget = probe_count
+        # HLS 最多两个阶段：主清单、媒体子清单；不再远程下载 TS 二进制。
+        # 启动前预留完整两阶段预算，避免 Master 清单检测到一半额度耗尽。
+        # Direct TS 只需要一个轻量 HTTP Range 阶段。
+        if candidate["media_type"] == "HLS":
+            required_stages = 2
+        else:
+            required_stages = 1
+
+        required_budget = probe_count * required_stages
 
         if budget["remaining"] < required_budget:
-            emit_result(
-                incomplete_result(
-                    candidate,
-                    (
-                        "Globalping 第一阶段额度不足："
-                        f"剩余 {budget['remaining']}，"
-                        f"本阶段需要 {required_budget}。"
-                    ),
-                )
+            output[index] = incomplete_result(
+                candidate,
+                (
+                    "Globalping 剩余额度不足以完成整条线路："
+                    f"剩余 {budget['remaining']}，"
+                    f"预计至少需要 {required_budget}。"
+                ),
             )
             continue
 
@@ -1550,530 +1326,9 @@ def check_candidates(
             result = _run_direct_ts(candidate, locations, budget)
 
         result["status"] = _overall_status(result["checks"])
-
-        emit_result({
+        output[index] = {
             **candidate,
             "globalping": result,
-        })
-
-    return output
-
-ACCEPTED = "ACCEPTED"
-REJECTED = "REJECTED"
-MAX_ROUTES_PER_CHANNEL = 2
-
-
-def _admission_status(checks: Any, name: str) -> str | None:
-    """读取正式准入所需的单项检测状态。"""
-    if not isinstance(checks, dict):
-        return None
-
-    item = checks.get(name)
-
-    if not isinstance(item, dict):
-        return None
-
-    value = item.get("status")
-    return value if isinstance(value, str) else None
-
-
-def _admission_valid_url(value: Any) -> bool:
-    """核验正式准入候选的规范化 URL。"""
-    if (
-        not isinstance(value, str)
-        or not value
-        or value != value.strip()
-        or any(char.isspace() for char in value)
-    ):
-        return False
-
-    try:
-        parsed = urllib.parse.urlsplit(value)
-        scheme = parsed.scheme.lower()
-        host = parsed.hostname
-        port = parsed.port
-
-        if (
-            scheme not in ("http", "https")
-            or not host
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed.fragment
-            or parsed.netloc.endswith(":")
-            or not parsed.path
-            or not parsed.path.startswith("/")
-        ):
-            return False
-
-        if port is not None and not 1 <= port <= 65535:
-            return False
-
-        host = host.lower()
-
-        if ":" in host:
-            host = f"[{host}]"
-
-        expected_netloc = host
-
-        if port is not None and not (
-            (scheme == "http" and port == 80)
-            or (scheme == "https" and port == 443)
-        ):
-            expected_netloc += f":{port}"
-
-        return (
-            parsed.scheme == scheme
-            and parsed.netloc == expected_netloc
-        )
-
-    except (TypeError, ValueError):
-        return False
-
-
-def _admission_required_checks(
-    media_type: str,
-) -> tuple[str, ...] | None:
-    if media_type == "HLS":
-        return ("ipv4", "http", "hls", "ts")
-
-    if media_type == "DIRECT_TS":
-        return ("ipv4", "http", "ts")
-
-    return None
-
-
-def _local_admission_reason(
-    candidate: dict[str, Any],
-) -> str | None:
-    """保留原 publisher 的本地正式准入条件。"""
-    media_type = candidate.get("media_type")
-    required = _admission_required_checks(media_type)
-
-    if required is None:
-        return "未知或不支持的媒体类型，不允许准入"
-
-    checks = candidate.get("checks")
-
-    if not isinstance(checks, dict):
-        return "缺少本地检测结果"
-
-    if (
-        media_type == "DIRECT_TS"
-        and _admission_status(checks, "hls") != NA
-    ):
-        return "直接 TS 的 HLS 检测必须为 N/A"
-
-    for name in required:
-        state = _admission_status(checks, name)
-
-        if state != PASS:
-            return (
-                f"本地 {name.upper()} 检测未通过："
-                f"{state or '缺少结果'}"
-            )
-
-    return None
-
-
-def _globalping_admission_reason(
-    candidate: dict[str, Any],
-) -> str | None:
-    """保留原 publisher 的远程正式准入及状态一致性条件。"""
-    remote = candidate.get("globalping")
-
-    if not isinstance(remote, dict):
-        return "缺少 Globalping 检测结果"
-
-    overall = remote.get("status")
-
-    if overall == FAIL:
-        return "Globalping 检测明确失败"
-
-    if overall not in (PASS, INCOMPLETE):
-        return f"Globalping 总体状态无效：{overall}"
-
-    media_type = candidate.get("media_type")
-    required = _admission_required_checks(media_type)
-
-    if required is None:
-        return "未知或不支持的媒体类型，不允许准入"
-
-    checks = remote.get("checks")
-
-    if not isinstance(checks, dict):
-        return "缺少 Globalping 分项检测结果"
-
-    if (
-        media_type == "DIRECT_TS"
-        and _admission_status(checks, "hls") != NA
-    ):
-        return "Globalping 直接 TS 的 HLS 状态必须为 N/A"
-
-    states = [
-        _admission_status(checks, name)
-        for name in required
-    ]
-
-    if any(state is None for state in states):
-        return "Globalping 缺少适用检测项目的状态"
-
-    if FAIL in states:
-        return "Globalping 存在明确失败的检测项目"
-
-    if overall == PASS and any(state != PASS for state in states):
-        return "Globalping 总体 PASS 与分项检测结果不一致"
-
-    if overall == INCOMPLETE and any(
-        state not in (PASS, INCOMPLETE)
-        for state in states
-    ):
-        return "Globalping INCOMPLETE 状态与分项检测结果不一致"
-
-    return None
-
-
-def _prepare_admission_candidate(
-    candidate: dict[str, Any],
-    channels: list[str],
-    category_map: dict[str, str],
-) -> tuple[dict[str, Any] | None, str | None]:
-    """核验候选并生成正式准入记录，不执行质量排序。"""
-    if not isinstance(candidate, dict):
-        return None, "候选线路不是有效对象"
-
-    channel = candidate.get("channel")
-
-    if not isinstance(channel, str) or channel not in channels:
-        return None, "频道名称不属于目标频道配置"
-
-    if not _admission_valid_url(candidate.get("normalized_url")):
-        return None, "缺少有效的规范化播放 URL"
-
-    priority = candidate.get("priority")
-    source_order = candidate.get("source_order")
-
-    if (
-        isinstance(priority, bool)
-        or not isinstance(priority, int)
-        or priority < 0
-    ):
-        return None, "候选线路缺少有效来源优先级"
-
-    if (
-        isinstance(source_order, bool)
-        or not isinstance(source_order, int)
-        or source_order < 0
-    ):
-        return None, "候选线路缺少有效来源顺序"
-
-    reason = _local_admission_reason(candidate)
-
-    if reason:
-        return None, reason
-
-    reason = _globalping_admission_reason(candidate)
-
-    if reason:
-        return None, reason
-
-    result = dict(candidate)
-
-    if category_map:
-        result["category"] = category_map[channel]
-
-    if "domestic_verification" not in result:
-        result["domestic_verification"] = {
-            "status": "NOT_VERIFIED",
-            "reason": "本轮没有中国移动国内真实网络播放验证证据",
         }
 
-    result["selection"] = {
-        "status": ACCEPTED,
-        "reason": (
-            "本地适用检测全部 PASS，"
-            f"Globalping 状态为 {result['globalping']['status']}"
-        ),
-    }
-
-    return result, None
-
-
-def admit_candidates(
-    candidates: list[dict[str, Any]],
-    channels: list[str],
-    settings: dict[str, Any],
-) -> dict[str, Any]:
-    """
-    按输入的完整优选顺序执行正式准入和频道名额竞争。
-
-    本函数不执行质量比较、重新分组或排序。
-    """
-    if not isinstance(candidates, list):
-        raise ValueError("candidates 必须是列表")
-
-    if (
-        not isinstance(channels, list)
-        or not channels
-        or any(not isinstance(item, str) or not item for item in channels)
-        or len(channels) != len(set(channels))
-    ):
-        raise ValueError("channels 必须是有效且不重复的频道名称列表")
-
-    if not isinstance(settings, dict):
-        raise ValueError("settings 必须是配置对象")
-
-    selection = settings.get("selection")
-
-    if not isinstance(selection, dict):
-        raise ValueError("settings 缺少 selection 配置")
-
-    maximum = selection.get("max_routes_per_channel")
-
-    if maximum != MAX_ROUTES_PER_CHANNEL:
-        raise ValueError(
-            "每个频道最多保留线路数必须符合 MASTER_PLAN.md：2"
-        )
-
-    category_map = getattr(channels, "category_by_channel", None)
-
-    if category_map is None:
-        category_map = {}
-
-    if (
-        not isinstance(category_map, dict)
-        or (category_map and set(category_map) != set(channels))
-    ):
-        raise ValueError("频道分类映射与目标频道列表不一致")
-
-    counts = {channel: 0 for channel in channels}
-    accepted_routes = []
-    seen_urls = set()
-    results = []
-
-    for candidate in candidates:
-        route, reason = _prepare_admission_candidate(
-            candidate,
-            channels,
-            category_map,
-        )
-
-        if route is None:
-            results.append({
-                "candidate": candidate,
-                "status": REJECTED,
-                "reason": reason,
-            })
-            continue
-
-        url = route["normalized_url"]
-        channel = route["channel"]
-
-        if url in seen_urls:
-            results.append({
-                "candidate": candidate,
-                "status": REJECTED,
-                "reason": "线路 URL 已存在，不重复准入",
-            })
-            continue
-
-        seen_urls.add(url)
-
-        if counts[channel] >= MAX_ROUTES_PER_CHANNEL:
-            results.append({
-                "candidate": candidate,
-                "status": REJECTED,
-                "reason": "该频道已达到最多保留 2 条线路的上限",
-            })
-            continue
-
-        accepted_routes.append(route)
-        counts[channel] += 1
-
-        results.append({
-            "candidate": route,
-            "status": ACCEPTED,
-            "reason": route["selection"]["reason"],
-        })
-
-    if len(results) != len(candidates):
-        raise ValueError("正式准入结果数量与输入候选数量不一致")
-
-    accepted_count = sum(
-        item["status"] == ACCEPTED
-        for item in results
-    )
-    rejected_count = sum(
-        item["status"] == REJECTED
-        for item in results
-    )
-
-    return {
-        "results": results,
-        "accepted_routes": accepted_routes,
-        "channel_counts": counts,
-        "all_channels_reached": bool(channels) and all(
-            counts[channel] >= MAX_ROUTES_PER_CHANNEL
-            for channel in channels
-        ),
-        "accepted_count": accepted_count,
-        "rejected_count": rejected_count,
-    }
-
-def check_and_admit_candidates(
-    candidates: list[dict[str, Any]],
-    channels: list[str],
-    settings: dict[str, Any],
-) -> dict[str, Any]:
-    """
-    按 publisher 完整优选顺序执行远程检测和即时正式准入。
-
-    不重新排序，不重新计算本地质量，不调用 publisher。
-    """
-    if not isinstance(candidates, list):
-        raise ValueError("candidates 必须是列表")
-
-    if (
-        not isinstance(channels, list)
-        or not channels
-        or any(not isinstance(item, str) or not item for item in channels)
-        or len(channels) != len(set(channels))
-    ):
-        raise ValueError("channels 必须是有效且不重复的频道名称列表")
-
-    if not isinstance(settings, dict):
-        raise ValueError("settings 必须是配置对象")
-
-    globalping_settings = settings.get("globalping")
-    selection = settings.get("selection")
-
-    if not isinstance(globalping_settings, dict):
-        raise ValueError("settings 缺少 globalping 配置")
-
-    if not isinstance(selection, dict):
-        raise ValueError("settings 缺少 selection 配置")
-
-    maximum = selection.get("max_routes_per_channel")
-
-    if maximum != MAX_ROUTES_PER_CHANNEL:
-        raise ValueError(
-            "每个频道最多保留线路数必须符合 MASTER_PLAN.md：2"
-        )
-
-    category_map = getattr(channels, "category_by_channel", None)
-
-    if category_map is None:
-        category_map = {}
-
-    if (
-        not isinstance(category_map, dict)
-        or (category_map and set(category_map) != set(channels))
-    ):
-        raise ValueError("频道分类映射与目标频道列表不一致")
-
-    counts = {channel: 0 for channel in channels}
-    accepted_routes = []
-    seen_urls = set()
-    results = []
-
-    def skip_candidate(candidate):
-        channel = candidate.get("channel")
-
-        if (
-            channel in counts
-            and counts[channel] >= MAX_ROUTES_PER_CHANNEL
-        ):
-            return "该频道已达到最多保留 2 条线路的上限"
-
-        return None
-
-    def record_result(item):
-        if item.get("measurement_status") == "SKIPPED_CAPACITY":
-            results.append({
-                "candidate": item["candidate"],
-                "status": "SKIPPED_CAPACITY",
-                "reason": item["reason"],
-            })
-            return
-
-        candidate = item
-
-        route, reason = _prepare_admission_candidate(
-            candidate,
-            channels,
-            category_map,
-        )
-
-        if route is None:
-            results.append({
-                "candidate": candidate,
-                "status": REJECTED,
-                "reason": reason,
-            })
-            return
-
-        url = route["normalized_url"]
-        channel = route["channel"]
-
-        if url in seen_urls:
-            results.append({
-                "candidate": candidate,
-                "status": REJECTED,
-                "reason": "线路 URL 已存在，不重复准入",
-            })
-            return
-
-        seen_urls.add(url)
-
-        if counts[channel] >= MAX_ROUTES_PER_CHANNEL:
-            results.append({
-                "candidate": candidate,
-                "status": REJECTED,
-                "reason": "该频道已达到最多保留 2 条线路的上限",
-            })
-            return
-
-        accepted_routes.append(route)
-        counts[channel] += 1
-
-        results.append({
-            "candidate": route,
-            "status": ACCEPTED,
-            "reason": route["selection"]["reason"],
-        })
-
-    remote_results = check_candidates(
-        candidates,
-        globalping_settings,
-        _skip_candidate=skip_candidate,
-        _on_candidate_result=record_result,
-    )
-
-    if len(results) != len(candidates):
-        raise ValueError("远程检测与正式准入结果数量不一致")
-
-    accepted_count = sum(
-        item["status"] == ACCEPTED
-        for item in results
-    )
-    rejected_count = sum(
-        item["status"] == REJECTED
-        for item in results
-    )
-    skipped_count = sum(
-        item["status"] == "SKIPPED_CAPACITY"
-        for item in results
-    )
-
-    return {
-        "remote_results": remote_results,
-        "results": results,
-        "accepted_routes": accepted_routes,
-        "channel_counts": counts,
-        "all_channels_reached": bool(channels) and all(
-            counts[channel] >= MAX_ROUTES_PER_CHANNEL
-            for channel in channels
-        ),
-        "accepted_count": accepted_count,
-        "rejected_count": rejected_count,
-        "skipped_capacity_count": skipped_count,
-    }
+    return [item for item in output if item is not None]
