@@ -206,6 +206,151 @@ class DirectTSAndQuotaTests(unittest.TestCase):
         self.assertEqual(stats["actual_measurements"], 2)
         self.assertEqual(stats["actual_probe_slots"], 6)
 
+    def _run_hls_child_probe_case(self, child_probe):
+        candidate = {
+            "channel": "CCTV-1",
+            "media_type": "HLS",
+            "normalized_url": "https://example.com/master.m3u8",
+        }
+        parent_probe = {
+            "probe": {
+                "city": "A",
+                "country": "CN",
+                "asn": 9808,
+                "network": "China Mobile",
+            }
+        }
+        body = "#EXTM3U\n#EXTINF:6,\nsegment.ts\n"
+
+        def make_record(probe):
+            return {
+                "probe": probe["probe"],
+                "status": "finished",
+                "status_code": 200,
+                "headers": {"content-length": str(len(body))},
+                "body": body,
+                "success_evidence": True,
+            }
+
+        parent_record = make_record(parent_probe)
+        child_record = make_record(child_probe)
+        budget = {"remaining": 9, "stop_new": 0}
+        stats = globalping.Counter()
+
+        with patch.object(
+            globalping,
+            "_create_measurement",
+            side_effect=[
+                ("ipv4-measurement", 3),
+                ("http-measurement", 3),
+                ("child-measurement", 3),
+            ],
+        ) as create, patch.object(
+            globalping,
+            "_poll",
+            return_value=({"status": "finished"}, None),
+        ), patch.object(
+            globalping,
+            "_ping_aggregate",
+            return_value=(globalping.PASS, [parent_probe]),
+        ), patch.object(
+            globalping,
+            "_http_aggregate",
+            side_effect=[
+                (globalping.PASS, [parent_record], [parent_record]),
+                (globalping.PASS, [child_record], [child_record]),
+            ],
+        ), patch.object(
+            globalping,
+            "_master_child_url",
+            return_value="https://example.com/child.m3u8",
+        ):
+            result = globalping._candidate_remote(
+                candidate, [], 3, 8, budget, stats
+            )
+
+        return result, budget, stats, create
+
+    def test_hls_second_stage_reuses_same_probe_set(self):
+        child_probe = {
+            "probe": {
+                "city": "A",
+                "country": "CN",
+                "asn": 9808,
+                "network": "China Mobile",
+            }
+        }
+
+        result, budget, stats, create = self._run_hls_child_probe_case(
+            child_probe
+        )
+
+        self.assertEqual(create.call_count, 3)
+        self.assertEqual(
+            create.call_args_list[2].kwargs["previous_measurement"],
+            "http-measurement",
+        )
+        self.assertEqual(create.call_args_list[2].args[1],
+                         "https://example.com/child.m3u8")
+        self.assertEqual(budget["remaining"], 0)
+        self.assertEqual(result["checks"]["hls"], globalping.PASS)
+        self.assertEqual(result["overall"], globalping.PASS)
+        self.assertEqual(stats["actual_measurements"], 3)
+        self.assertEqual(stats["actual_probe_slots"], 9)
+
+    def test_hls_second_stage_probe_mismatch_stays_incomplete(self):
+        child_probe = {
+            "probe": {
+                "city": "B",
+                "country": "CN",
+                "asn": 9808,
+                "network": "China Mobile",
+            }
+        }
+
+        result, budget, stats, create = self._run_hls_child_probe_case(
+            child_probe
+        )
+
+        self.assertEqual(create.call_count, 3)
+        self.assertEqual(
+            create.call_args_list[2].kwargs["previous_measurement"],
+            "http-measurement",
+        )
+        self.assertEqual(budget["remaining"], 0)
+        self.assertEqual(result["checks"]["hls"], globalping.INCOMPLETE)
+        self.assertEqual(result["overall"], globalping.INCOMPLETE)
+        self.assertTrue(any(
+            "相同探针" in reason
+            for reason in result.get("reasons", [])
+        ))
+        self.assertEqual(stats["actual_measurements"], 3)
+        self.assertEqual(stats["actual_probe_slots"], 9)
+
+    def test_hls_child_measurement_uses_previous_measurement_id(self):
+        with patch.object(
+            globalping,
+            "_api_request",
+            return_value=(202, {"id": "child-measurement", "probesCount": 3}, {}),
+        ) as request:
+            measurement_id, probes_count = globalping._create_measurement(
+                "http",
+                "https://example.com/child.m3u8",
+                [],
+                3,
+                previous_measurement="http-measurement",
+            )
+
+        payload = request.call_args.args[2]
+        self.assertEqual(measurement_id, "child-measurement")
+        self.assertEqual(probes_count, 3)
+        self.assertEqual(payload["locations"], "http-measurement")
+        self.assertNotIn("limit", payload)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
 
 if __name__ == "__main__":
     unittest.main()
