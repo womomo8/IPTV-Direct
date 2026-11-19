@@ -969,7 +969,7 @@ def _candidate_remote(candidate: dict[str, Any], locations: list[dict[str, Any]]
                     else:
                         stats["incomplete_measurements"] += 1
                     child_state, child_evidence, child_success = _http_aggregate(child_measurement)
-                           parent_fingerprints = [_probe_fingerprint(item) for item in http_evidence]
+                    parent_fingerprints = [_probe_fingerprint(item) for item in http_evidence]
                     child_fingerprints = [_probe_fingerprint(item) for item in child_evidence]
                     probe_metadata_complete = (
                         bool(parent_fingerprints)
