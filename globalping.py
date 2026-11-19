@@ -50,7 +50,6 @@ HEADERS = {
     "User-Agent": USER_AGENT,
 }
 
-
 class GlobalpingError(RuntimeError):
     """Globalping API 或测量流程异常。"""
 
@@ -60,13 +59,14 @@ class GlobalpingError(RuntimeError):
         status: str = INCOMPLETE,
         *,
         rate_limited: bool = False,
+        creation_uncertain: bool = False,
         response_headers: dict[str, str] | None = None,
     ) -> None:
         super().__init__(message)
         self.status = status
         self.rate_limited = rate_limited
+        self.creation_uncertain = creation_uncertain
         self.response_headers = response_headers or {}
-
 
 def _status(status: str, reason: str) -> dict[str, str]:
     return {"status": status, "reason": reason}
@@ -163,10 +163,15 @@ def _api_request(
         ) from exc
 
     except urllib.error.URLError as exc:
-        raise GlobalpingError(f"无法连接 Globalping API：{exc}") from exc
+        raise GlobalpingError(
+            f"无法连接 Globalping API：{exc}",
+            creation_uncertain=method.upper() == "POST",
+        ) from exc
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise GlobalpingError(f"Globalping API 响应处理失败：{exc}") from exc
-
+        raise GlobalpingError(
+            f"Globalping API 响应处理失败：{exc}",
+            creation_uncertain=method.upper() == "POST",
+        ) from exc
 
 def read_limits() -> dict[str, int]:
     """读取当前调用方的实时测量创建额度。"""
@@ -418,14 +423,44 @@ def _create_measurement(
     except GlobalpingError as exc:
         if exc.rate_limited:
             budget["halted"] = True
+        elif exc.creation_uncertain:
+            budget["creation_uncertain_count"] = (
+                budget.get("creation_uncertain_count", 0) + 1
+            )
+            # 创建结果不确定时，保守预留可能已经消耗的额度。
+            # 不重试本次创建请求。
+            budget["remaining"] = max(0, remaining - estimated)
         raise
 
-    if status != 202 or not isinstance(data, dict):
-        raise GlobalpingError("Globalping 未返回有效的 202 测量创建响应。")
+    if status != 202:
+        raise GlobalpingError(
+            "Globalping 未返回有效的 202 测量创建响应。"
+        )
+
+    if not isinstance(data, dict):
+        budget["creation_uncertain_count"] = (
+            budget.get("creation_uncertain_count", 0) + 1
+        )
+        budget["remaining"] = max(0, remaining - estimated)
+        raise GlobalpingError(
+            "Globalping 已返回 202，但创建响应无法识别，结果不确定。",
+            creation_uncertain=True,
+        )
 
     measurement_id = data.get("id")
     if not isinstance(measurement_id, str) or not measurement_id:
-        raise GlobalpingError("Globalping 创建响应缺少有效测量 ID。")
+        budget["creation_uncertain_count"] = (
+            budget.get("creation_uncertain_count", 0) + 1
+        )
+        budget["remaining"] = max(0, remaining - estimated)
+        raise GlobalpingError(
+            "Globalping 已返回 202，但缺少有效测量 ID，创建结果不确定。",
+            creation_uncertain=True,
+        )
+
+    budget["measurements_created"] = (
+        budget.get("measurements_created", 0) + 1
+    )
 
     try:
         actual_count = int(data.get("probesCount", estimated))
