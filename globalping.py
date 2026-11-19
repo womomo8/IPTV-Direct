@@ -1458,22 +1458,19 @@ def check_candidates(
             )
             continue
 
-        # 保留现有阶段预算逻辑，本轮只核验输入契约。
-        if candidate["media_type"] == "HLS":
-            required_stages = 2
-        else:
-            required_stages = 1
-
-        required_budget = probe_count * required_stages
+                # 第一阶段只需要当前探针数量的额度。
+        # HLS 是否需要第二阶段，要等第一阶段解析出 Master 清单后才能确定。
+        # 第二阶段额度由 _create_measurement() 在真正创建测量前单独核验。
+        required_budget = probe_count
 
         if budget["remaining"] < required_budget:
             output.append(
                 incomplete_result(
                     candidate,
                     (
-                        "Globalping 剩余额度不足以完成整条线路："
+                        "Globalping 第一阶段额度不足："
                         f"剩余 {budget['remaining']}，"
-                        f"预计至少需要 {required_budget}。"
+                        f"本阶段需要 {required_budget}。"
                     ),
                 )
             )
