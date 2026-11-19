@@ -1,5 +1,7 @@
 
 import unittest
+import urllib.error
+from unittest.mock import patch
 
 import globalping
 
@@ -176,7 +178,82 @@ class GlobalpingAdmissionTests(unittest.TestCase):
 
         self.assertEqual(result["accepted_count"], 0)
         self.assertEqual(result["channel_counts"]["CCTV-1"], 0)
+    def test_post_network_failure_is_marked_creation_uncertain(self):
+        error = urllib.error.URLError("connection timed out")
 
+        with patch.object(
+            globalping.urllib.request,
+            "urlopen",
+            side_effect=error,
+        ):
+            with self.assertRaises(globalping.GlobalpingError) as caught:
+                globalping._api_request(
+                    f"{globalping.API_BASE}/measurements",
+                    method="POST",
+                    payload={},
+                )
+
+        self.assertTrue(caught.exception.creation_uncertain)
+        self.assertFalse(caught.exception.rate_limited)
+
+    def test_uncertain_creation_is_not_retried_and_reserves_budget(self):
+        budget = {
+            "remaining": 10,
+            "probe_count": 1,
+            "halted": False,
+        }
+
+        error = globalping.GlobalpingError(
+            "创建请求超时，结果不确定",
+            creation_uncertain=True,
+        )
+
+        with patch.object(
+            globalping,
+            "_api_request",
+            side_effect=error,
+        ) as request:
+            with self.assertRaises(globalping.GlobalpingError):
+                globalping._create_measurement(
+                    "https://example.test/live.m3u8",
+                    [{"limit": 1}],
+                    budget,
+                )
+
+        request.assert_called_once()
+
+        self.assertEqual(
+            budget["creation_uncertain_count"],
+            1,
+        )
+        self.assertEqual(budget["remaining"], 9)
+        self.assertFalse(budget["halted"])
+
+    def test_confirmed_creation_increments_measurement_count(self):
+        budget = {
+            "remaining": 10,
+            "probe_count": 1,
+            "halted": False,
+        }
+
+        with patch.object(
+            globalping,
+            "_api_request",
+            return_value=(
+                202,
+                {"id": "measurement-1", "probesCount": 1},
+                {},
+            ),
+        ):
+            measurement_id = globalping._create_measurement(
+                "https://example.test/live.m3u8",
+                [{"limit": 1}],
+                budget,
+            )
+
+        self.assertEqual(measurement_id, "measurement-1")
+        self.assertEqual(budget["measurements_created"], 1)
+        self.assertEqual(budget["remaining"], 9)
 
 if __name__ == "__main__":
     unittest.main()
