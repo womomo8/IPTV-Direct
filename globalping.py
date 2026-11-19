@@ -1918,3 +1918,162 @@ def admit_candidates(
         "accepted_count": accepted_count,
         "rejected_count": rejected_count,
     }
+
+def check_and_admit_candidates(
+    candidates: list[dict[str, Any]],
+    channels: list[str],
+    settings: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    按 publisher 完整优选顺序执行远程检测和即时正式准入。
+
+    不重新排序，不重新计算本地质量，不调用 publisher。
+    """
+    if not isinstance(candidates, list):
+        raise ValueError("candidates 必须是列表")
+
+    if (
+        not isinstance(channels, list)
+        or not channels
+        or any(not isinstance(item, str) or not item for item in channels)
+        or len(channels) != len(set(channels))
+    ):
+        raise ValueError("channels 必须是有效且不重复的频道名称列表")
+
+    if not isinstance(settings, dict):
+        raise ValueError("settings 必须是配置对象")
+
+    globalping_settings = settings.get("globalping")
+    selection = settings.get("selection")
+
+    if not isinstance(globalping_settings, dict):
+        raise ValueError("settings 缺少 globalping 配置")
+
+    if not isinstance(selection, dict):
+        raise ValueError("settings 缺少 selection 配置")
+
+    maximum = selection.get("max_routes_per_channel")
+
+    if maximum != MAX_ROUTES_PER_CHANNEL:
+        raise ValueError(
+            "每个频道最多保留线路数必须符合 MASTER_PLAN.md：2"
+        )
+
+    category_map = getattr(channels, "category_by_channel", None)
+
+    if category_map is None:
+        category_map = {}
+
+    if (
+        not isinstance(category_map, dict)
+        or (category_map and set(category_map) != set(channels))
+    ):
+        raise ValueError("频道分类映射与目标频道列表不一致")
+
+    counts = {channel: 0 for channel in channels}
+    accepted_routes = []
+    seen_urls = set()
+    results = []
+
+    def skip_candidate(candidate):
+        channel = candidate.get("channel")
+
+        if (
+            channel in counts
+            and counts[channel] >= MAX_ROUTES_PER_CHANNEL
+        ):
+            return "该频道已达到最多保留 2 条线路的上限"
+
+        return None
+
+    def record_result(item):
+        if item.get("measurement_status") == "SKIPPED_CAPACITY":
+            results.append({
+                "candidate": item["candidate"],
+                "status": "SKIPPED_CAPACITY",
+                "reason": item["reason"],
+            })
+            return
+
+        candidate = item
+
+        route, reason = _prepare_admission_candidate(
+            candidate,
+            channels,
+            category_map,
+        )
+
+        if route is None:
+            results.append({
+                "candidate": candidate,
+                "status": REJECTED,
+                "reason": reason,
+            })
+            return
+
+        url = route["normalized_url"]
+        channel = route["channel"]
+
+        if url in seen_urls:
+            results.append({
+                "candidate": candidate,
+                "status": REJECTED,
+                "reason": "线路 URL 已存在，不重复准入",
+            })
+            return
+
+        seen_urls.add(url)
+
+        if counts[channel] >= MAX_ROUTES_PER_CHANNEL:
+            results.append({
+                "candidate": candidate,
+                "status": REJECTED,
+                "reason": "该频道已达到最多保留 2 条线路的上限",
+            })
+            return
+
+        accepted_routes.append(route)
+        counts[channel] += 1
+
+        results.append({
+            "candidate": route,
+            "status": ACCEPTED,
+            "reason": route["selection"]["reason"],
+        })
+
+    remote_results = check_candidates(
+        candidates,
+        globalping_settings,
+        _skip_candidate=skip_candidate,
+        _on_candidate_result=record_result,
+    )
+
+    if len(results) != len(candidates):
+        raise ValueError("远程检测与正式准入结果数量不一致")
+
+    accepted_count = sum(
+        item["status"] == ACCEPTED
+        for item in results
+    )
+    rejected_count = sum(
+        item["status"] == REJECTED
+        for item in results
+    )
+    skipped_count = sum(
+        item["status"] == "SKIPPED_CAPACITY"
+        for item in results
+    )
+
+    return {
+        "remote_results": remote_results,
+        "results": results,
+        "accepted_routes": accepted_routes,
+        "channel_counts": counts,
+        "all_channels_reached": bool(channels) and all(
+            counts[channel] >= MAX_ROUTES_PER_CHANNEL
+            for channel in channels
+        ),
+        "accepted_count": accepted_count,
+        "rejected_count": rejected_count,
+        "skipped_capacity_count": skipped_count,
+    }
