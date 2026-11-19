@@ -636,8 +636,7 @@ class PublicationUnknownRecoveryTests(unittest.TestCase):
                 "normalized_url": "https://good.example/live.m3u8",
             }]
 
-            result = globalping._publish(
-                accepted, output_dir, [], {}, []
+            result = globalping._publish(accepted, output_dir, [], {}, [])
 
             self.assertIn(result["status"], {"unchanged", "published"})
             self.assertFalse(marker.exists())
