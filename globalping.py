@@ -733,7 +733,7 @@ def _candidate_remote(candidate: dict[str, Any], locations: list[dict[str, Any]]
             result.setdefault("reasons", []).append(f"额度不足，未创建 {phase} 测量")
             stats["quota_blocked_candidates"] += 1
             break
-                expected = max(1, min(int(probe_limit), 3))
+        expected = probe_limit
         try:
             stage_locations = _limit_locations(locations, expected)
             measurement_id, probes_count = _create_measurement(kind, url, stage_locations, expected)
@@ -804,6 +804,7 @@ def _candidate_remote(candidate: dict[str, Any], locations: list[dict[str, Any]]
                     stats["actual_measurements"] += 1
                     stats["actual_probe_slots"] += child_probes
                     budget["remaining"] = max(0, budget["remaining"] - 1)
+                    result["measurements"].append({"phase": "hls_child", "id": child_id,
                                                     "probes_count": child_probes,
                                                     "parent_measurement_id": parent_measurement})
                     child_measurement, child_boundary = _poll(child_id, boundary)
