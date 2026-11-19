@@ -421,6 +421,23 @@ class DirectTSAndQuotaTests(unittest.TestCase):
         self.assertEqual(stats["actual_measurements"], 3)
         self.assertEqual(stats["actual_probe_slots"], 9)
 
+    def test_hls_second_stage_missing_probe_metadata_stays_incomplete(self):
+        result, budget, stats, create = self._run_hls_child_probe_case(
+            {"probe": {}}
+        )
+
+        self.assertEqual(create.call_count, 3)
+        self.assertEqual(
+            create.call_args_list[2].kwargs["previous_measurement"],
+            "http-measurement",
+        )
+        self.assertEqual(result["checks"]["hls"], globalping.INCOMPLETE)
+        self.assertEqual(result["overall"], globalping.INCOMPLETE)
+        self.assertEqual(
+            [item["id"] for item in result["measurements"]],
+            ["ipv4-measurement", "http-measurement", "child-measurement"],
+        )
+
     def test_hls_child_measurement_uses_previous_measurement_id(self):
         with patch.object(
             globalping,
