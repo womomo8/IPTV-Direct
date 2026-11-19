@@ -1039,7 +1039,6 @@ def _run_direct_ts(
             url,
             locations,
             budget,
-            headers={"Range": "bytes=0-0"},
         )
 
         measurements.append(measurement_id)
