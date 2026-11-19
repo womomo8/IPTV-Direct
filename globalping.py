@@ -733,7 +733,7 @@ def _candidate_remote(candidate: dict[str, Any], locations: list[dict[str, Any]]
             result.setdefault("reasons", []).append(f"额度不足，未创建 {phase} 测量")
             stats["quota_blocked_candidates"] += 1
             break
-        expected = min(probe_limit, budget["remaining"])
+                expected = max(1, min(int(probe_limit), 3))
         try:
             stage_locations = _limit_locations(locations, expected)
             measurement_id, probes_count = _create_measurement(kind, url, stage_locations, expected)
@@ -755,7 +755,7 @@ def _candidate_remote(candidate: dict[str, Any], locations: list[dict[str, Any]]
             continue
         stats["actual_measurements"] += 1
         stats["actual_probe_slots"] += probes_count
-        budget["remaining"] = max(0, budget["remaining"] - probes_count)
+        budget["remaining"] = max(0, budget["remaining"] - 1)
         result["measurements"].append({"phase": phase, "id": measurement_id, "probes_count": probes_count})
         measurement, boundary_reason = _poll(measurement_id, boundary)
         if measurement and measurement.get("status") == "finished":
@@ -795,16 +795,15 @@ def _candidate_remote(candidate: dict[str, Any], locations: list[dict[str, Any]]
                     parent_record = next(item for item in result["measurements"]
                                          if item.get("phase") == "http")
                     required_probe_slots = int(parent_record.get("probes_count", 0))
-                    if required_probe_slots < 1 or budget["remaining"] < required_probe_slots:
-                        raise GlobalpingError("HLS 第二阶段额度不足以复用第一阶段探针")
+                    if required_probe_slots < 1 or budget["remaining"] < 1:
+                        raise GlobalpingError("HLS 第二阶段缺少可用测量额度或第一阶段探针")
                     child_id, child_probes = _create_measurement(
                         "http", child_url, _limit_locations(locations, required_probe_slots), required_probe_slots,
                         previous_measurement=parent_measurement,
                     )
                     stats["actual_measurements"] += 1
                     stats["actual_probe_slots"] += child_probes
-                    budget["remaining"] = max(0, budget["remaining"] - child_probes)
-                    result["measurements"].append({"phase": "hls_child", "id": child_id,
+                    budget["remaining"] = max(0, budget["remaining"] - 1)
                                                     "probes_count": child_probes,
                                                     "parent_measurement_id": parent_measurement})
                     child_measurement, child_boundary = _poll(child_id, boundary)
