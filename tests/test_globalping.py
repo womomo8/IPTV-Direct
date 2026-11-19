@@ -206,6 +206,56 @@ class DirectTSAndQuotaTests(unittest.TestCase):
         self.assertEqual(stats["actual_measurements"], 2)
         self.assertEqual(stats["actual_probe_slots"], 6)
 
+        def test_hls_second_stage_uncertain_creation_blocks_admission(self):
+        candidate = {
+            "channel": "CCTV-1",
+            "media_type": "HLS",
+            "normalized_url": "https://example.com/master.m3u8",
+        }
+        budget = {"remaining": 9, "stop_new": 0}
+        stats = globalping.Counter()
+        probe = {"probe": {"city": "A", "country": "CN", "asn": 9808}}
+
+        with patch.object(
+            globalping,
+            "_create_measurement",
+            side_effect=[
+                ("ipv4-measurement", 3),
+                ("http-measurement", 3),
+                globalping.GlobalpingError(
+                    "connection lost", uncertain=True
+                ),
+            ],
+        ) as create, patch.object(
+            globalping,
+            "_poll",
+            return_value=({"status": "finished"}, None),
+        ), patch.object(
+            globalping,
+            "_ping_aggregate",
+            return_value=(globalping.PASS, [probe]),
+        ), patch.object(
+            globalping,
+            "_http_aggregate",
+            return_value=(globalping.PASS, [probe], [probe]),
+        ), patch.object(
+            globalping,
+            "_master_child_url",
+            return_value="https://example.com/child.m3u8",
+        ):
+            result = globalping._candidate_remote(
+                candidate, [], 3, 8, budget, stats
+            )
+
+        self.assertEqual(create.call_count, 3)
+        self.assertTrue(result["creation_uncertain"])
+        self.assertEqual(result["checks"]["hls"], globalping.INCOMPLETE)
+        self.assertEqual(result["overall"], globalping.INCOMPLETE)
+        self.assertEqual(stats["creation_uncertain_candidates"], 1)
+        self.assertEqual(stats["actual_measurements"], 2)
+        self.assertEqual(stats["actual_probe_slots"], 6)
+        self.assertEqual(budget["remaining"], 0)
+
     def _run_hls_child_probe_case(self, child_probe):
         candidate = {
             "channel": "CCTV-1",
