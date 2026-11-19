@@ -620,11 +620,10 @@ class HttpStatusTests(unittest.TestCase):
 
 
 class DirectTsFlowTests(unittest.TestCase):
-    def test_direct_ts_uses_one_range_http_measurement_only(self):
+    def test_direct_ts_uses_one_http_measurement_without_range(self):
         response = finished_http(
             "not binary data; Globalping cannot validate TS bytes",
-            206,
-            {"Content-Range": "bytes 0-0/4096"},
+            200,
         )
 
         with patch.object(
@@ -642,10 +641,7 @@ class DirectTsFlowTests(unittest.TestCase):
             )
 
         self.assertEqual(stage.call_count, 1)
-        self.assertEqual(
-            stage.call_args.kwargs["headers"],
-            {"Range": "bytes=0-0"},
-        )
+        self.assertEqual(stage.call_args.kwargs, {})
         self.assertEqual(result["measurements"], ["m1"])
         self.assertEqual(result["checks"]["ipv4"]["status"], gp.PASS)
         self.assertEqual(result["checks"]["http"]["status"], gp.PASS)
