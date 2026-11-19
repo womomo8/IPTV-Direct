@@ -1,44 +1,52 @@
 # IPTV-Direct 开发进度
 
-施工依据：`MASTER_PLAN.md` v3.9.5。本文只记录当前分支现状和施工状态，不改变主计划定义。
+施工依据：MASTER_PLAN.md v3.9.5。
 
-## 当前分支盘点
+MASTER_PLAN.md 是项目唯一架构和规则依据。
+本文件只记录当前仓库状态、施工进度和验收结果。
+如有冲突，以 MASTER_PLAN.md 为准。
 
-- 当前保留：`collector.py`、`normalizer.py`、`checker.py`、`publisher.py`、`settings.json`、`sources.json`、`channels.txt`、`manual.txt`、`tools/globalping_api_test.py`、现有 GitHub Actions 工作流。
-- 当前缺失：`main.py`、`globalping.py`、`tests/`。
-- 当前开发按现存模块接口衔接，不恢复历史版本文件。
+## 当前仓库模块
 
-## 本轮文件状态
+- main.py：全链路唯一总调度
+- collector.py：来源管理和原始内容采集
+- normalizer.py：解析、频道匹配、URL 规范化和去重
+- checker.py：本地检测
+- publisher.py：本地质量优选
+- globalping.py：远程检测、正式准入和安全发布
+- tests/test_globalping.py：Globalping 回归测试
 
-- [x] 新建 `main.py`：唯一总调度、阶段交接和候选身份核对。
-- [x] 新建 `globalping.py`：远程检测、逐候选准入、频道名额控制和发布保护初版。
-- [x] 新建当前回归测试：Globalping 聚合、普通 HTTP/HLS 的 206 完整性、主播放清单子清单提取、测试模式和发布输入保护。
-- [x] 调整现有工作流：测试阶段只执行当前存在的测试文件，保留正式、测试、诊断入口和正式发布并发组。
-- [ ] 与仓库现存模块做完整集成测试。
-- [ ] 补齐 Globalping HLS 多阶段探针连续性、预算边界和异常统计验收。
-- [ ] 补齐发布状态未知恢复、旧订阅保护及回滚故障注入测试。
-- [ ] 对照 `MASTER_PLAN.md` 第十四章逐项验收。
+## 已完成的工作
 
-## 当前验证结果
+- [x] 六阶段程序架构已建立。
+- [x] main.py 负责唯一总调度和阶段交接。
+- [x] publisher.py 独立负责本地质量优选。
+- [x] globalping.py 接收完整优选队列。
+- [x] DIRECT_TS 远程只执行普通 HTTP。
+- [x] DIRECT_TS 远程 IPv4 状态为 N/A。
+- [x] DIRECT_TS 远程 HLS 状态为 N/A。
+- [x] DIRECT_TS 总体状态只依据 HTTP。
 
-- `main.py`、`globalping.py`、`tests/test_globalping_current.py` Python 语法检查通过。
-- 当前回归测试：9 项通过。
-- 尚未执行真实 Globalping 测量；尚未执行完整 `main.py --mode test` 集成流程。
-- 本轮文件是开发中的第一批，不代表主计划验收完成。
-## 当前修复任务
+## 当前修复和验收任务
 
-- [ ] 直接 TS 远程检测仅执行普通 HTTP 测量
-- [ ] 直接 TS 远程 IPv4 状态为 N/A
-- [ ] 直接 TS 远程 HLS 状态为 N/A
-- [ ] 直接 TS 远程准入仅依据 HTTP 状态
-- [ ] 增加直接 TS 远程检测专项回归测试
-- [ ] 运行完整 unittest
-- [ ] 运行 python main.py --mode test
-- [ ] GitHub Actions 测试工作流通过
-- [ ] 按 MASTER_PLAN.md 第十三章完成验收
+- [ ] 修复 Globalping 测量额度扣减口径。
+- [ ] 测量创建额度与探针数量分开计算。
+- [ ] 修复 HLS 第二阶段额度判断。
+- [ ] 增加 DIRECT_TS 专项回归测试。
+- [ ] 增加测量额度回归测试。
+- [ ] 完成 HLS 多阶段探针连续性测试。
+- [ ] 完成预算边界和异常统计测试。
+- [ ] 完成发布状态未知恢复测试。
+- [ ] 完成旧订阅保护及回滚故障测试。
+- [ ] 完成完整集成测试。
+- [ ] 对照 MASTER_PLAN.md 规定的验收章节逐项验收。
 
 ## 当前验收状态
 
-尚未完成本轮修复后的完整集成验收。
-此前本地通过的测试结果不能代替当前 main 分支的完整验收结果。
-在所有验收项目通过之前，不得标记为正式完成或执行正式发布。
+项目仍处于开发和修复阶段。
+
+局部代码修改完成，不代表测试已经通过。
+单元测试通过，也不代表完整集成验收通过。
+
+在所有主计划规定的测试和验收项目完成之前，
+不得标记为正式完成，也不得执行正式发布。
