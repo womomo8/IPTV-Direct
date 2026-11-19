@@ -528,11 +528,20 @@ class BodyAndPlaylistTests(unittest.TestCase):
     def test_raw_body_accepts_complete_utf8_playlist_text(self):
         body = "#EXTM3U\n#EXT-X-VERSION:3\n"
         result = gp._raw_body_bytes({
+            "statusCode": 200,
             "rawBody": body,
             "truncated": False,
         })
 
         self.assertEqual(result, body.encode("utf-8"))
+
+    def test_raw_body_rejects_missing_http_status(self):
+        self.assertIsNone(
+            gp._raw_body_bytes({
+                "rawBody": "#EXTM3U\n#EXT-X-VERSION:3\n",
+                "truncated": False,
+            })
+        )
 
     def test_raw_body_rejects_body_over_limit(self):
         self.assertIsNone(
