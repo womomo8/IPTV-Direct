@@ -1248,11 +1248,28 @@ class StatusAndFlowTests(unittest.TestCase):
             gp.INCOMPLETE,
         )
 
-    def test_hls_is_skipped_when_two_stage_budget_is_unavailable(self):
+    def test_hls_media_playlist_needs_only_one_stage_budget(self):
         candidate = local_pass_candidate(
-            "hls-no-budget",
+            "hls-media-one-budget",
             media_type="HLS",
         )
+        create_calls = []
+
+        def fake_api_request(
+            url,
+            method="GET",
+            payload=None,
+            extra_headers=None,
+        ):
+            create_calls.append(payload)
+            return (
+                202,
+                {
+                    "id": f"m{len(create_calls)}",
+                    "probesCount": 1,
+                },
+                {},
+            )
 
         with patch.object(
             gp,
@@ -1264,21 +1281,93 @@ class StatusAndFlowTests(unittest.TestCase):
                 "choose_probes",
                 return_value=one_probe_location(),
             ):
-                with patch.object(gp, "_stage") as stage:
-                    output = gp.check_candidates(
-                        [candidate],
-                        {"max_probes": 3},
-                    )
+                with patch.object(
+                    gp,
+                    "_api_request",
+                    side_effect=fake_api_request,
+                ):
+                    with patch.object(
+                        gp,
+                        "_wait_measurement",
+                        return_value=measurement(
+                            result_item(
+                                finished_http(MEDIA_PLAYLIST, 200)
+                            )
+                        ),
+                    ):
+                        output = gp.check_candidates(
+                            [candidate],
+                            {"max_probes": 3},
+                        )
 
-        stage.assert_not_called()
-        self.assertEqual(
-            output[0]["globalping"]["status"],
-            gp.INCOMPLETE,
+        result = output[0]["globalping"]
+
+        self.assertEqual(len(create_calls), 1)
+        self.assertEqual(result["measurements"], ["m1"])
+        self.assertEqual(result["checks"]["hls"]["status"], gp.PASS)
+        self.assertEqual(result["checks"]["ts"]["status"], gp.INCOMPLETE)
+
+    def test_hls_master_keeps_first_stage_when_second_stage_budget_is_unavailable(self):
+        candidate = local_pass_candidate(
+            "hls-master-one-budget",
+            media_type="HLS",
         )
-        self.assertIn(
-            "额度不足",
-            output[0]["globalping"]["error"],
-        )
+        create_calls = []
+
+        def fake_api_request(
+            url,
+            method="GET",
+            payload=None,
+            extra_headers=None,
+        ):
+            create_calls.append(payload)
+            return (
+                202,
+                {
+                    "id": f"m{len(create_calls)}",
+                    "probesCount": 1,
+                },
+                {},
+            )
+
+        with patch.object(
+            gp,
+            "read_limits",
+            return_value=mocked_limits(1),
+        ):
+            with patch.object(
+                gp,
+                "choose_probes",
+                return_value=one_probe_location(),
+            ):
+                with patch.object(
+                    gp,
+                    "_api_request",
+                    side_effect=fake_api_request,
+                ):
+                    with patch.object(
+                        gp,
+                        "_wait_measurement",
+                        return_value=measurement(
+                            result_item(
+                                finished_http(MASTER_PLAYLIST, 200)
+                            )
+                        ),
+                    ):
+                        output = gp.check_candidates(
+                            [candidate],
+                            {"max_probes": 3},
+                        )
+
+        result = output[0]["globalping"]
+
+        self.assertEqual(len(create_calls), 1)
+        self.assertEqual(result["measurements"], ["m1"])
+        self.assertEqual(result["checks"]["ipv4"]["status"], gp.PASS)
+        self.assertEqual(result["checks"]["http"]["status"], gp.PASS)
+        self.assertEqual(result["checks"]["hls"]["status"], gp.INCOMPLETE)
+        self.assertEqual(result["status"], gp.INCOMPLETE)
+        self.assertIn("额度不足", result["error"])
 
     def test_rate_limit_stops_later_candidate_measurements(self):
         first = local_pass_candidate("rate-limit-1")
