@@ -82,39 +82,89 @@ def _verify_preserved(input_items: list[dict[str, Any]], output_items: list[dict
     if before != after:
         raise PipelineError(f"{stage} 未按输入顺序完整返回候选，已阻止进入下一阶段")
 
-
 def _verify_publisher_result(
     checked: list[dict[str, Any]],
     result: dict[str, Any],
 ) -> list[dict[str, Any]]:
     if not isinstance(result, dict):
         raise PipelineError("publisher 返回值不是对象")
-    queue = result.get("queue")
-    ranking = result.get("ranking")
-    if not isinstance(queue, list) or not isinstance(ranking, list):
-        raise PipelineError("publisher 未返回完整 queue/ranking")
 
-    checked_ids = set(_assert_unique_ordered(checked, "checker"))
+    queue = result.get("queue")
+    excluded = result.get("excluded")
+    ranking = result.get("ranking")
+
+    if (
+        not isinstance(queue, list)
+        or not isinstance(excluded, list)
+        or not isinstance(ranking, list)
+    ):
+        raise PipelineError("publisher 未返回完整 queue/excluded/ranking")
+
+    checked_id_list = _assert_unique_ordered(checked, "checker")
+    checked_ids = set(checked_id_list)
+
     queue_ids = _assert_unique_ordered(queue, "publisher queue")
     if any(identity not in checked_ids for identity in queue_ids):
-        raise PipelineError("publisher 返回了不属于 checker 输入的候选")
+        raise PipelineError("publisher queue 返回了不属于 checker 输入的候选")
+
+    excluded_ids = []
+    for index, item in enumerate(excluded):
+        if not isinstance(item, dict):
+            raise PipelineError(f"publisher excluded 第 {index + 1} 条记录无效")
+
+        candidate = item.get("candidate")
+        if not isinstance(candidate, dict):
+            raise PipelineError(f"publisher excluded 第 {index + 1} 条缺少候选")
+
+        identity = _identity(candidate)
+        declared_identity = item.get("identity")
+
+        if (
+            not isinstance(declared_identity, (tuple, list))
+            or len(declared_identity) != 2
+            or tuple(declared_identity) != identity[:2]
+        ):
+            raise PipelineError(f"publisher excluded 第 {index + 1} 条身份不一致")
+
+        if not isinstance(item.get("reason"), str) or not item["reason"]:
+            raise PipelineError(f"publisher excluded 第 {index + 1} 条缺少排除原因")
+
+        excluded_ids.append(identity)
+
+    if len(excluded_ids) != len(set(excluded_ids)):
+        raise PipelineError("publisher excluded 存在重复候选身份")
+
+    if any(identity not in checked_ids for identity in excluded_ids):
+        raise PipelineError("publisher excluded 返回了不属于 checker 输入的候选")
+
+    # queue 与 excluded 必须完整覆盖 checker 输入，不能遗漏或重复。
+    combined_ids = queue_ids + excluded_ids
+    if (
+        len(combined_ids) != len(checked_id_list)
+        or set(combined_ids) != checked_ids
+    ):
+        raise PipelineError("publisher queue 与 excluded 未完整覆盖 checker 输入")
 
     # publisher 可以按本地质量规则筛选并组织队列，但 main 不改变其顺序。
     if len(ranking) != len(queue):
         raise PipelineError("publisher ranking 与 queue 数量不一致")
+
     ranked_ids = []
     for index, item in enumerate(ranking):
         if not isinstance(item, dict):
             raise PipelineError("publisher ranking 存在无效记录")
+
         identity = item.get("identity")
         if not isinstance(identity, (tuple, list)) or len(identity) != 2:
             raise PipelineError(f"publisher ranking 第 {index + 1} 条身份无效")
+
         ranked_ids.append((identity[0], identity[1]))
+
     queue_channel_urls = [(item[0], item[1]) for item in queue_ids]
     if ranked_ids != queue_channel_urls:
         raise PipelineError("publisher ranking 与 queue 身份或顺序不一致")
-    return queue
 
+    return queue
 
 def run_pipeline(mode: str = "formal", root: Path = ROOT) -> dict[str, Any]:
     if mode not in {"formal", "test"}:
