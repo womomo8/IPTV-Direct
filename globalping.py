@@ -437,14 +437,14 @@ def _local_admission_reason(candidate: dict[str, Any]) -> str | None:
 
 def _remote_admission(candidate: dict[str, Any], remote: dict[str, Any]) -> tuple[bool, str]:
     media = candidate.get("media_type")
-    expected = ("ipv4", "http", "hls") if media == "HLS" else ("ipv4", "http") if media == "DIRECT_TS" else None
+    expected = ("ipv4", "http", "hls") if media == "HLS" else ("http",) if media == "DIRECT_TS" else None
     if expected is None:
         return False, "媒体类型无效"
     checks = remote.get("checks")
     if not isinstance(checks, dict):
         return False, "缺少远程分项结果"
-    if media == "DIRECT_TS" and checks.get("hls") != NA:
-        return False, "直接 TS 的远程 HLS 状态必须为 N/A"
+    if media == "DIRECT_TS" and (checks.get("ipv4") != NA or checks.get("hls") != NA):
+        return False, "直接 TS 的远程 IPv4 和 HLS 状态必须均为 N/A"
     for key in expected:
         state = checks.get(key)
         if state == FAIL:
@@ -720,16 +720,19 @@ def _candidate_remote(candidate: dict[str, Any], locations: list[dict[str, Any]]
                       probe_limit: int, boundary: float, budget: dict[str, int],
                       stats: Counter[str]) -> dict[str, Any]:
     url = candidate["normalized_url"]
-    result: dict[str, Any] = {"checks": {"ipv4": INCOMPLETE, "http": INCOMPLETE,
-                                         "hls": NA if candidate.get("media_type") == "DIRECT_TS" else INCOMPLETE},
+    is_direct_ts = candidate.get("media_type") == "DIRECT_TS"
+    result: dict[str, Any] = {"checks": {"ipv4": NA if is_direct_ts else INCOMPLETE,
+                                         "http": INCOMPLETE,
+                                         "hls": NA if is_direct_ts else INCOMPLETE},
                               "measurements": [], "probe_results": {}, "overall": INCOMPLETE}
-    for phase, kind in (("ipv4", "ping"), ("http", "http")):
+    stats["attempted_candidates"] += 1
+    phases = (("http", "http"),) if is_direct_ts else (("ipv4", "ping"), ("http", "http"))
+    for phase, kind in phases:
         if budget["remaining"] <= 0:
             result["checks"][phase] = INCOMPLETE
             result.setdefault("reasons", []).append(f"额度不足，未创建 {phase} 测量")
             stats["quota_blocked_candidates"] += 1
             break
-        stats["attempted_candidates"] += 1 if phase == "ipv4" else 0
         expected = min(probe_limit, budget["remaining"])
         try:
             stage_locations = _limit_locations(locations, expected)
@@ -841,7 +844,8 @@ def _candidate_remote(candidate: dict[str, Any], locations: list[dict[str, Any]]
             hls_state, hls_evidence = _hls_aggregate(http_success, http_evidence)
             result["checks"]["hls"] = hls_state
             result["probe_results"]["hls"] = hls_evidence
-    applicable = [result["checks"]["ipv4"], result["checks"]["http"]]
+    applicable = [result["checks"]["http"]] if is_direct_ts else [
+        result["checks"]["ipv4"], result["checks"]["http"]]
     if candidate.get("media_type") == "HLS":
         applicable.append(result["checks"]["hls"])
     result["overall"] = FAIL if FAIL in applicable else PASS if all(x == PASS for x in applicable) else INCOMPLETE
