@@ -58,6 +58,50 @@ class GlobalpingAggregationTests(unittest.TestCase):
         self.assertEqual(globalping._master_child_url([record], "https://host.example/master.m3u8"),
                          "https://host.example/low/index.m3u8")
 
+    def test_hls_probe_error_without_target_failure_evidence_is_incomplete(self):
+        record = {
+            "probe": {"city": "A"},
+            "status": "error",
+            "status_code": 503,
+            "target_failure_evidence": False,
+        }
+        state, evidence = globalping._hls_aggregate([], [record])
+        self.assertEqual(state, globalping.INCOMPLETE)
+        self.assertEqual(evidence[0]["status"], globalping.INCOMPLETE)
+
+    def test_hls_confirmed_target_failure_is_fail(self):
+        record = {
+            "probe": {"city": "A"},
+            "status": "finished",
+            "status_code": 503,
+            "target_failure_evidence": True,
+        }
+        state, evidence = globalping._hls_aggregate([], [record])
+        self.assertEqual(state, globalping.FAIL)
+        self.assertEqual(evidence[0]["status"], globalping.INCOMPLETE)
+
+    def test_hls_valid_success_wins_over_other_probe_failure(self):
+        body = "#EXTM3U\n#EXTINF:6,\nsegment.ts\n"
+        success = {
+            "probe": {"city": "A"},
+            "status": "finished",
+            "status_code": 200,
+            "headers": {"content-length": str(len(body))},
+            "body": body,
+            "target_failure_evidence": False,
+        }
+        failure = {
+            "probe": {"city": "B"},
+            "status": "finished",
+            "status_code": 503,
+            "target_failure_evidence": True,
+        }
+        state, evidence = globalping._hls_aggregate(
+            [success], [success, failure]
+        )
+        self.assertEqual(state, globalping.PASS)
+        self.assertEqual(evidence[0]["status"], globalping.PASS)
+
 
 class GlobalpingDryRunTests(unittest.TestCase):
     def test_dry_run_never_calls_api_or_publishes(self):
