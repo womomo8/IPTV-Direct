@@ -581,8 +581,9 @@ class HttpStatusTests(unittest.TestCase):
         }
         self.assertFalse(gp._ipv4_ok(result))
 
+
     def test_missing_or_invalid_address_does_not_pass_ipv4(self):
-        for address in (None, "", "not-an-ip"):
+        for address in (None, "", "not-an-ip", "2001:db8::1"):
             with self.subTest(address=address):
                 result = {
                     "status": "finished",
@@ -590,6 +591,37 @@ class HttpStatusTests(unittest.TestCase):
                     "statusCode": 200,
                 }
                 self.assertFalse(gp._ipv4_ok(result))
+
+    def test_ipv4_aggregate_keeps_invalid_address_incomplete(self):
+        results = {
+            ("a",): result_item({
+                "status": "finished",
+                "resolvedAddress": "not-an-ip",
+                "statusCode": 200,
+            }),
+        }
+
+        self.assertEqual(
+            gp._aggregate_ipv4(results)["status"],
+            gp.INCOMPLETE,
+        )
+
+    def test_ipv4_aggregate_accepts_any_reachable_probe(self):
+        results = {
+            ("a",): result_item({
+                "status": "finished",
+                "resolvedAddress": "1.2.3.4",
+            }),
+            ("b",): result_item({
+                "status": "failed",
+                "failureSource": "internal",
+            }),
+        }
+
+        self.assertEqual(
+            gp._aggregate_ipv4(results)["status"],
+            gp.PASS,
+        )
 
     def test_http_aggregate_accepts_any_successful_ipv4_probe(self):
         results = {
@@ -617,6 +649,19 @@ class HttpStatusTests(unittest.TestCase):
         }
 
         self.assertEqual(gp._aggregate_http(results)["status"], gp.FAIL)
+
+    def test_http_error_without_valid_target_address_is_incomplete(self):
+        results = {
+            ("a",): result_item({
+                "status": "finished",
+                "statusCode": 403,
+            }),
+        }
+
+        self.assertEqual(
+            gp._aggregate_http(results)["status"],
+            gp.INCOMPLETE,
+        )
 
 
 class DirectTsFlowTests(unittest.TestCase):
