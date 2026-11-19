@@ -272,10 +272,8 @@ def _poll(measurement_id: str, boundary_seconds: float) -> tuple[dict[str, Any] 
     return latest, "轮询边界耗尽"
 
 def _probe_name(item: dict[str, Any]) -> dict[str, Any]:
-    probe = item.get("probe") or {}
-    return {"city": probe.get("city"), "country": probe.get("country"),
-            "network": probe.get("network"), "asn": probe.get("asn"),
-            "continent": probe.get("continent")}
+    probe = item.get("probe")
+    return dict(probe) if isinstance(probe, dict) else {}
 
 
 def _ping_aggregate(measurement: dict[str, Any] | None) -> tuple[str, list[dict[str, Any]]]:
@@ -971,9 +969,19 @@ def _candidate_remote(candidate: dict[str, Any], locations: list[dict[str, Any]]
                     else:
                         stats["incomplete_measurements"] += 1
                     child_state, child_evidence, child_success = _http_aggregate(child_measurement)
-                    parent_fingerprints = {_probe_fingerprint(item) for item in http_success}
-                    child_fingerprints = {_probe_fingerprint(item) for item in child_success}
-                    same_probe_set = bool(parent_fingerprints) and parent_fingerprints == child_fingerprints
+                           parent_fingerprints = [_probe_fingerprint(item) for item in http_evidence]
+                    child_fingerprints = [_probe_fingerprint(item) for item in child_evidence]
+                    probe_metadata_complete = (
+                        bool(parent_fingerprints)
+                        and all(
+                            isinstance(item.get("probe"), dict) and bool(item.get("probe"))
+                            for item in http_evidence + child_evidence
+                        )
+                    )
+                    same_probe_set = (
+                        probe_metadata_complete
+                        and parent_fingerprints == child_fingerprints
+                    )
                     if not same_probe_set:
                         result["checks"]["hls"] = INCOMPLETE
                         result.setdefault("reasons", []).append(
