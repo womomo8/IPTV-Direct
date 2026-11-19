@@ -834,6 +834,36 @@ class HlsFlowTests(unittest.TestCase):
         self.assertNotEqual(result["checks"]["hls"]["status"], gp.PASS)
 
 
+def local_pass_candidate(
+    identifier,
+    media_type="DIRECT_TS",
+    url=None,
+    channel="测试频道",
+):
+    """构造符合 Publisher 本地优选队列契约的候选。"""
+    if url is None:
+        suffix = ".m3u8" if media_type == "HLS" else ".ts"
+        url = f"http://example.test/{identifier}{suffix}"
+
+    checks = {
+        "ipv4": gp._status(gp.PASS, "本地 IPv4 检测通过"),
+        "http": gp._status(gp.PASS, "本地 HTTP 检测通过"),
+        "hls": gp._status(
+            gp.PASS if media_type == "HLS" else gp.NA,
+            "本地 HLS 检测结果",
+        ),
+        "ts": gp._status(gp.PASS, "本地 TS 检测通过"),
+    }
+
+    return {
+        "id": identifier,
+        "channel": channel,
+        "media_type": media_type,
+        "normalized_url": url,
+        "checks": checks,
+    }
+
+
 class StatusAndFlowTests(unittest.TestCase):
     def test_na_does_not_count_as_pass(self):
         checks = {
@@ -865,26 +895,123 @@ class StatusAndFlowTests(unittest.TestCase):
 
         self.assertEqual(gp._overall_status(checks), gp.FAIL)
 
-    def test_unknown_media_type_fails_without_api_calls(self):
+    def test_unknown_media_type_is_rejected_before_api_calls(self):
+        candidate = local_pass_candidate("unknown")
+        candidate["media_type"] = "UNKNOWN"
+
         with patch.object(gp, "read_limits") as limits:
             with patch.object(gp, "choose_probes") as probes:
-                output = gp.check_candidates(
-                    [{
-                        "name": "x",
-                        "media_type": "UNKNOWN",
-                        "normalized_url": "http://example.test/a",
-                    }],
+                with patch.object(gp, "_stage") as stage:
+                    with self.assertRaises(ValueError):
+                        gp.check_candidates(
+                            [candidate],
+                            {"max_probes": 3},
+                        )
+
+        limits.assert_not_called()
+        probes.assert_not_called()
+        stage.assert_not_called()
+
+    def test_missing_channel_is_rejected_before_api_calls(self):
+        candidate = local_pass_candidate("missing-channel")
+        del candidate["channel"]
+
+        with patch.object(gp, "read_limits") as limits:
+            with self.assertRaises(ValueError):
+                gp.check_candidates([candidate], {"max_probes": 3})
+
+        limits.assert_not_called()
+
+    def test_missing_local_checks_are_rejected_before_api_calls(self):
+        candidate = local_pass_candidate("missing-checks")
+        del candidate["checks"]
+
+        with patch.object(gp, "read_limits") as limits:
+            with self.assertRaises(ValueError):
+                gp.check_candidates([candidate], {"max_probes": 3})
+
+        limits.assert_not_called()
+
+    def test_local_failure_is_rejected_before_api_calls(self):
+        candidate = local_pass_candidate("local-failure")
+        candidate["checks"]["http"] = gp._status(
+            gp.FAIL,
+            "本地 HTTP 检测失败",
+        )
+
+        with patch.object(gp, "read_limits") as limits:
+            with patch.object(gp, "choose_probes") as probes:
+                with self.assertRaises(ValueError):
+                    gp.check_candidates(
+                        [candidate],
+                        {"max_probes": 3},
+                    )
+
+        limits.assert_not_called()
+        probes.assert_not_called()
+
+    def test_direct_ts_requires_local_hls_na(self):
+        candidate = local_pass_candidate("wrong-hls")
+        candidate["checks"]["hls"] = gp._status(
+            gp.PASS,
+            "错误的 HLS 状态",
+        )
+
+        with patch.object(gp, "read_limits") as limits:
+            with self.assertRaises(ValueError):
+                gp.check_candidates([candidate], {"max_probes": 3})
+
+        limits.assert_not_called()
+
+    def test_duplicate_channel_and_url_are_rejected(self):
+        first = local_pass_candidate(
+            "duplicate-1",
+            url="http://example.test/live.ts",
+        )
+        second = local_pass_candidate(
+            "duplicate-2",
+            url="http://example.test/live.ts",
+        )
+
+        with patch.object(gp, "read_limits") as limits:
+            with self.assertRaises(ValueError):
+                gp.check_candidates(
+                    [first, second],
                     {"max_probes": 3},
                 )
 
         limits.assert_not_called()
+
+    def test_noncanonical_url_is_rejected_before_api_calls(self):
+        candidate = local_pass_candidate(
+            "noncanonical",
+            url="HTTP://Example.test/live.ts",
+        )
+
+        with patch.object(gp, "read_limits") as limits:
+            with self.assertRaises(ValueError):
+                gp.check_candidates([candidate], {"max_probes": 3})
+
+        limits.assert_not_called()
+
+    def test_empty_candidate_queue_does_not_call_api(self):
+        with patch.object(gp, "read_limits") as limits:
+            with patch.object(gp, "choose_probes") as probes:
+                output = gp.check_candidates([], {"max_probes": 3})
+
+        self.assertEqual(output, [])
+        limits.assert_not_called()
         probes.assert_not_called()
-        self.assertEqual(output[0]["globalping"]["status"], gp.FAIL)
 
     def test_direct_ts_final_result_is_incomplete_not_pass(self):
+        candidate = local_pass_candidate("direct-final")
         response = finished_http("not a TS binary validation", 206)
 
-        with patch.object(gp, "read_limits", return_value=mocked_limits(10)):
+        with patch.object(
+            gp,
+            "read_limits",
+            return_value=mocked_limits(10),
+        ):
             with patch.object(
                 gp,
                 "choose_probes",
@@ -896,20 +1023,24 @@ class StatusAndFlowTests(unittest.TestCase):
                     return_value=("m1", measurement(result_item(response))),
                 ):
                     output = gp.check_candidates(
-                        [{
-                            "id": "c1",
-                            "media_type": "DIRECT_TS",
-                            "normalized_url": "http://example.test/live.ts",
-                        }],
+                        [candidate],
                         {"max_probes": 3},
                     )
 
         checks = output[0]["globalping"]["checks"]
         self.assertEqual(checks["hls"]["status"], gp.NA)
         self.assertEqual(checks["ts"]["status"], gp.INCOMPLETE)
-        self.assertEqual(output[0]["globalping"]["status"], gp.INCOMPLETE)
+        self.assertEqual(
+            output[0]["globalping"]["status"],
+            gp.INCOMPLETE,
+        )
 
     def test_hls_final_result_is_incomplete_when_ts_is_not_remote_validated(self):
+        candidate = local_pass_candidate(
+            "hls-final",
+            media_type="HLS",
+        )
+
         responses = [
             ("m1", measurement(result_item(
                 finished_http(MASTER_PLAYLIST, 200)
@@ -919,7 +1050,11 @@ class StatusAndFlowTests(unittest.TestCase):
             ))),
         ]
 
-        with patch.object(gp, "read_limits", return_value=mocked_limits(10)):
+        with patch.object(
+            gp,
+            "read_limits",
+            return_value=mocked_limits(10),
+        ):
             with patch.object(
                 gp,
                 "choose_probes",
@@ -927,11 +1062,7 @@ class StatusAndFlowTests(unittest.TestCase):
             ):
                 with patch.object(gp, "_stage", side_effect=responses):
                     output = gp.check_candidates(
-                        [{
-                            "id": "c1",
-                            "media_type": "HLS",
-                            "normalized_url": "http://example.test/master.m3u8",
-                        }],
+                        [candidate],
                         {"max_probes": 3},
                     )
 
@@ -942,6 +1073,10 @@ class StatusAndFlowTests(unittest.TestCase):
         self.assertEqual(len(result["measurements"]), 2)
 
     def test_hls_requires_two_stage_budget_not_three(self):
+        candidate = local_pass_candidate(
+            "hls-budget",
+            media_type="HLS",
+        )
         calls = []
 
         def fake_stage(url, locations, budget, headers=None):
@@ -956,7 +1091,11 @@ class StatusAndFlowTests(unittest.TestCase):
                 )),
             )
 
-        with patch.object(gp, "read_limits", return_value=mocked_limits(2)):
+        with patch.object(
+            gp,
+            "read_limits",
+            return_value=mocked_limits(2),
+        ):
             with patch.object(
                 gp,
                 "choose_probes",
@@ -964,20 +1103,31 @@ class StatusAndFlowTests(unittest.TestCase):
             ):
                 with patch.object(gp, "_stage", side_effect=fake_stage):
                     output = gp.check_candidates(
-                        [{
-                            "id": "hls",
-                            "media_type": "HLS",
-                            "normalized_url": "http://example.test/master.m3u8",
-                        }],
+                        [candidate],
                         {"max_probes": 3},
                     )
 
         self.assertEqual(len(calls), 2)
-        self.assertEqual(output[0]["globalping"]["checks"]["hls"]["status"], gp.PASS)
-        self.assertEqual(output[0]["globalping"]["checks"]["ts"]["status"], gp.INCOMPLETE)
+        self.assertEqual(
+            output[0]["globalping"]["checks"]["hls"]["status"],
+            gp.PASS,
+        )
+        self.assertEqual(
+            output[0]["globalping"]["checks"]["ts"]["status"],
+            gp.INCOMPLETE,
+        )
 
     def test_hls_is_skipped_when_two_stage_budget_is_unavailable(self):
-        with patch.object(gp, "read_limits", return_value=mocked_limits(1)):
+        candidate = local_pass_candidate(
+            "hls-no-budget",
+            media_type="HLS",
+        )
+
+        with patch.object(
+            gp,
+            "read_limits",
+            return_value=mocked_limits(1),
+        ):
             with patch.object(
                 gp,
                 "choose_probes",
@@ -985,11 +1135,7 @@ class StatusAndFlowTests(unittest.TestCase):
             ):
                 with patch.object(gp, "_stage") as stage:
                     output = gp.check_candidates(
-                        [{
-                            "id": "hls",
-                            "media_type": "HLS",
-                            "normalized_url": "http://example.test/master.m3u8",
-                        }],
+                        [candidate],
                         {"max_probes": 3},
                     )
 
@@ -998,43 +1144,58 @@ class StatusAndFlowTests(unittest.TestCase):
             output[0]["globalping"]["status"],
             gp.INCOMPLETE,
         )
-        self.assertIn("额度不足", output[0]["globalping"]["error"])
+        self.assertIn(
+            "额度不足",
+            output[0]["globalping"]["error"],
+        )
 
     def test_rate_limit_stops_later_candidate_measurements(self):
+        first = local_pass_candidate("rate-limit-1")
+        second = local_pass_candidate("rate-limit-2")
         calls = []
 
         def rate_limited(*args, **kwargs):
             calls.append(1)
-            raise gp.GlobalpingError("HTTP 429", rate_limited=True)
+            raise gp.GlobalpingError(
+                "HTTP 429",
+                rate_limited=True,
+            )
 
-        with patch.object(gp, "read_limits", return_value=mocked_limits(20)):
+        with patch.object(
+            gp,
+            "read_limits",
+            return_value=mocked_limits(20),
+        ):
             with patch.object(
                 gp,
                 "choose_probes",
                 return_value=one_probe_location(),
             ):
-                with patch.object(gp, "_stage", side_effect=rate_limited):
+                with patch.object(
+                    gp,
+                    "_stage",
+                    side_effect=rate_limited,
+                ):
                     output = gp.check_candidates(
-                        [
-                            {
-                                "id": "c1",
-                                "media_type": "DIRECT_TS",
-                                "normalized_url": "http://example.test/a.ts",
-                            },
-                            {
-                                "id": "c2",
-                                "media_type": "DIRECT_TS",
-                                "normalized_url": "http://example.test/b.ts",
-                            },
-                        ],
+                        [first, second],
                         {"max_probes": 3},
                     )
 
         self.assertEqual(len(calls), 1)
-        self.assertEqual(output[0]["globalping"]["status"], gp.INCOMPLETE)
-        self.assertEqual(output[1]["globalping"]["status"], gp.INCOMPLETE)
-        self.assertIn("停止", output[1]["globalping"]["error"])
+        self.assertEqual(
+            output[0]["globalping"]["status"],
+            gp.INCOMPLETE,
+        )
+        self.assertEqual(
+            output[1]["globalping"]["status"],
+            gp.INCOMPLETE,
+        )
+        self.assertIn(
+            "停止",
+            output[1]["globalping"]["error"],
+        )
 
 
 if __name__ == "__main__":
     unittest.main()
+
