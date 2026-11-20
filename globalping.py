@@ -27,7 +27,7 @@ LOG = logging.getLogger("iptv_direct.globalping")
 API = "https://api.globalping.io/v1"
 UA = "IPTV-Direct/3.9.5"
 PASS, FAIL, INCOMPLETE, NA = "PASS", "FAIL", "INCOMPLETE", "N/A"
-
+CREATION_UNCERTAIN = "CREATION_UNCERTAIN"
 
 class GlobalpingError(RuntimeError):
     def __init__(self, message: str, *, status: int | None = None,
@@ -467,6 +467,9 @@ def _remote_admission(candidate: dict[str, Any], remote: dict[str, Any]) -> tupl
     expected = ("ipv4", "http", "hls") if media == "HLS" else ("http",) if media == "DIRECT_TS" else None
     if expected is None:
         return False, "媒体类型无效"
+
+    if remote.get("creation_uncertain"):
+        return False, "测量创建结果不确定，不参与正式准入"
 
     checks = remote.get("checks")
     if not isinstance(checks, dict):
@@ -922,6 +925,7 @@ def _candidate_remote(candidate: dict[str, Any], locations: list[dict[str, Any]]
                 return result
             if exc.uncertain:
                 result["creation_uncertain"] = True
+                result["checks"][phase] = CREATION_UNCERTAIN
                 result.setdefault("reasons", []).append(f"{phase} 创建结果不确定")
                 stats["creation_uncertain_candidates"] += 1
                 return result
@@ -1023,18 +1027,21 @@ def _candidate_remote(candidate: dict[str, Any], locations: list[dict[str, Any]]
                     if exc.uncertain:
                         stats["creation_uncertain_candidates"] += 1
                         result["creation_uncertain"] = True
+                        result["checks"]["hls"] = CREATION_UNCERTAIN
                         result.setdefault("reasons", []).append("HLS 第二阶段创建结果不确定")
                     elif exc.no_probes:
                         budget["remaining"] += required_probe_slots
+                        result["checks"]["hls"] = INCOMPLETE
                         result.setdefault("reasons", []).append("HLS 第二阶段没有可用探针")
                     elif exc.status == 429:
                         budget["remaining"] += required_probe_slots
                         budget["stop_new"] = 1
+                        result["checks"]["hls"] = INCOMPLETE
                         result.setdefault("reasons", []).append("HLS 第二阶段触发 HTTP 429")
                     else:
                         budget["remaining"] += required_probe_slots
+                        result["checks"]["hls"] = INCOMPLETE
                         result.setdefault("reasons", []).append(f"HLS 第二阶段创建失败：{exc}")
-                    result["checks"]["hls"] = INCOMPLETE
         else:
             hls_state, hls_evidence = _hls_aggregate(http_success, http_evidence)
             result["checks"]["hls"] = hls_state
@@ -1043,9 +1050,16 @@ def _candidate_remote(candidate: dict[str, Any], locations: list[dict[str, Any]]
         result["checks"]["ipv4"], result["checks"]["http"]]
     if candidate.get("media_type") == "HLS":
         applicable.append(result["checks"]["hls"])
-    result["overall"] = FAIL if FAIL in applicable else PASS if all(x == PASS for x in applicable) else INCOMPLETE
-    return result
 
+    if result.get("creation_uncertain"):
+        result["overall"] = CREATION_UNCERTAIN
+    else:
+        result["overall"] = (
+            FAIL if FAIL in applicable
+            else PASS if all(x == PASS for x in applicable)
+            else INCOMPLETE
+        )
+    return result
 
 def run_globalping(queue: list[dict[str, Any]], settings: dict[str, Any],
                    channels: list[str], category_by_channel: dict[str, str] | None = None,
