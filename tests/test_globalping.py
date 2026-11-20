@@ -1408,7 +1408,6 @@ class PublisherHandoffVerificationTests(unittest.TestCase):
                 result,
             )
 
-
 class GlobalpingCreditsTests(unittest.TestCase):
     def _read_limits_with_response(self, response):
         with patch.object(
