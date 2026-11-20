@@ -478,7 +478,7 @@ class GlobalpingLoggingTests(unittest.TestCase):
             with patch.object(
                 globalping,
                 "_read_limits",
-                                return_value={
+                return_value={
                     "remaining": 10,
                     "rate_remaining": 10,
                     "credits_remaining": 0,
@@ -499,7 +499,7 @@ class GlobalpingLoggingTests(unittest.TestCase):
                 globalping,
                 "_publish",
                 return_value={"status": "blocked", "reason": "测试"},
-            ), self.assertLogs("globalping", level="WARNING") as captured:
+                        ), self.assertLogs("iptv_direct.globalping", level="WARNING") as captured:
                 result = globalping.run_globalping(
                     [candidate],
                     {"globalping": {"max_probes": 3}},
