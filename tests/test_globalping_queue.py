@@ -58,7 +58,8 @@ class GlobalpingQueueExecutionTests(unittest.TestCase):
             ),
         )
 
-    def test_remote_failure_continues_to_next_candidate_in_original_order(self):
+
+    def test_remote_failure_and_incomplete_continue_in_original_order(self):
         first = self._candidate(
             "CCTV-1", "https://a.example/first.ts"
         )
@@ -66,13 +67,17 @@ class GlobalpingQueueExecutionTests(unittest.TestCase):
             "CCTV-1", "https://a.example/second.ts"
         )
         third = self._candidate(
-            "CCTV-2", "https://b.example/third.ts"
+            "CCTV-1", "https://a.example/third.ts"
+        )
+        fourth = self._candidate(
+            "CCTV-2", "https://b.example/fourth.ts"
         )
 
         states = {
             first["normalized_url"]: globalping.FAIL,
-            second["normalized_url"]: globalping.PASS,
+            second["normalized_url"]: globalping.INCOMPLETE,
             third["normalized_url"]: globalping.PASS,
+            fourth["normalized_url"]: globalping.PASS,
         }
         calls = []
 
@@ -93,7 +98,7 @@ class GlobalpingQueueExecutionTests(unittest.TestCase):
                 side_effect=fake_candidate_remote,
             ):
                 result = globalping.run_globalping(
-                    [first, second, third],
+                    [first, second, third, fourth],
                     {
                         "globalping": {"max_probes": 3},
                         "selection": {"max_routes_per_channel": 2},
@@ -106,27 +111,39 @@ class GlobalpingQueueExecutionTests(unittest.TestCase):
             first["normalized_url"],
             second["normalized_url"],
             third["normalized_url"],
+            fourth["normalized_url"],
         ]
         self.assertEqual(calls, expected_order)
         self.assertEqual(
             [item["admission"] for item in result["results"]],
-            ["REJECTED_REMOTE", "ADMITTED", "ADMITTED"],
+            [
+                "REJECTED_REMOTE",
+                "REJECTED_REMOTE",
+                "ADMITTED",
+                "ADMITTED",
+            ],
+        )
+        self.assertEqual(
+            [item["priority_order"] for item in result["results"]],
+            [1, 2, 3, 4],
         )
         self.assertEqual(
             result["accepted"],
             [
                 {
                     "channel": "CCTV-1",
-                    "normalized_url": second["normalized_url"],
+                    "normalized_url": third["normalized_url"],
                 },
                 {
                     "channel": "CCTV-2",
-                    "normalized_url": third["normalized_url"],
+                    "normalized_url": fourth["normalized_url"],
                 },
             ],
         )
         self.assertEqual(result["stats"]["remote_fail_candidates"], 1)
+        self.assertEqual(result["stats"]["remote_incomplete_candidates"], 1)
         self.assertEqual(result["stats"]["admitted_candidates"], 2)
+
 
     def test_channel_cap_skips_measurement_but_other_channels_continue(self):
         first = self._candidate(
