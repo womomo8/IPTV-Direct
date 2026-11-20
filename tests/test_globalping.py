@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import globalping
+import main
 
 
 class GlobalpingAggregationTests(unittest.TestCase):
@@ -457,6 +458,8 @@ class DirectTSAndQuotaTests(unittest.TestCase):
         self.assertEqual(probes_count, 3)
         self.assertEqual(payload["locations"], "http-measurement")
         self.assertNotIn("limit", payload)
+
+
 class GlobalpingLoggingTests(unittest.TestCase):
     def test_candidate_failure_reason_stats_and_sensitive_url_logging(self):
         candidate = {
@@ -1215,8 +1218,6 @@ class PublicationProtectionAndRollbackTests(unittest.TestCase):
             )
             self.assertEqual(marker_data["status"], "unknown")
 
-import main
-
 
 class PublisherHandoffVerificationTests(unittest.TestCase):
     def _candidate(self, channel, url, source_id):
@@ -1519,6 +1520,8 @@ class GlobalpingCreditsTests(unittest.TestCase):
         ):
             with self.assertRaises(globalping.GlobalpingError):
                 globalping._read_limits()
+
+
 class SubscriptionCategoryTests(unittest.TestCase):
     def test_m3u_uses_configured_category_group_title(self):
         accepted = [
@@ -1547,6 +1550,7 @@ class SubscriptionCategoryTests(unittest.TestCase):
         self.assertIn("# 空分类", m3u)
         self.assertIn("CCTV-1,https://example.com/cctv1.m3u8", txt)
         self.assertIn("卫视一台,https://example.com/satellite.m3u8", txt)
+
 
 if __name__ == "__main__":
     unittest.main()
