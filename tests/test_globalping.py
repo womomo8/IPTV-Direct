@@ -457,7 +457,77 @@ class DirectTSAndQuotaTests(unittest.TestCase):
         self.assertEqual(probes_count, 3)
         self.assertEqual(payload["locations"], "http-measurement")
         self.assertNotIn("limit", payload)
+class GlobalpingLoggingTests(unittest.TestCase):
+    def test_candidate_failure_reason_stats_and_sensitive_url_logging(self):
+        candidate = {
+            "channel": "CCTV-1",
+            "media_type": "DIRECT_TS",
+            "normalized_url": "https://example.com/live.ts?token=secret",
+        }
 
+        def fake_candidate_remote(
+            candidate, locations, probe_limit, boundary, budget, stats
+        ):
+            stats["attempted_candidates"] += 1
+            return {
+                "overall": globalping.INCOMPLETE,
+                "reasons": ["测量轮询边界耗尽"],
+            }
+
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(
+                globalping,
+                "_read_limits",
+                return_value={"remaining": 10},
+            ), patch.object(
+                globalping,
+                "_probe_locations",
+                return_value=([{}], 1),
+            ), patch.object(
+                globalping,
+                "_candidate_remote",
+                side_effect=fake_candidate_remote,
+            ), patch.object(
+                globalping,
+                "_remote_admission",
+                return_value=(False, "远程检测未完成"),
+            ), patch.object(
+                globalping,
+                "_publish",
+                return_value={"status": "blocked", "reason": "测试"},
+            ), self.assertLogs("globalping", level="WARNING") as captured:
+                result = globalping.run_globalping(
+                    [candidate],
+                    {"globalping": {"max_probes": 3}},
+                    ["CCTV-1"],
+                    output_dir=directory,
+                )
+
+        log_text = "\n".join(captured.output)
+        self.assertIn("候选处理", log_text)
+        self.assertIn("CCTV-1", log_text)
+        self.assertIn("测量轮询边界耗尽", log_text)
+        self.assertNotIn("token=secret", log_text)
+
+        stats = result["stats"]
+        self.assertEqual(stats["attempted_candidates"], 1)
+        self.assertEqual(stats["remote_incomplete_candidates"], 1)
+
+        for key in (
+            "actual_measurements",
+            "actual_probe_slots",
+            "completed_measurements",
+            "incomplete_measurements",
+            "creation_uncertain_candidates",
+            "quota_blocked_candidates",
+            "channel_full_skipped",
+            "remote_pass_candidates",
+            "remote_fail_candidates",
+            "admitted_candidates",
+            "accepted_routes",
+            "accepted_channels",
+        ):
+            self.assertEqual(stats[key], 0, key)
 class BudgetBoundaryAndExceptionTests(unittest.TestCase):
     def _candidate(self):
         return {
