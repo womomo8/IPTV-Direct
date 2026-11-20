@@ -316,11 +316,10 @@ def inspect_source_structure(downloaded: dict[str, Any]) -> dict[str, Any]:
     return {"structure_valid": entries > 0, "structure_format": fmt,
             "structure_entry_count": entries}
 
-
 def iter_source_contents(manual_sources: list[dict[str, Any]],
                          automatic_sources: list[dict[str, Any]],
                          settings: dict[str, Any]) -> Iterator[dict[str, Any]]:
-    """按人工优先顺序采集；达到结构有效来源上限后停止发现新来源。"""
+    """按人工优先顺序采集；重复 URL 复用下载结果，但保留每个来源身份。"""
     detection, collection = settings["detection"], settings["collection"]
     timeout = detection["source_download_timeout_seconds"]
     max_bytes = detection["max_source_download_bytes"]
@@ -331,82 +330,139 @@ def iter_source_contents(manual_sources: list[dict[str, Any]],
     if not isinstance(max_valid, int) or isinstance(max_valid, bool) or max_valid < 1:
         raise ValueError("collection.max_valid_sources 必须是正整数")
 
-    seen, valid_count = set(), 0
+    valid_count = 0
+    download_cache: dict[str, tuple[dict[str, Any] | None, str | None]] = {}
 
-    def result(source, downloaded, errors):
+    def download_source(url: str):
+        """相同规范化 URL 只下载一次，后续来源复用内容但保留自己的 URL 身份。"""
+        key = _source_key(url)
+        cached = download_cache.get(key)
+
+        if cached is not None:
+            cached_download, cached_error = cached
+            if cached_download is None:
+                return None, [cached_error or "重复来源下载失败"], True
+            return {**cached_download, "url": url}, [], True
+
+        try:
+            downloaded = download_url(
+                url, timeout, max_bytes, redirects, max_hls
+            )
+        except SourceDownloadError as exc:
+            error = str(exc)
+            download_cache[key] = (None, error)
+            return None, [error], False
+
+        downloaded = {**downloaded, "url": url}
+        cache_entry = (downloaded, None)
+        download_cache[key] = cache_entry
+
+        final_key = _source_key(downloaded["final_url"])
+        download_cache.setdefault(final_key, cache_entry)
+
+        return downloaded, [], False
+
+    def result(source, downloaded, errors, download_reused=False):
         nonlocal valid_count
+
         structure = inspect_source_structure(downloaded) if downloaded is not None else {
-            "structure_valid": False, "structure_format": "unknown", "structure_entry_count": 0}
+            "structure_valid": False,
+            "structure_format": "unknown",
+            "structure_entry_count": 0,
+        }
+
         if structure["structure_valid"]:
             valid_count += 1
-        return {"source": dict(source), "download": downloaded, "errors": list(errors),
-                **structure, "valid_source_count": valid_count,
-                "valid_source_limit": max_valid}
 
+        return {
+            "source": dict(source),
+            "download": downloaded,
+            "errors": list(errors),
+            "download_reused": download_reused,
+            **structure,
+            "valid_source_count": valid_count,
+            "valid_source_limit": max_valid,
+        }
+
+    # 人工来源始终先于自动来源。
     for source in manual_sources:
         if valid_count >= max_valid:
             return
+
         if source.get("mode") == "inline":
             content = source.get("inline_content")
             if not isinstance(content, str) or not content.strip():
                 yield result(source, None, ["人工内嵌 M3U 内容为空或格式无效"])
                 continue
-            downloaded = {"url": source["url"], "final_url": source["url"],
-                          "content": content.encode("utf-8"),
-                          "content_type": "application/vnd.apple.mpegurl",
-                          "http_status": "LOCAL", "truncated_media_probe": False}
-            yield result(source, downloaded, [])
-            continue
-        url = source["url"]
-        key = _source_key(url)
-        if key in seen:
-            continue
-        seen.add(key)
-        try:
-            downloaded = download_url(url, timeout, max_bytes, redirects, max_hls)
-            seen.add(_source_key(downloaded["final_url"]))
-            yield result(source, downloaded, [])
-        except SourceDownloadError as exc:
-            yield result(source, None, [str(exc)])
 
+            downloaded = {
+                "url": source["url"],
+                "final_url": source["url"],
+                "content": content.encode("utf-8"),
+                "content_type": "application/vnd.apple.mpegurl",
+                "http_status": "LOCAL",
+                "truncated_media_probe": False,
+            }
+            yield result(source, downloaded, [])
+            continue
+
+        downloaded, errors, reused = download_source(source["url"])
+        yield result(source, downloaded, errors, reused)
+
+    # 自动来源严格按 sources.json 配置顺序处理。
     for source in automatic_sources:
         if valid_count >= max_valid:
             return
-        url, key = source["url"], _source_key(source["url"])
-        if key in seen:
+
+        downloaded, errors, reused = download_source(source["url"])
+
+        if downloaded is None:
+            yield result(source, None, errors, reused)
             continue
-        seen.add(key)
-        try:
-            index_download = download_url(url, timeout, max_bytes, redirects, max_hls)
-            seen.add(_source_key(index_download["final_url"]))
-        except SourceDownloadError as exc:
-            yield result(source, None, [str(exc)])
-            continue
+
         if source["mode"] == "playlist":
-            yield result(source, index_download, [])
+            yield result(source, downloaded, [], reused)
             continue
+
+        # index 只负责提取明确的播放列表链接，不递归。
         try:
-            links = extract_playlist_links(index_download["content"],
-                                           index_download["final_url"], max_links)
+            links = extract_playlist_links(
+                downloaded["content"],
+                downloaded["final_url"],
+                max_links,
+            )
         except (ValueError, TypeError) as exc:
-            yield result(source, None, [f"索引页面解析失败：{exc}"])
+            yield result(source, None, [f"索引页面解析失败：{exc}"], reused)
             continue
+
         if not links:
-            yield result(source, None, ["索引页面没有发现符合要求的播放列表链接"])
+            yield result(
+                source,
+                None,
+                ["索引页面没有发现符合要求的播放列表链接"],
+                reused,
+            )
             continue
+
         for link_index, playlist_url in enumerate(links, 1):
             if valid_count >= max_valid:
                 return
-            key = _source_key(playlist_url)
-            if key in seen:
-                continue
-            seen.add(key)
-            discovered = {**source, "url": playlist_url, "mode": "playlist",
-                          "discovered_from": index_download["final_url"],
-                          "discovered_order": link_index}
-            try:
-                downloaded = download_url(playlist_url, timeout, max_bytes, redirects, max_hls)
-                seen.add(_source_key(downloaded["final_url"]))
-                yield result(discovered, downloaded, [])
-            except SourceDownloadError as exc:
-                yield result(discovered, None, [str(exc)])
+
+            discovered = {
+                **source,
+                "url": playlist_url,
+                "mode": "playlist",
+                "discovered_from": downloaded["final_url"],
+                "discovered_order": link_index,
+            }
+
+            playlist_download, playlist_errors, playlist_reused = (
+                download_source(playlist_url)
+            )
+
+            yield result(
+                discovered,
+                playlist_download,
+                playlist_errors,
+                playlist_reused,
+            )
