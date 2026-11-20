@@ -459,6 +459,32 @@ class DirectTSAndQuotaTests(unittest.TestCase):
         self.assertEqual(payload["locations"], "http-measurement")
         self.assertNotIn("limit", payload)
 
+    def test_measurement_request_ip_version_and_location_limits(self):
+        locations = [{
+            "country": "CN",
+            "asn": 9808,
+            "tags": ["eyeball-network"],
+            "limit": 2,
+        }]
+
+        for url, expect_ip_version in (
+            ("https://example.com/live.m3u8", True),
+            ("https://192.0.2.1/live.ts", False),
+        ):
+            with self.subTest(url=url), patch.object(
+                globalping,
+                "_api_request",
+                return_value=(202, {"id": "measurement-1", "probesCount": 2}, {}),
+            ) as request:
+                globalping._create_measurement("http", url, locations, 2)
+
+                payload = request.call_args.args[2]
+                options = payload["measurementOptions"]
+
+                self.assertEqual("ipVersion" in options, expect_ip_version)
+                self.assertEqual(payload["locations"], locations)
+                self.assertNotIn("limit", payload)
+                self.assertEqual(payload["locations"][0]["limit"], 2)
 
 class GlobalpingLoggingTests(unittest.TestCase):
     def test_candidate_failure_reason_stats_and_sensitive_url_logging(self):
