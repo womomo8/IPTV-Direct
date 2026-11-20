@@ -1142,7 +1142,7 @@ def run_globalping(queue: list[dict[str, Any]], settings: dict[str, Any],
     stats["accepted_channels"] = len(channel_counts)
     publication = _publish(accepted, output_dir, channels,
                            category_by_channel or {}, category_order or [])
-        for key in (
+    for key in (
         "local_pass_candidates",
         "publisher_queue_candidates",
         "remote_eligible_candidates",
