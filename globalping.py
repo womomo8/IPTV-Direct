@@ -8,6 +8,7 @@ collector/normalizer/checker/publisher。远程检测失败或证据不足时保
 from __future__ import annotations
 
 import gzip
+import ipaddress
 import json
 import logging
 import os
@@ -181,7 +182,6 @@ def _limit_locations(locations: list[dict[str, Any]], limit: int) -> list[dict[s
             remaining -= take
     return selected
 
-
 def _create_measurement(kind: str, url: str, locations: list[dict[str, Any]],
                         probe_limit: int, previous_measurement: str | None = None) -> tuple[str, int]:
     parts = _target(url)
@@ -190,19 +190,48 @@ def _create_measurement(kind: str, url: str, locations: list[dict[str, Any]],
         selected_locations: Any = previous_measurement
     else:
         selected_locations = locations
+
+    try:
+        ipaddress.ip_address(parts["target"])
+        ip_version_options = {}
+    except ValueError:
+        ip_version_options = {"ipVersion": 4}
+
     if kind == "ping":
-        payload = {"type": "ping", "target": parts["target"],
-                   "locations": selected_locations,
-                   "limit": None if previous_measurement else probe_limit,
-                   "measurementOptions": {"packets": 2, "ipVersion": 4}}
+        payload = {
+            "type": "ping",
+            "target": parts["target"],
+            "locations": selected_locations,
+            "measurementOptions": {"packets": 2, **ip_version_options},
+        }
     else:
-        payload = {"type": "http", "target": parts["target"],
-                   "locations": selected_locations,
-                   "limit": None if previous_measurement else probe_limit,
-                   "measurementOptions": {
-                       "protocol": parts["protocol"], "port": parts["port"], "ipVersion": 4,
-                       "request": {"method": "GET", "path": parts["path"], "headers": {"Accept-Encoding": "identity"}},
-                   }}
+        payload = {
+            "type": "http",
+            "target": parts["target"],
+            "locations": selected_locations,
+            "measurementOptions": {
+                "protocol": parts["protocol"],
+                "port": parts["port"],
+                **ip_version_options,
+                "request": {
+                    "method": "GET",
+                    "path": parts["path"],
+                    "headers": {"Accept-Encoding": "identity"},
+                },
+            },
+        }
+
+    # 创建请求超时/断连是结果不确定，绝不自动重试 POST。
+    status, body, _ = _api_request(f"{API}/measurements", "POST", payload, timeout=20)
+    measurement_id = body.get("id")
+    if status != 202 or not isinstance(measurement_id, str) or not measurement_id:
+        raise GlobalpingError("Globalping 创建测量未返回有效测量 ID")
+    try:
+        actual_probes = int(body.get("probesCount", probe_limit))
+    except (TypeError, ValueError):
+        actual_probes = probe_limit
+    return measurement_id, max(0, actual_probes)
+
     payload = {key: value for key, value in payload.items() if value is not None}
     # 创建请求超时/断连是结果不确定，绝不自动重试 POST。
     status, body, _ = _api_request(f"{API}/measurements", "POST", payload, timeout=20)
