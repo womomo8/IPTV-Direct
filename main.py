@@ -378,146 +378,8 @@ def run_pipeline(mode: str = "formal", root: Path = ROOT) -> dict[str, Any]:
 
     # 1. collector：只采集来源内容，返回 main。
     prepared = collector.prepare_sources(manual_text, sources_config)
-    source_results = list(collector.iter_source_contents(
-        prepared["manual_sources"], prepared["automatic_sources"], settings
-    ))
-    valid_source_count = sum(
-        bool(item.get("structure_valid")) for item in source_results
-    )
-    collection_errors = list(prepared.get("errors", []))
 
-    for error in prepared.get("errors", []):
-        LOG.warning("来源配置异常：%s", _safe_log_text(error))
-
-    for record in source_results:
-        source = record.get("source") or {}
-        downloaded = record.get("download")
-        if not isinstance(downloaded, dict):
-            downloaded = {}
-
-        source_name = _source_label(source)
-        host = _safe_log_host(
-            downloaded.get("final_url") or source.get("url")
-        )
-        content = downloaded.get("content", b"")
-        content_bytes = (
-            len(content)
-            if isinstance(content, (bytes, bytearray, str))
-            else 0
-        )
-
-        LOG.info(
-            "来源采集结果：来源=%s，主机=%s，HTTP状态=%s，"
-            "内容字节=%d，结构有效=%s，格式=%s，条目数=%d",
-            source_name,
-            host,
-            downloaded.get("http_status", "未下载"),
-            content_bytes,
-            bool(record.get("structure_valid")),
-            record.get("structure_format", "unknown"),
-            record.get("structure_entry_count", 0),
-        )
-
-        for error in record.get("errors", []):
-            safe_error = _safe_log_text(error)
-            collection_errors.append(
-                f"{source_name} ({host}): {safe_error}"
-            )
-            LOG.warning(
-                "来源采集异常：来源=%s，主机=%s，原因=%s",
-                source_name,
-                host,
-                safe_error,
-            )
-
-    LOG.info(
-        "采集汇总：人工来源=%d，自动来源=%d，"
-        "实际采集记录=%d，结构有效来源=%d，来源错误=%d",
-        len(prepared["manual_sources"]),
-        len(prepared["automatic_sources"]),
-        len(source_results),
-        valid_source_count,
-        len(collection_errors),
-    )
-
-    # 2. main 接收采集结果，再把每个有效来源交给 normalizer。
-    collection = settings["collection"]
-    detection = settings["detection"]
-    aliases = settings.get("aliases", {})
-    candidates: list[dict[str, Any]] = []
-    seen_urls: set[str] = set()
-    source_history_by_url: dict[str, list[dict[str, Any]]] = {}
-    channel_valid_sources = 0
-    normalization_errors: list[str] = []
-    duplicate_count = invalid_count = 0
-
-    for record in source_results:
-        downloaded = record.get("download")
-        if not record.get("structure_valid") or not isinstance(downloaded, dict):
-            continue
-        source = dict(record.get("source") or {})
-        source["final_url"] = downloaded.get("final_url") or source.get("url", "")
-        source["content_type"] = downloaded.get("content_type", "")
-        remaining = collection["max_candidates_total"] - len(candidates)
-        if remaining <= 0:
-            LOG.info("达到整轮候选上限，停止发现新候选")
-            break
-        normalized = normalizer.normalize_source_content(
-            downloaded.get("content", b""),
-            source,
-            channels,
-            collection["max_candidates_per_source"],
-            seen_urls,
-            content_type=downloaded.get("content_type", ""),
-            max_hls_manifest_bytes=detection["max_hls_manifest_bytes"],
-            aliases=aliases,
-            max_candidates_remaining=remaining,
-            source_history_by_url=source_history_by_url,
-        )
-
-        source_candidates = normalized.get("candidates", [])
-        source_errors = normalized.get("errors", [])
-
-        candidates.extend(source_candidates)
-        channel_valid_sources += int(
-            normalized.get("channel_valid_source_count", 0)
-        )
-        duplicate_count += int(normalized.get("duplicate_candidates", 0))
-        invalid_count += int(normalized.get("invalid_candidates", 0))
-
-        source_name = _source_label(source)
-        source_host = _safe_log_host(
-            downloaded.get("final_url") or source.get("url")
-        )
-
-        LOG.info(
-            "来源解析结果：来源=%s，主机=%s，"
-            "匹配频道候选=%d，匹配目标候选=%d，保留候选=%d，"
-            "重复=%d，无效 URL=%d，解析错误=%d，"
-            "单来源上限=%s，本轮上限=%s",
-            source_name,
-            source_host,
-            normalized.get("matched_channel_candidates", 0),
-            normalized.get("matched_target_candidates", 0),
-            len(source_candidates),
-            normalized.get("duplicate_candidates", 0),
-            normalized.get("invalid_candidates", 0),
-            len(source_errors),
-            bool(normalized.get("limit_reached")),
-            bool(normalized.get("total_limit_reached")),
-        )
-
-        for error in source_errors:
-            safe_error = _safe_log_text(error)
-            normalization_errors.append(
-                f"{source_name} ({source_host}): {safe_error}"
-            )
-            LOG.warning(
-                "来源解析异常：来源=%s，主机=%s，原因=%s",
-                source_name,
-                source_host,
-                safe_error,
-            )
+            "source_records": source_record_count,
 
     _assert_unique_ordered(candidates, "normalizer")
     LOG.info(
@@ -722,7 +584,7 @@ def run_pipeline(mode: str = "formal", root: Path = ROOT) -> dict[str, Any]:
     return {
         "mode": mode,
         "collection": {
-            "source_records": len(source_results),
+                        "source_records": source_record_count,
             "valid_sources": valid_source_count,
             "channel_valid_sources": channel_valid_sources,
             "candidates": len(candidates),
