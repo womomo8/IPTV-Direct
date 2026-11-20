@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """IPTV-Direct 全链路唯一调度入口。
@@ -10,10 +11,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import collector
 import checker
@@ -23,6 +26,51 @@ import publisher
 
 ROOT = Path(__file__).resolve().parent
 LOG = logging.getLogger("iptv_direct")
+
+
+def _safe_log_text(value: Any) -> str:
+    """日志脱敏：隐藏完整 URL、Bearer Token 和敏感参数。"""
+    text = str(value or "").replace("\r", " ").replace("\n", " ")
+
+    def hide_url(match: re.Match[str]) -> str:
+        raw = match.group(0)
+        suffix = ""
+        while raw and raw[-1] in ".,;)]}":
+            suffix = raw[-1] + suffix
+            raw = raw[:-1]
+        try:
+            host = urlsplit(raw).hostname or "URL"
+        except ValueError:
+            host = "URL"
+        return host + suffix
+
+    text = re.sub(r"https?://[^\s<>\"']+", hide_url, text, flags=re.I)
+    text = re.sub(
+        r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+",
+        "Bearer [已隐藏]",
+        text,
+    )
+    text = re.sub(
+        r"(?i)\b(token|api[_-]?key|authorization)(\s*[:=]\s*)[^\s,;]+",
+        r"\1\2[已隐藏]",
+        text,
+    )
+    return text[:500]
+
+
+def _safe_log_host(value: Any) -> str:
+    """只记录主机名，不记录完整 URL 和参数。"""
+    try:
+        return urlsplit(str(value or "")).hostname or "无法识别"
+    except ValueError:
+        return "无法识别"
+
+
+def _source_label(source: dict[str, Any]) -> str:
+    """优先使用来源名称或 ID，不输出来源 URL。"""
+    return _safe_log_text(
+        source.get("name") or source.get("id") or "未命名来源"
+    )
 
 
 class PipelineError(RuntimeError):
@@ -81,6 +129,7 @@ def _verify_preserved(input_items: list[dict[str, Any]], output_items: list[dict
     after = _assert_unique_ordered(output_items, f"{stage} 输出")
     if before != after:
         raise PipelineError(f"{stage} 未按输入顺序完整返回候选，已阻止进入下一阶段")
+
 
 def _verify_publisher_result(
     checked: list[dict[str, Any]],
@@ -166,6 +215,7 @@ def _verify_publisher_result(
 
     return queue
 
+
 def run_pipeline(mode: str = "formal", root: Path = ROOT) -> dict[str, Any]:
     if mode not in {"formal", "test"}:
         raise ValueError("main.py 只支持 formal/test；诊断由独立诊断脚本执行")
@@ -181,12 +231,63 @@ def run_pipeline(mode: str = "formal", root: Path = ROOT) -> dict[str, Any]:
     source_results = list(collector.iter_source_contents(
         prepared["manual_sources"], prepared["automatic_sources"], settings
     ))
-    valid_source_count = sum(bool(item.get("structure_valid")) for item in source_results)
+    valid_source_count = sum(
+        bool(item.get("structure_valid")) for item in source_results
+    )
+    collection_errors = list(prepared.get("errors", []))
+
+    for error in prepared.get("errors", []):
+        LOG.warning("来源配置异常：%s", _safe_log_text(error))
+
+    for record in source_results:
+        source = record.get("source") or {}
+        downloaded = record.get("download")
+        if not isinstance(downloaded, dict):
+            downloaded = {}
+
+        source_name = _source_label(source)
+        host = _safe_log_host(
+            downloaded.get("final_url") or source.get("url")
+        )
+        content = downloaded.get("content", b"")
+        content_bytes = (
+            len(content)
+            if isinstance(content, (bytes, bytearray, str))
+            else 0
+        )
+
+        LOG.info(
+            "来源采集结果：来源=%s，主机=%s，HTTP状态=%s，"
+            "内容字节=%d，结构有效=%s，格式=%s，条目数=%d",
+            source_name,
+            host,
+            downloaded.get("http_status", "未下载"),
+            content_bytes,
+            bool(record.get("structure_valid")),
+            record.get("structure_format", "unknown"),
+            record.get("structure_entry_count", 0),
+        )
+
+        for error in record.get("errors", []):
+            safe_error = _safe_log_text(error)
+            collection_errors.append(
+                f"{source_name} ({host}): {safe_error}"
+            )
+            LOG.warning(
+                "来源采集异常：来源=%s，主机=%s，原因=%s",
+                source_name,
+                host,
+                safe_error,
+            )
+
     LOG.info(
-        "采集完成：人工来源=%d，自动来源=%d，结构有效来源=%d，来源错误=%d",
-        len(prepared["manual_sources"]), len(prepared["automatic_sources"]),
-        valid_source_count, len(prepared.get("errors", [])) +
-        sum(len(item.get("errors", [])) for item in source_results),
+        "采集汇总：人工来源=%d，自动来源=%d，"
+        "实际采集记录=%d，结构有效来源=%d，来源错误=%d",
+        len(prepared["manual_sources"]),
+        len(prepared["automatic_sources"]),
+        len(source_results),
+        valid_source_count,
+        len(collection_errors),
     )
 
     # 2. main 接收采集结果，再把每个有效来源交给 normalizer。
@@ -223,16 +324,59 @@ def run_pipeline(mode: str = "formal", root: Path = ROOT) -> dict[str, Any]:
             max_candidates_remaining=remaining,
             source_history_by_url=source_history_by_url,
         )
-        candidates.extend(normalized.get("candidates", []))
-        channel_valid_sources += int(normalized.get("channel_valid_source_count", 0))
+
+        source_candidates = normalized.get("candidates", [])
+        source_errors = normalized.get("errors", [])
+
+        candidates.extend(source_candidates)
+        channel_valid_sources += int(
+            normalized.get("channel_valid_source_count", 0)
+        )
         duplicate_count += int(normalized.get("duplicate_candidates", 0))
         invalid_count += int(normalized.get("invalid_candidates", 0))
-        normalization_errors.extend(normalized.get("errors", []))
+
+        source_name = _source_label(source)
+        source_host = _safe_log_host(
+            downloaded.get("final_url") or source.get("url")
+        )
+
+        LOG.info(
+            "来源解析结果：来源=%s，主机=%s，"
+            "匹配频道候选=%d，匹配目标候选=%d，保留候选=%d，"
+            "重复=%d，无效 URL=%d，解析错误=%d，"
+            "单来源上限=%s，本轮上限=%s",
+            source_name,
+            source_host,
+            normalized.get("matched_channel_candidates", 0),
+            normalized.get("matched_target_candidates", 0),
+            len(source_candidates),
+            normalized.get("duplicate_candidates", 0),
+            normalized.get("invalid_candidates", 0),
+            len(source_errors),
+            bool(normalized.get("limit_reached")),
+            bool(normalized.get("total_limit_reached")),
+        )
+
+        for error in source_errors:
+            safe_error = _safe_log_text(error)
+            normalization_errors.append(
+                f"{source_name} ({source_host}): {safe_error}"
+            )
+            LOG.warning(
+                "来源解析异常：来源=%s，主机=%s，原因=%s",
+                source_name,
+                source_host,
+                safe_error,
+            )
 
     _assert_unique_ordered(candidates, "normalizer")
     LOG.info(
-        "解析完成：候选=%d，频道有效来源=%d，重复=%d，无效 URL=%d，解析错误=%d",
-        len(candidates), channel_valid_sources, duplicate_count, invalid_count,
+        "解析汇总：候选=%d，频道有效来源=%d，"
+        "重复=%d，无效 URL=%d，解析错误=%d",
+        len(candidates),
+        channel_valid_sources,
+        duplicate_count,
+        invalid_count,
         len(normalization_errors),
     )
 
@@ -241,14 +385,103 @@ def run_pipeline(mode: str = "formal", root: Path = ROOT) -> dict[str, Any]:
     if not isinstance(checked, list) or len(checked) != len(candidates):
         raise PipelineError("checker 返回数量与候选池不一致")
     _verify_preserved(candidates, checked, "checker")
-    local_pass_count = sum(checker.local_checks_passed(item) for item in checked)
-    LOG.info("本地检测完成：输入=%d，本地适用项目全部 PASS=%d", len(checked), local_pass_count)
+    local_pass_count = sum(
+        checker.local_checks_passed(item) for item in checked
+    )
+
+    for item in checked:
+        checks = item.get("checks", {})
+        if not isinstance(checks, dict):
+            checks = {}
+
+        check_summary = {}
+        for name in ("ipv4", "http", "hls", "ts"):
+            check = checks.get(name, {})
+            if not isinstance(check, dict):
+                check = {}
+            check_summary[name] = {
+                "status": check.get("status", "缺少结果"),
+                "reason": _safe_log_text(
+                    check.get("reason", "未提供原因")
+                ),
+            }
+
+        LOG.info(
+            "本地检测明细：频道=%s，主机=%s，媒体类型=%s，"
+            "全部适用项目通过=%s，检测结果=%s",
+            _safe_log_text(item.get("channel", "未知频道")),
+            _safe_log_host(item.get("normalized_url")),
+            item.get("media_type", "UNKNOWN"),
+            checker.local_checks_passed(item),
+            json.dumps(
+                check_summary,
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+        )
+
+    LOG.info(
+        "本地检测汇总：输入=%d，本地适用项目全部 PASS=%d，"
+        "未全部 PASS=%d",
+        len(checked),
+        local_pass_count,
+        len(checked) - local_pass_count,
+    )
 
     # 4. publisher：唯一负责质量比较、分组和完整优选队列。
     prioritized = publisher.prioritize_candidates_for_globalping(checked, list(channels))
     queue = _verify_publisher_result(checked, prioritized)
-    LOG.info("publisher 完成：优选队列=%d，排除=%d；main 不调整其顺序",
-             len(queue), len(prioritized.get("excluded", [])))
+
+    for item in prioritized.get("ranking", []):
+        identity = item.get("identity", ())
+        channel = (
+            _safe_log_text(identity[0])
+            if isinstance(identity, (tuple, list)) and identity
+            else "未知频道"
+        )
+        group = item.get("group", {})
+        if not isinstance(group, dict):
+            group = {}
+
+        LOG.info(
+            "优选排序：顺序=%s，原始位置=%s，频道=%s，媒体类型=%s，"
+            "本地状态=%s，质量排序依据=%s",
+            item.get("priority_order"),
+            item.get("original_index"),
+            channel,
+            group.get("media_type", "未知"),
+            json.dumps(
+                item.get("local_status", {}),
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            json.dumps(
+                item.get("quality_key", {}),
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            ),
+        )
+
+    for item in prioritized.get("excluded", []):
+        candidate = item.get("candidate", {})
+        if not isinstance(candidate, dict):
+            candidate = {}
+
+        LOG.warning(
+            "本地优选排除：频道=%s，媒体类型=%s，原因=%s",
+            _safe_log_text(candidate.get("channel", "未知频道")),
+            candidate.get("media_type", "未知"),
+            _safe_log_text(item.get("reason", "未提供原因")),
+        )
+
+    LOG.info(
+        "publisher 汇总：输入=%d，优选队列=%d，排除=%d；"
+        "main 保留 publisher 原始顺序",
+        len(checked),
+        len(queue),
+        len(prioritized.get("excluded", [])),
+    )
 
     # 5. globalping：只接收 main 核对后的完整优选队列。
     remote_result = globalping.run_globalping(
@@ -271,8 +504,78 @@ def run_pipeline(mode: str = "formal", root: Path = ROOT) -> dict[str, Any]:
 
     stats = remote_result.get("stats", {})
     if isinstance(stats, dict):
-        LOG.info("远程统计：%s", json.dumps(stats, ensure_ascii=False, sort_keys=True))
-    LOG.info("运行结束：模式=%s，发布状态=%s", mode, remote_result.get("publication", {}).get("status", "未发布"))
+        LOG.info(
+            "Globalping 统计：%s",
+            json.dumps(stats, ensure_ascii=False, sort_keys=True),
+        )
+
+    for record in remote_result.get("results", []):
+        if not isinstance(record, dict):
+            LOG.warning("Globalping 返回了无效候选记录")
+            continue
+
+        identity = record.get("identity", [])
+        channel = (
+            _safe_log_text(identity[0])
+            if isinstance(identity, (list, tuple)) and identity
+            else "未知频道"
+        )
+
+        remote = record.get("remote", {})
+        if not isinstance(remote, dict):
+            remote = {}
+
+        measurements = remote.get("measurements", [])
+        measurement_summary = [
+            {
+                "phase": item.get("phase"),
+                "id": item.get("id"),
+                "probes_count": item.get("probes_count"),
+            }
+            for item in measurements
+            if isinstance(item, dict)
+        ] if isinstance(measurements, list) else []
+
+        remote_reasons = remote.get("reasons", [])
+        if not isinstance(remote_reasons, list):
+            remote_reasons = []
+
+        reason = _safe_log_text(record.get("reason", "无"))
+        if remote_reasons:
+            reason += "；" + _safe_log_text("；".join(
+                str(item) for item in remote_reasons
+            ))
+
+        LOG.info(
+            "远程候选结果：优先级=%s，频道=%s，准入=%s，"
+            "总体状态=%s，检测状态=%s，测量阶段=%s，原因=%s",
+            record.get("priority_order"),
+            channel,
+            record.get("admission", "NOT_RUN"),
+            remote.get("overall", "NOT_RUN"),
+            json.dumps(
+                remote.get("checks", {}),
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            json.dumps(
+                measurement_summary,
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            reason,
+        )
+
+    publication = remote_result.get("publication", {})
+    if not isinstance(publication, dict):
+        publication = {}
+
+    LOG.info(
+        "运行结束：模式=%s，发布状态=%s，原因=%s",
+        mode,
+        publication.get("status", "未发布"),
+        _safe_log_text(publication.get("reason", "未提供")),
+    )
 
     return {
         "mode": mode,
@@ -289,7 +592,7 @@ def run_pipeline(mode: str = "formal", root: Path = ROOT) -> dict[str, Any]:
         },
         "globalping": remote_result,
         "errors": {
-            "collection": prepared.get("errors", []),
+            "collection": collection_errors,
             "normalization": normalization_errors,
         },
     }
@@ -308,11 +611,18 @@ def main(argv: list[str] | None = None) -> int:
         result = run_pipeline(args.mode)
         publication = result.get("globalping", {}).get("publication", {})
         if args.mode == "formal" and publication.get("status") not in {"published", "unchanged"}:
-            LOG.error("正式流程未完成发布：%s", publication.get("reason", "未知原因"))
+            LOG.error(
+                "正式流程未完成发布：%s",
+                _safe_log_text(publication.get("reason", "未知原因")),
+            )
             return 1
         return 0
     except Exception as exc:
-        LOG.error("IPTV-Direct 流程失败，异常类型：%s", type(exc).__name__)
+        LOG.error(
+            "IPTV-Direct 流程失败：异常类型=%s，原因=%s",
+            type(exc).__name__,
+            _safe_log_text(exc),
+        )
         return 1
 
 
