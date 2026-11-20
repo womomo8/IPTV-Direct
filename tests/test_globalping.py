@@ -1519,7 +1519,34 @@ class GlobalpingCreditsTests(unittest.TestCase):
         ):
             with self.assertRaises(globalping.GlobalpingError):
                 globalping._read_limits()
+class SubscriptionCategoryTests(unittest.TestCase):
+    def test_m3u_uses_configured_category_group_title(self):
+        accepted = [
+            {
+                "channel": "CCTV-1",
+                "normalized_url": "https://example.com/cctv1.m3u8",
+            },
+            {
+                "channel": "卫视一台",
+                "normalized_url": "https://example.com/satellite.m3u8",
+            },
+        ]
+        channels = ["CCTV-1", "卫视一台"]
+        category_by_channel = {
+            "CCTV-1": "央视频道",
+            "卫视一台": "卫视频道",
+        }
+        category_order = ["央视频道", "卫视频道", "空分类"]
 
+        m3u, txt = globalping._format_subscriptions(
+            accepted, channels, category_by_channel, category_order
+        )
+
+        self.assertIn('group-title="央视频道"', m3u)
+        self.assertIn('group-title="卫视频道"', m3u)
+        self.assertIn("# 空分类", m3u)
+        self.assertIn("CCTV-1,https://example.com/cctv1.m3u8", txt)
+        self.assertIn("卫视一台,https://example.com/satellite.m3u8", txt)
 
 if __name__ == "__main__":
     unittest.main()
