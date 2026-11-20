@@ -324,7 +324,10 @@ def _verify_globalping_result(
             )
 
         admission = record.get("admission")
-        if admission not in allowed_admissions:
+        if (
+            not isinstance(admission, str)
+            or admission not in allowed_admissions
+        ):
             raise PipelineError(
                 f"globalping 候选结果第 {index + 1} 条准入状态无效"
             )
