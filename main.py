@@ -497,10 +497,142 @@ def run_pipeline(mode: str = "formal", root: Path = ROOT) -> dict[str, Any]:
     if not isinstance(remote_result, dict):
         raise PipelineError("globalping 返回值不是完整结果对象")
 
+    # Globalping 必须原样返回 main 交付的完整队列身份和顺序。
+    expected_queue = [
+        (item[0], item[1])
+        for item in _assert_unique_ordered(queue, "globalping 输入")
+    ]
     returned_queue = remote_result.get("input_queue_identities")
-    expected_queue = [(item[0], item[1]) for item in _assert_unique_ordered(queue, "globalping 输入")]
-    if returned_queue is not None and [tuple(x) for x in returned_queue] != expected_queue:
-        raise PipelineError("globalping 返回的输入队列身份或顺序与 publisher 不一致")
+    if not isinstance(returned_queue, list):
+        raise PipelineError("globalping 未返回有效的输入队列身份")
+
+    returned_identities = []
+    for index, identity in enumerate(returned_queue):
+        if (
+            not isinstance(identity, (list, tuple))
+            or len(identity) != 2
+            or not all(isinstance(value, str) and value for value in identity)
+        ):
+            raise PipelineError(
+                f"globalping 输入队列身份第 {index + 1} 条无效"
+            )
+        returned_identities.append(tuple(identity))
+
+    if returned_identities != expected_queue:
+        raise PipelineError(
+            "globalping 返回的输入队列身份或顺序与 publisher 不一致"
+        )
+
+    stats = remote_result.get("stats")
+    if not isinstance(stats, dict):
+        raise PipelineError("globalping 未返回有效统计对象")
+
+    results = remote_result.get("results")
+    if not isinstance(results, list):
+        raise PipelineError("globalping 未返回有效候选结果列表")
+
+    accepted = remote_result.get("accepted")
+    if not isinstance(accepted, list):
+        raise PipelineError("globalping 未返回有效正式准入列表")
+
+    publication = remote_result.get("publication")
+    if (
+        not isinstance(publication, dict)
+        or not isinstance(publication.get("status"), str)
+        or not publication["status"]
+    ):
+        raise PipelineError("globalping 未返回有效发布状态")
+
+    # 只有明确的整轮预检阻断允许没有逐条候选结果。
+    preflight_blocked = bool(stats.get("preflight_failed"))
+    no_probes = bool(stats.get("no_probes"))
+
+    if preflight_blocked and no_probes:
+        raise PipelineError("globalping 返回了互相冲突的预检阻断状态")
+
+    if preflight_blocked or no_probes:
+        if results or accepted:
+            raise PipelineError("globalping 整轮预检阻断却返回了候选处理或准入结果")
+        if publication["status"] != "blocked":
+            raise PipelineError("globalping 预检阻断的发布状态必须为 blocked")
+    else:
+        # 正常运行和测试运行必须逐条覆盖完整输入队列。
+        result_identities = []
+        admitted_identities = []
+
+        allowed_admissions = {
+            "NOT_RUN",
+            "SKIPPED_CHANNEL_FULL",
+            "REJECTED_LOCAL",
+            "INCOMPLETE",
+            "REJECTED_REMOTE",
+            "ADMITTED",
+        }
+
+        for index, record in enumerate(results):
+            if not isinstance(record, dict):
+                raise PipelineError(
+                    f"globalping 候选结果第 {index + 1} 条不是对象"
+                )
+
+            identity = record.get("identity")
+            if (
+                not isinstance(identity, (list, tuple))
+                or len(identity) != 2
+                or not all(isinstance(value, str) and value for value in identity)
+            ):
+                raise PipelineError(
+                    f"globalping 候选结果第 {index + 1} 条身份无效"
+                )
+
+            result_identity = tuple(identity)
+            result_identities.append(result_identity)
+
+            if result_identity != expected_queue[index]:
+                raise PipelineError(
+                    f"globalping 候选结果第 {index + 1} 条身份或顺序错误"
+                )
+
+            admission = record.get("admission")
+            if admission not in allowed_admissions:
+                raise PipelineError(
+                    f"globalping 候选结果第 {index + 1} 条准入状态无效"
+                )
+
+            if admission == "ADMITTED":
+                admitted_identities.append(result_identity)
+
+        if result_identities != expected_queue:
+            raise PipelineError("globalping 候选结果没有完整覆盖输入队列")
+
+        accepted_identities = []
+        for index, item in enumerate(accepted):
+            if not isinstance(item, dict):
+                raise PipelineError(
+                    f"globalping 正式准入第 {index + 1} 条不是对象"
+                )
+
+            channel = item.get("channel")
+            url = item.get("normalized_url")
+            if (
+                not isinstance(channel, str)
+                or not channel
+                or not isinstance(url, str)
+                or not url
+            ):
+                raise PipelineError(
+                    f"globalping 正式准入第 {index + 1} 条身份无效"
+                )
+
+            accepted_identities.append((channel, url))
+
+        if (
+            len(accepted_identities) != len(set(accepted_identities))
+            or accepted_identities != admitted_identities
+        ):
+            raise PipelineError(
+                "globalping accepted 与逐条 ADMITTED 结果不一致"
+            )
 
     stats = remote_result.get("stats", {})
     if isinstance(stats, dict):
