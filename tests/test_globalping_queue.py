@@ -143,7 +143,76 @@ class GlobalpingQueueExecutionTests(unittest.TestCase):
         self.assertEqual(result["stats"]["remote_fail_candidates"], 1)
         self.assertEqual(result["stats"]["remote_incomplete_candidates"], 1)
         self.assertEqual(result["stats"]["admitted_candidates"], 2)
+    def test_creation_uncertain_is_not_incomplete_and_next_candidate_continues(self):
+        first = self._candidate(
+            "CCTV-1", "https://a.example/uncertain.ts"
+        )
+        second = self._candidate(
+            "CCTV-1", "https://a.example/fallback.ts"
+        )
+        calls = []
 
+        def fake_candidate_remote(
+            candidate, locations, probe_limit, boundary, budget, stats
+        ):
+            url = candidate["normalized_url"]
+            calls.append(url)
+            stats["attempted_candidates"] += 1
+
+            if url == first["normalized_url"]:
+                stats["creation_uncertain_candidates"] += 1
+                return {
+                    "creation_uncertain": True,
+                    "overall": globalping.CREATION_UNCERTAIN,
+                    "checks": {
+                        "ipv4": globalping.NA,
+                        "http": globalping.CREATION_UNCERTAIN,
+                        "hls": globalping.NA,
+                    },
+                    "reasons": ["http 创建结果不确定"],
+                }
+
+            return self._remote_result(globalping.PASS)
+
+        read_limits, probe_locations, publish = self._common_patches()
+
+        with tempfile.TemporaryDirectory() as directory:
+            with read_limits, probe_locations, publish, patch.object(
+                globalping,
+                "_candidate_remote",
+                side_effect=fake_candidate_remote,
+            ):
+                result = globalping.run_globalping(
+                    [first, second],
+                    {
+                        "globalping": {"max_probes": 3},
+                        "selection": {"max_routes_per_channel": 2},
+                    },
+                    ["CCTV-1"],
+                    output_dir=directory,
+                )
+
+        self.assertEqual(
+            calls,
+            [first["normalized_url"], second["normalized_url"]],
+        )
+        self.assertEqual(
+            [item["admission"] for item in result["results"]],
+            ["REJECTED_REMOTE", "ADMITTED"],
+        )
+        self.assertEqual(
+            result["results"][0]["remote"]["overall"],
+            globalping.CREATION_UNCERTAIN,
+        )
+        self.assertEqual(result["stats"]["creation_uncertain_candidates"], 1)
+        self.assertEqual(result["stats"]["remote_incomplete_candidates"], 0)
+        self.assertEqual(result["stats"]["remote_fail_candidates"], 0)
+        self.assertEqual(result["stats"]["admitted_candidates"], 1)
+        self.assertEqual(len(result["accepted"]), 1)
+        self.assertEqual(
+            result["accepted"][0]["normalized_url"],
+            second["normalized_url"],
+        )
 
     def test_channel_cap_skips_measurement_but_other_channels_continue(self):
         first = self._candidate(
