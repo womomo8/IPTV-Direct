@@ -478,7 +478,11 @@ class GlobalpingLoggingTests(unittest.TestCase):
             with patch.object(
                 globalping,
                 "_read_limits",
-                return_value={"remaining": 10},
+                                return_value={
+                    "remaining": 10,
+                    "rate_remaining": 10,
+                    "credits_remaining": 0,
+                },
             ), patch.object(
                 globalping,
                 "_probe_locations",
