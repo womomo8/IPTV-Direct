@@ -462,8 +462,14 @@ class GlobalpingLoggingTests(unittest.TestCase):
         candidate = {
             "channel": "CCTV-1",
             "media_type": "DIRECT_TS",
+            "checks": {
+                "ipv4": {"status": globalping.PASS},
+                "http": {"status": globalping.PASS},
+                "hls": {"status": globalping.NA},
+                "ts": {"status": globalping.PASS},
+            },
             "normalized_url": "https://example.com/live.ts?token=secret",
-        }
+        } 
 
         def fake_candidate_remote(
             candidate, locations, probe_limit, boundary, budget, stats
