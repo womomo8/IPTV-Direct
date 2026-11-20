@@ -96,8 +96,8 @@ IPTV-Direct — MASTER_PLAN.md
 7. checker现有HLS实际媒体分片抽查和TS二进制同步结构检测。
 8. checker现有主动Range请求及其HTTP 206处理能力。
 9. Globalping现有API调用、额度查询、探针选择、测量创建、轮询、429处理和状态记录基础。
-10. publisher现有质量比较、准入判定及订阅处理相关业务。
-11. publisher现有订阅格式检查、数量保护、备份、替换和回滚相关实现。
+10. publisher现有本地质量比较、分组和完整优选候选队列组织能力。
+11. globalping现有正式准入、频道名额统计、订阅生成、发布保护、备份和回滚相关实现。
 12. "settings.json"现有配置结构和正式参数。
 13. GitHub Actions现有定时运行、正式运行、测试运行和诊断运行入口。
 14. 现有各模块测试及其有效覆盖。
@@ -111,9 +111,9 @@ IPTV-Direct — MASTER_PLAN.md
 main质量排序| 迁出并删除重复实现| 唯一优选职责交给publisher
 publisher本地质量比较| 保留并调整位置| 作为本地检测后的优选阶段
 publisher分组和完整队列组织| 保留并调整位置| 统一由publisher负责
-publisher正式准入| 迁移| 保留原有判定规则，移交globalping
-publisher频道名额和累计统计| 迁移| 移交globalping
-publisher订阅生成和发布| 迁移| 保留原有发布安全规则，移交globalping
+Globalping正式准入| 保留核验| 已由globalping负责，核验是否严格执行第8.1节
+Globalping频道名额和累计统计| 保留核验| 已由globalping负责，核验动态停止和统计准确性
+Globalping订阅生成和发布| 保留核验| 已由globalping负责，核验现有发布保护和回滚能力
 Globalping远程检测| 保留并完善| 保留已有API、额度和测量能力
 Globalping逐条准入和动态停止| 新增补齐| 解决远程候选批量测量、不能及时更新名额的问题
 collector普通下载HTTP 206| 缺陷修复| 拒绝未经验证的部分响应
@@ -154,13 +154,12 @@ Globalping HLS动态预算| 缺陷修复和补齐| 按实际清单类型计算�
 7. globalping结果由main接收，完成最终核对、日志汇总和收尾。
 8. 每个阶段调用必须有明确的输入、返回值和失败处理，不得存在隐式业务程序互相调用。
 
-必须移除或迁出：
+main不得承担的业务：
 
-- "_quality_number()"、"_known_first()"、"_candidate_quality_key()"等重复质量比较实现。
-- "rank_candidates_for_globalping()"及其质量排序、分组和优选业务。
-- "process_admission_batch()"及其publisher正式准入调用。
-- 订阅生成、发布和频道名额统计业务。
-- 将本地PASS数量直接解释为实际远程测量数量的统计方式。
+- 不得重新实现质量比较、分组和优选排序。
+- 不得执行正式准入、频道名额竞争和累计统计。
+- 不得执行订阅生成、发布和回滚。
+- 不得将本地PASS数量解释为实际远程测量数量。
 
 main的行为限制：
 
@@ -393,24 +392,15 @@ checker完成后必须将完整检测结果返回main，不得直接调用publis
 7. publisher必须返回完整优选队列，不得只返回最终两条，不得提前执行Globalping远程检测。
 8. 完整队列及其顺序由publisher唯一确定，main只核对和传递。
 
-必须迁出的现有业务：
+现有职责边界：
 
-以下业务已经存在于publisher，必须迁移到globalping：
+正式准入、频道名额竞争、累计统计、订阅生成和发布保护均由globalping负责。
 
-- "_local_admission_reason()"；
-- "_globalping_admission_reason()"；
-- "process_batch()"中的正式准入、最终名额竞争和累计统计；
-- "_channel_counts()"等正式准入统计；
-- "build_subscriptions()"；
-- "validate_subscriptions()"；
-- "publish_subscriptions()"；
-- 临时文件、备份、替换、发布后核验和失败回滚。
+publisher只负责本地质量比较、分组和完整优选队列组织，不得重新加入正式准入、远程检测或发布业务。
 
-迁移时必须保留原有正式判定条件、状态一致性检查、发布保护和回滚规则。
+以上职责已经由当前程序实现，不再安排从publisher迁移到globalping的施工任务。只核验现有实现是否符合本文件规定；发现明确缺陷时局部修复，不得重复开发。
 
-不得重新设计一套准入标准或发布保护。
-
-迁移完成后，publisher不得继续保留上述业务的第二套实现。
+publisher完成后必须将完整优选队列返回main，不得直接调用globalping。
 
 publisher完成后必须将完整优选队列返回main，不得直接调用globalping。
 
@@ -840,7 +830,7 @@ IPv4、HTTP、HLS的多探针聚合共享同一业务原则：至少一个有效
 
 直接TS的远程HLS状态必须为N/A。N/A不得作为整条线路通过的依据。
 
-迁移publisher当前"_local_admission_reason()"和"_globalping_admission_reason()"的正式判定条件时，必须保持以上门槛及既有一致性检查，不得降低标准或把INCOMPLETE直接改成PASS。
+globalping必须按照本节门槛执行正式准入。现有准入函数、历史测试或旧实现不得覆盖本节规则。任何适用远程项目为INCOMPLETE均拒绝准入，不得参与名额竞争、不得改写真实状态，并继续处理完整优选队列中的后续候补。
 
 8.2 最终名额竞争
 
@@ -903,17 +893,15 @@ TXT每行格式为"频道标准名称,URL"。
 - https://raw.githubusercontent.com/womomo8/IPTV-Direct/main/output/iptv.m3u
 - https://raw.githubusercontent.com/womomo8/IPTV-Direct/main/output/iptv.txt
 
-9.2 已有发布保护必须迁移保留
+9.2 现有发布保护必须保留核验
 
-publisher现有发布保护和安全处理迁移到globalping时，必须保留原有标准：
+当前发布保护和安全处理由globalping负责。必须核验并保留现有标准，不得降低保护要求，也不得重新开发第二套发布保护。
 
 - 频道数量下降超过50%：阻止发布。
 - 线路数量下降超过50%：阻止发布。
 - 恰好下降50%：不触发上述比例保护。
 - 两份旧订阅均不存在或均为空：按首次发布处理。
 - 一份缺失/为空而另一份有效，或两份旧文件均无法解析：阻止发布。
-
-不得为了迁移而降低发布保护标准。
 
 发布保护的比较基数始终为上一版实际发布文件中的频道数和线路数，不假设上一版已达到每频道两条。连续降级发布时，仍按同一比例规则判断；上一版为降级输出、本轮进一步下降超过50%时，同样阻止发布。
 
@@ -1179,7 +1167,7 @@ schedule.daily_time| 06:17
 24. 远程PASS、FAIL、INCOMPLETE保留真实状态。
 25. INCOMPLETE不被改成PASS或FAIL。
 26. 明确FAIL的线路不准入。
-27. 任何适用远程检测项目为INCOMPLETE时均拒绝正式准入；总体状态与分项状态必须一致。
+27. 任何适用远程检测项目为INCOMPLETE时均拒绝正式准入，不得改写状态或占用名额，必须继续处理后续候补；总体状态与分项状态必须一致。
 28. 某频道达到两条正式准入后停止该频道新增测量。
 29. 其他未满额频道仍能继续处理。
 30. 每频道最多两条，不足不凑数。
