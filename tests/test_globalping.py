@@ -674,7 +674,7 @@ class BudgetBoundaryAndExceptionTests(unittest.TestCase):
         ), patch.object(
             globalping,
             "_http_aggregate",
-            return_value=(globalping.INCOMPLETE, [], []),
+            return_value=(globalping.FAIL, [], []),
         ):
             result = globalping._candidate_remote(
                 self._candidate(), [], 3, 8, budget, stats
@@ -686,6 +686,7 @@ class BudgetBoundaryAndExceptionTests(unittest.TestCase):
         self.assertEqual(stats["completed_measurements"], 0)
         self.assertEqual(len(result["measurements"]), 1)
         self.assertEqual(result["overall"], globalping.INCOMPLETE)
+        self.assertEqual(result["checks"]["http"], globalping.INCOMPLETE)
         self.assertTrue(any(
             "轮询边界耗尽" in reason
             for reason in result.get("reasons", [])
