@@ -499,7 +499,10 @@ def _format_subscriptions(accepted: list[dict[str, Any]], channels: list[str],
                 continue
             for item in by_channel.get(channel, []):
                 url = item["normalized_url"]
-                m3u.extend([f"#EXTINF:-1,{channel}", url])
+                m3u.extend([
+    f'#EXTINF:-1 tvg-name="{channel}" group-title="{category}",{channel}',
+    url,
+])
                 txt.append(f"{channel},{url}")
     for channel, items in by_channel.items():
         if channel in channels:
