@@ -1,0 +1,129 @@
+#EXTM3U
+# 央视频道
+#EXTINF:-1,CCTV-1
+http://38.75.136.137:98/gslb/dsdqbv/cctv1hd.m3u8?auth=test20251009
+#EXTINF:-1,CCTV-1
+http://173.208.234.146/live/cctv1.m3u8
+#EXTINF:-1,CCTV-2
+http://38.75.136.137:98/gslb/dsdqbv/cctv2hd.m3u8?auth=test20251009
+#EXTINF:-1,CCTV-2
+http://173.208.234.146/live/cctv2.m3u8
+#EXTINF:-1,CCTV-3
+http://192.151.150.154/live/cctv3hd.m3u8
+#EXTINF:-1,CCTV-3
+http://69.30.245.50/live/cctv3.m3u8
+#EXTINF:-1,CCTV-4
+http://173.208.234.146/live/cctv4.m3u8
+#EXTINF:-1,CCTV-4
+http://38.75.136.137:98/gslb/dsdqpub/cctv4k.m3u8?auth=testpub
+#EXTINF:-1,CCTV-5
+http://107.150.60.122/live/cctv5hd.m3u8
+#EXTINF:-1,CCTV-5
+http://38.75.136.137:98/gslb/dsdqbv/cctv5hd.m3u8?auth=test20251009
+#EXTINF:-1,CCTV-5+
+http://38.75.136.137:98/gslb/dsdqbv/cctv5p.m3u8?auth=test20251009
+#EXTINF:-1,CCTV-5+
+http://59.39.89.130:60901/tsfile/live/0016_1.m3u8?key=txiptv&playlive=1&authid=0
+#EXTINF:-1,CCTV-6
+http://173.208.234.146/live/cctv6.m3u8
+#EXTINF:-1,CCTV-6
+http://63.141.230.178:82/gslb/zbdq5.m3u8?id=cctv6hd
+#EXTINF:-1,CCTV-7
+http://74.91.26.218:82/live/cctv7hd.m3u8
+#EXTINF:-1,CCTV-7
+http://192.151.150.154/live/cctv7hd.m3u8
+#EXTINF:-1,CCTV-8
+http://192.151.150.154/live/cctv8hd.m3u8
+#EXTINF:-1,CCTV-8
+http://222.223.41.27:8888/hls/8/index.m3u8
+#EXTINF:-1,CCTV-9
+http://49.70.189.149:60001/tsfile/live/0009_1.m3u8?key=txiptv&playlive=1&authid=0
+#EXTINF:-1,CCTV-9
+http://153.0.171.163:9901/tsfile/live/1008_1.m3u8?key=txiptv&playlive=1&authid=0
+#EXTINF:-1,CCTV-10
+http://38.75.136.137:98/gslb/dsdqbv/cctv10hd.m3u8?auth=test20251009
+#EXTINF:-1,CCTV-10
+http://173.208.234.146/live/cctv10.m3u8
+#EXTINF:-1,CCTV-11
+http://38.75.136.137:98/gslb/dsdqbv/cctv11hd.m3u8?auth=test20251009
+#EXTINF:-1,CCTV-11
+http://fuxin.yunjifei.top:999/tsfile/live/0011_1.m3u8?key=txiptv
+#EXTINF:-1,CCTV-12
+http://113.25.252.226:9901/tsfile/live/1016_1.m3u8?key=txiptv&playlive=1&authid=0
+#EXTINF:-1,CCTV-13
+http://ali-m-l.cztv.com/channels/lantian/channel21/1080p.m3u8
+#EXTINF:-1,CCTV-13
+http://118.122.144.115:8888/newlive/live/hls/14/live.m3u8
+#EXTINF:-1,CCTV-14
+http://49.70.189.149:60001/tsfile/live/0014_1.m3u8?key=txiptv&playlive=1&authid=0
+#EXTINF:-1,CCTV-14
+http://fuxin.yunjifei.top:999/tsfile/live/0014_1.m3u8?key=txiptv
+#EXTINF:-1,CCTV-15
+http://58.56.162.102:4466/newlive/live/hls/16/live.m3u8
+#EXTINF:-1,CCTV-15
+http://49.70.189.149:60001/tsfile/live/0015_1.m3u8?key=txiptv&playlive=1&authid=0
+#EXTINF:-1,CCTV-16
+http://219.147.245.238:25480/newlive/live/hls/17/live.m3u8
+#EXTINF:-1,CCTV-17
+http://1.24.39.180:9003/hls/61/index.m3u8
+#EXTINF:-1,CCTV-17
+http://221.7.175.154:8445/tsfile/live/1009_1.m3u8?key=txiptv&playlive=1&authid=0
+# 卫视频道
+#EXTINF:-1,湖南卫视
+https://epg.pw/stream/d52964aac9910bfbdd885e0138b82fe305407bea3bb18b1f38f97190e60ec9b5.m3u8
+#EXTINF:-1,湖南卫视
+http://hlsal-ldvt.qing.mgtv.com/nn_live/nn_x64/Y2RuZXhfaWQ9YWxfaGxzX2xkdnQmZT02OTE0NjA0JnY9MSZpZD1ITldTWkdTVCZzPTcwN2RiYTc2YzJjNmJmMTQ4MmUyZGYzOWU2NWM3YWFi/HNWSZGST.m3u8
+#EXTINF:-1,浙江卫视
+http://ali-m-l.cztv.com/channels/lantian/channel001/1080p.m3u8
+#EXTINF:-1,浙江卫视
+https://epg.pw/stream/18109b1804a4d4c8acd2a83f3256b7495a047d7f5cf918ef92febd030933bfc2.m3u8
+#EXTINF:-1,东方卫视
+http://bp-resource-dfl.bestv.cn/155/3/video.m3u8
+#EXTINF:-1,东方卫视
+http://221.7.175.154:8445/tsfile/live/0107_1.m3u8?key=txiptv&playlive=1&authid=0
+#EXTINF:-1,江苏卫视
+https://epg.pw/stream/3d2796c6d253a8ce33491f776f534920256a756f0201e24e9d25b4c404ec2daa.m3u8
+#EXTINF:-1,江苏卫视
+http://221.7.175.154:8445/tsfile/live/0127_1.m3u8?key=txiptv&playlive=1&authid=0
+#EXTINF:-1,北京卫视
+https://epg.pw/stream/ed16a4cd210c9f9d6204ddc6fb5def63a1c54b60114fb61679e61363edea068b.m3u8
+#EXTINF:-1,北京卫视
+http://124.90.45.52:9901/tsfile/live/0122_1.m3u8?key=txiptv&playlive=1&authid=0
+#EXTINF:-1,广东卫视
+https://epg.pw/stream/79202aa439fc4fb94a8304f8608737f7cff1626f2b42aa6d5552ecfc2bcacbaf.m3u8
+#EXTINF:-1,东南卫视
+https://epg.pw/stream/d3a633f9603e282ecb78c53b3220a5cc6d4ae302a789711407a0794bc0c79c00.m3u8
+#EXTINF:-1,东南卫视
+http://live.zohi.tv/video/s10001-fztv-3/index.m3u8
+# 港澳台
+#EXTINF:-1,凤凰资讯台
+http://221.7.175.154:8445/tsfile/live/1021_1.m3u8?key=txiptv&playlive=1&authid=0
+# 体育频道
+# 国外频道
+#EXTINF:-1,ESPN
+http://168.228.44.241:9997/play/a06p/index.m3u8
+#EXTINF:-1,ESPN
+http://181.78.211.244:8005/play/a08q/index.m3u8
+#EXTINF:-1,ESPN 2
+http://190.61.47.54:8000/play/a005/index.m3u8
+#EXTINF:-1,ESPN 2
+http://85.237.89.160:9590/usa-s/ESPN-2-HD/index.m3u8
+#EXTINF:-1,beIN SPORTS XTRA
+https://dc1644a9jazgj.cloudfront.net/beIN_Sports_Xtra_Espanol.m3u8
+#EXTINF:-1,beIN SPORTS XTRA
+https://bein-xtra-bein.amagi.tv/playlist.m3u8
+#EXTINF:-1,Eurosport 1
+http://90.183.52.46:4000/play/a06v/index.m3u8
+#EXTINF:-1,Eurosport 1
+http://213.91.179.28:8000/play/a05y
+#EXTINF:-1,Eurosport 2
+http://46.244.99.71:8181/stream/74/index.m3u8
+#EXTINF:-1,Eurosport 2
+http://213.91.179.28:8000/play/a04b
+#EXTINF:-1,Fox Sports 1
+http://85.237.89.160:9590/usa-s/FOX-SPORTS-1/index.m3u8
+#EXTINF:-1,FIFA+
+https://d2w9q46ikgrcwx.cloudfront.net/v1/master/3722c60a815c199d9c0ef36c5b73da68a62b09d1/cc-of5cbk3sav3w5/v1/sysdata_s_p_a_fifa_7/samsungheadend_us/latest/main/hls/playlist.m3u8
+#EXTINF:-1,FIFA+
+https://4397879b.wurl.com/master/f36d25e7e52f1ba8d7e56eb859c636563214f541/UmFrdXRlblRWLWRlX0ZJRkFQbHVzR2VybWFuX0hMUw/playlist.m3u8
+# 其他频道
