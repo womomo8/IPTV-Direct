@@ -1409,26 +1409,28 @@ class PublisherHandoffVerificationTests(unittest.TestCase):
             )
 
 
-
 class GlobalpingCreditsTests(unittest.TestCase):
-    def test_rate_limit_and_credits_are_combined(self):
+    def _read_limits_with_response(self, response):
         with patch.object(
             globalping,
             "_api_request",
-            return_value=(200, {
-                "rateLimit": {
-                    "measurements": {
-                        "create": {
-                            "limit": 100,
-                            "remaining": 12,
-                            "reset": 12345,
-                        }
-                    }
-                },
-                "credits": {"remaining": 34},
-            }, {}),
+            return_value=(200, response, {}),
         ):
-            limits = globalping._read_limits()
+            return globalping._read_limits()
+
+    def test_rate_limit_and_credits_are_combined(self):
+        limits = self._read_limits_with_response({
+            "rateLimit": {
+                "measurements": {
+                    "create": {
+                        "limit": 100,
+                        "remaining": 12,
+                        "reset": 12345,
+                    }
+                }
+            },
+            "credits": {"remaining": 34},
+        })
 
         self.assertEqual(limits["limit"], 100)
         self.assertEqual(limits["rate_remaining"], 12)
@@ -1437,55 +1439,43 @@ class GlobalpingCreditsTests(unittest.TestCase):
         self.assertEqual(limits["reset"], 12345)
 
     def test_missing_credits_defaults_to_zero(self):
-        with patch.object(
-            globalping,
-            "_api_request",
-            return_value=(200, {
-                "rateLimit": {
-                    "measurements": {
-                        "create": {
-                            "limit": 100,
-                            "remaining": 12,
-                            "reset": 12345,
-                        }
+        limits = self._read_limits_with_response({
+            "rateLimit": {
+                "measurements": {
+                    "create": {
+                        "limit": 100,
+                        "remaining": 12,
+                        "reset": 12345,
                     }
                 }
-            }, {}),
-        ):
-            limits = globalping._read_limits()
+            }
+        })
 
         self.assertEqual(limits["rate_remaining"], 12)
         self.assertEqual(limits["credits_remaining"], 0)
         self.assertEqual(limits["remaining"], 12)
 
     def test_negative_remaining_values_are_clamped_to_zero(self):
-        with patch.object(
-            globalping,
-            "_api_request",
-            return_value=(200, {
-                "rateLimit": {
-                    "measurements": {
-                        "create": {
-                            "limit": 100,
-                            "remaining": -5,
-                            "reset": 12345,
-                        }
+        limits = self._read_limits_with_response({
+            "rateLimit": {
+                "measurements": {
+                    "create": {
+                        "limit": 100,
+                        "remaining": -5,
+                        "reset": 12345,
                     }
-                },
-                "credits": {"remaining": -8},
-            }, {}),
-        ):
-            limits = globalping._read_limits()
+                }
+            },
+            "credits": {"remaining": -8},
+        })
 
         self.assertEqual(limits["rate_remaining"], 0)
         self.assertEqual(limits["credits_remaining"], 0)
         self.assertEqual(limits["remaining"], 0)
 
     def test_invalid_credits_format_stops_new_measurements(self):
-        with patch.object(
-            globalping,
-            "_api_request",
-            return_value=(200, {
+        with self.assertRaises(globalping.GlobalpingError):
+            self._read_limits_with_response({
                 "rateLimit": {
                     "measurements": {
                         "create": {
@@ -1496,16 +1486,11 @@ class GlobalpingCreditsTests(unittest.TestCase):
                     }
                 },
                 "credits": ["invalid"],
-            }, {}),
-        ):
-            with self.assertRaises(globalping.GlobalpingError):
-                globalping._read_limits()
+            })
 
     def test_invalid_credits_remaining_stops_new_measurements(self):
-        with patch.object(
-            globalping,
-            "_api_request",
-            return_value=(200, {
+        with self.assertRaises(globalping.GlobalpingError):
+            self._read_limits_with_response({
                 "rateLimit": {
                     "measurements": {
                         "create": {
@@ -1516,10 +1501,7 @@ class GlobalpingCreditsTests(unittest.TestCase):
                     }
                 },
                 "credits": {"remaining": "invalid"},
-            }, {}),
-        ):
-            with self.assertRaises(globalping.GlobalpingError):
-                globalping._read_limits()
+            })
 
 
 class SubscriptionCategoryTests(unittest.TestCase):
