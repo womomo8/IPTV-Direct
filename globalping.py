@@ -926,6 +926,7 @@ def _candidate_remote(candidate: dict[str, Any], locations: list[dict[str, Any]]
             if exc.uncertain:
                 result["creation_uncertain"] = True
                 result["checks"][phase] = CREATION_UNCERTAIN
+                result["overall"] = CREATION_UNCERTAIN
                 result.setdefault("reasons", []).append(f"{phase} 创建结果不确定")
                 stats["creation_uncertain_candidates"] += 1
                 return result
