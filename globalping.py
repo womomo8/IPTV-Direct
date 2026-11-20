@@ -946,6 +946,8 @@ def _candidate_remote(candidate: dict[str, Any], locations: list[dict[str, Any]]
         else:
             state, evidence, success = _http_aggregate(measurement)
             result["http_success_evidence"] = success
+        if boundary_reason:
+            state = INCOMPLETE
         result["checks"][phase] = state
         result["probe_results"][phase] = evidence
         if state == FAIL:
@@ -1012,6 +1014,7 @@ def _candidate_remote(candidate: dict[str, Any], locations: list[dict[str, Any]]
                         result["probe_results"]["hls_child"] = child_hls_evidence
                     result["probe_results"]["hls_child_http"] = child_evidence
                     if child_boundary:
+                        result["checks"]["hls"] = INCOMPLETE
                         result.setdefault("reasons", []).append(f"HLS 第二阶段 {child_boundary}")
                 except GlobalpingError as exc:
                     if exc.uncertain:
