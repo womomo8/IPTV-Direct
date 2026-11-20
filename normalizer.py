@@ -91,18 +91,21 @@ def _source_identity(source):
             identity[key] = source[key]
     return identity
 
-
 def _source_identity_key(identity):
-    """用于来源追溯去重，不参与候选质量或排序决策。"""
-    if identity.get("source_id"):
-        return ("id", identity["source_id"])
+    """按完整来源实例去重，仅用于来源追溯，不参与质量或排序决策。"""
     return (
+        identity.get("source_id"),
         identity.get("source_type", ""),
         identity.get("source_url", ""),
-        identity.get("source_order", 0),
+        identity.get("source_final_url", ""),
         identity.get("source_name", ""),
+        identity.get("source_order", 0),
+        identity.get("mode", ""),
+        identity.get("discovered_from", ""),
+        identity.get("discovered_order", 0),
+        identity.get("is_manual", False),
+        identity.get("priority", 1),
     )
-
 
 def _is_absolute_http_url(value):
     """判断是否为绝对 HTTP/HTTPS URL，不区分协议头大小写。"""
