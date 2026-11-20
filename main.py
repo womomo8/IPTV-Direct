@@ -312,7 +312,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         return 0
     except Exception as exc:
-                LOG.error("IPTV-Direct 流程失败，异常类型：%s", type(exc).__name__)
+        LOG.error("IPTV-Direct 流程失败，异常类型：%s", type(exc).__name__)
         return 1
 
 
