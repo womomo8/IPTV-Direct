@@ -232,19 +232,6 @@ def _create_measurement(kind: str, url: str, locations: list[dict[str, Any]],
         actual_probes = probe_limit
     return measurement_id, max(0, actual_probes)
 
-    payload = {key: value for key, value in payload.items() if value is not None}
-    # 创建请求超时/断连是结果不确定，绝不自动重试 POST。
-    status, body, _ = _api_request(f"{API}/measurements", "POST", payload, timeout=20)
-    measurement_id = body.get("id")
-    if status != 202 or not isinstance(measurement_id, str) or not measurement_id:
-        raise GlobalpingError("Globalping 创建测量未返回有效测量 ID")
-    try:
-        actual_probes = int(body.get("probesCount", probe_limit))
-    except (TypeError, ValueError):
-        actual_probes = probe_limit
-    return measurement_id, max(0, actual_probes)
-
-
 def _retry_seconds(value: str | None, fallback: float) -> float:
     if value:
         try:
