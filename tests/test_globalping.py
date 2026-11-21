@@ -114,6 +114,56 @@ class GlobalpingDryRunTests(unittest.TestCase):
         self.assertEqual(result["publication"]["status"], "not_run")
         self.assertEqual(result["input_queue_identities"], [("CCTV-1", "https://example.com/live.m3u8")])
 
+class GlobalpingAdmissionFlowTests(unittest.TestCase):
+    def test_local_failure_skips_remote_and_remote_incomplete_is_rejected(self):
+        def candidate(url, http_status=globalping.PASS):
+            return {
+                "channel": "CCTV-1",
+                "normalized_url": url,
+                "media_type": "HLS",
+                "checks": {
+                    "ipv4": {"status": globalping.PASS},
+                    "http": {"status": http_status},
+                    "hls": {"status": globalping.PASS},
+                    "ts": {"status": globalping.PASS},
+                },
+            }
+
+        queue = [
+            candidate("https://example.com/bad.m3u8", globalping.FAIL),
+            candidate("https://example.com/uncertain.m3u8"),
+        ]
+        remote_result = {
+            "checks": {
+                "ipv4": globalping.PASS,
+                "http": globalping.INCOMPLETE,
+                "hls": globalping.PASS,
+            },
+            "overall": globalping.INCOMPLETE,
+        }
+
+        with patch.object(globalping, "_read_limits", return_value={
+            "remaining": 10, "rate_remaining": 10, "credits_remaining": 0,
+        }), patch.object(
+            globalping, "_probe_locations", return_value=([{}], 1)
+        ), patch.object(
+            globalping, "_candidate_remote", return_value=remote_result
+        ) as remote, patch.object(
+            globalping, "_publish", return_value={"status": "blocked"}
+        ):
+            result = globalping.run_globalping(
+                queue,
+                {"globalping": {"max_probes": 1}},
+                ["CCTV-1"],
+            )
+
+        self.assertEqual(remote.call_count, 1)
+        self.assertEqual(
+            [item["admission"] for item in result["results"]],
+            ["REJECTED_LOCAL", "REJECTED_REMOTE"],
+        )
+        self.assertEqual(result["accepted"], [])
+
 class DirectTSAndQuotaTests(unittest.TestCase):
     def test_direct_ts_uses_http_only_and_consumes_actual_probe_quota(self):
         candidate = {
