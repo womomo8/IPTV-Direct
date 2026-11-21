@@ -851,12 +851,13 @@ class RemoteAdmissionTests(unittest.TestCase):
         )
         self.assertTrue(eligible)
 
-    def test_direct_ts_requires_http_pass_and_other_checks_na(self):
+     def test_direct_ts_requires_http_pass_and_other_checks_na(self):
         remote = {
             "checks": {
                 "ipv4": globalping.NA,
                 "http": globalping.PASS,
                 "hls": globalping.NA,
+                "ts": globalping.NA,
             },
             "overall": globalping.PASS,
         }
@@ -914,18 +915,26 @@ class RemoteAdmissionTests(unittest.TestCase):
         self.assertFalse(eligible)
 
     def test_direct_ts_rejects_invalid_na_states(self):
-        remote = {
-            "checks": {
-                "ipv4": globalping.PASS,
+        invalid_checks = [
+            {
+                "ipv4": globalping.NA,
+                "http": globalping.PASS,
+                "hls": globalping.NA,
+                "ts": globalping.PASS,
+            },
+            {
+                "ipv4": globalping.NA,
                 "http": globalping.PASS,
                 "hls": globalping.NA,
             },
-            "overall": globalping.PASS,
-        }
-        eligible, _ = globalping._remote_admission(
-            self._candidate("DIRECT_TS"), remote
-        )
-        self.assertFalse(eligible)
+        ]
+        for checks in invalid_checks:
+            with self.subTest(checks=checks):
+                eligible, _ = globalping._remote_admission(
+                    self._candidate("DIRECT_TS"),
+                    {"checks": checks, "overall": globalping.PASS},
+                )
+                self.assertFalse(eligible)
 
 
 if __name__ == "__main__":
