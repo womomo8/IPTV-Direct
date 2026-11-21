@@ -160,6 +160,45 @@ def _channel_match(names, channels, aliases):
             return matched
     return None
 
+def _channel_declarations(fields, channels, aliases):
+    """保留每个频道声明及其精确匹配结果。"""
+    declarations = []
+    for field, value in fields:
+        value = (value or "").strip()
+        if value:
+            declarations.append({
+                "field": field,
+                "value": value,
+                "matched_channel": _channel_match([value], channels, aliases),
+            })
+    return declarations
+
+
+def _declaration_conflicts(declarations):
+    """识别不同声明匹配到不同标准频道的冲突。"""
+    matched_channels = list(dict.fromkeys(
+        item["matched_channel"]
+        for item in declarations
+        if item.get("matched_channel")
+    ))
+    if len(matched_channels) < 2:
+        return []
+    return [{
+        "type": "channel_declaration_conflict",
+        "matched_channels": matched_channels,
+    }]
+
+
+def _merge_channel_declarations(target, incoming):
+    """将重复 URL 的频道声明合并到最初保留的候选。"""
+    declarations = target.setdefault("channel_declarations", [])
+    for item in incoming.get("channel_declarations", []):
+        if item not in declarations:
+            declarations.append(dict(item))
+
+    conflicts = _declaration_conflicts(declarations)
+    target["identity_conflicts"] = conflicts
+    target["identity_conflict"] = bool(conflicts)
 
 def _parse_attributes(text):
     return dict(re.findall(r'([\w-]+)="([^"]*)"', text))
@@ -270,23 +309,43 @@ def parse_source_content(
         is_absolute_url = _is_absolute_http_url(line)
         is_m3u_url = is_m3u and not line.startswith("#")
         if is_absolute_url or is_m3u_url:
-            if is_m3u:
+                  if is_m3u:
                 title, attrs = pending or ("", {})
-                names = [attrs.get("tvg-name", ""), attrs.get("tvg-id", ""), title]
                 raw_url = urljoin(base, line)
+                fields = [
+                    ("tvg-name", attrs.get("tvg-name", "")),
+                    ("tvg-id", attrs.get("tvg-id", "")),
+                    ("title", title),
+                ]
             else:
-                names, attrs, raw_url = [], {}, line
-            channel = _channel_match(names, channels, aliases)
+                attrs = {}
+                raw_url = line
+                fields = []
+
+            declarations = _channel_declarations(fields, channels, aliases)
+            matched_channels = list(dict.fromkeys(
+                item["matched_channel"]
+                for item in declarations
+                if item.get("matched_channel")
+            ))
+            conflicts = _declaration_conflicts(declarations)
+            channel = matched_channels[0] if matched_channels else None
+
             candidate = {
                 "channel": channel,
                 "raw_url": raw_url,
                 "tvg_id": attrs.get("tvg-id", "") if is_m3u else "",
                 "tvg_name": attrs.get("tvg-name", "") if is_m3u else "",
+                "channel_declarations": declarations,
+                "identity_conflicts": conflicts,
+                "identity_conflict": bool(conflicts),
                 "category": _channel_category(channels, channel),
                 **source_fields,
             }
             pending = None
             error = None if channel else f"线路缺少可确认的目标频道信息：{line[:100]}"
+            if conflicts:
+                error = "同一线路的频道声明存在冲突"
             if add_candidate(candidate, error):
                 break
             continue
@@ -294,12 +353,23 @@ def parse_source_content(
         if not is_m3u and "," in line:
             name, url = (part.strip() for part in line.split(",", 1))
             if _is_absolute_http_url(url):
-                channel = _channel_match([name], channels, aliases)
+                declarations = _channel_declarations(
+                    [("line_name", name)], channels, aliases,
+                )
+                matched_channels = list(dict.fromkeys(
+                    item["matched_channel"]
+                    for item in declarations
+                    if item.get("matched_channel")
+                ))
+                channel = matched_channels[0] if matched_channels else None
                 candidate = {
                     "channel": channel,
                     "raw_url": url,
                     "tvg_id": "",
                     "tvg_name": name,
+                    "channel_declarations": declarations,
+                    "identity_conflicts": [],
+                    "identity_conflict": False,
                     "category": _channel_category(channels, channel),
                     **source_fields,
                 }
@@ -323,6 +393,7 @@ def normalize_source_content(
     aliases=None,
     max_candidates_remaining=None,
     source_history_by_url=None,
+    candidates_by_url=None,
 ):
     """只让有效且全局唯一的目标频道 URL 占用候选额度，并保留来源身份。"""
     for value, name in (
@@ -337,7 +408,8 @@ def normalize_source_content(
         raise TypeError("seen_urls 必须是整轮共用的 set")
     if source_history_by_url is not None and not isinstance(source_history_by_url, dict):
         raise TypeError("source_history_by_url 必须是整轮共用的字典")
-
+    if candidates_by_url is not None and not isinstance(candidates_by_url, dict):
+        raise TypeError("candidates_by_url 必须是整轮共用的字典")
     parsed = parse_source_content(
         content, source, channels, content_type, max_hls_manifest_bytes, aliases, max_candidates=None,
     )
@@ -364,7 +436,27 @@ def normalize_source_content(
 
             if url in seen_urls:
                 duplicates += 1
-                duplicate_source_records.append({"normalized_url": url, "source": dict(identity)})
+                duplicate_record = {
+                    "normalized_url": url,
+                    "source": dict(identity),
+                    "channel": candidate.get("channel"),
+                    "channel_declarations": [
+                        dict(item)
+                        for item in candidate.get("channel_declarations", [])
+                    ],
+                    "identity_conflicts": [
+                        dict(item)
+                        for item in candidate.get("identity_conflicts", [])
+                    ],
+                    "identity_conflict": candidate.get("identity_conflict", False),
+                }
+                duplicate_source_records.append(duplicate_record)
+
+                if candidates_by_url is not None:
+                    original = candidates_by_url.get(url)
+                    if original is not None:
+                        _merge_channel_declarations(original, candidate)
+
                 if source_history_by_url is not None:
                     history = source_history_by_url.get(url)
                     if history is not None:
@@ -384,12 +476,17 @@ def normalize_source_content(
             candidate_history = [dict(identity)]
             if source_history_by_url is not None:
                 source_history_by_url[url] = candidate_history
-            retained.append({
+
+            retained_candidate = {
                 **candidate,
                 "normalized_url": url,
                 "primary_source": dict(identity),
                 "source_history": candidate_history,
-            })
+            }
+            retained.append(retained_candidate)
+
+            if candidates_by_url is not None:
+                candidates_by_url[url] = retained_candidate
 
     if source_limited:
         parsed["errors"].append(
