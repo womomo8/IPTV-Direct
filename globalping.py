@@ -886,15 +886,17 @@ def _publish(accepted: list[dict[str, Any]], output_dir: Path, channels: list[st
                 except OSError:
                     pass
 
+def _candidate_remote(candidate: dict[str, Any], locations: list[dict[str, Any]],
+                      probe_limit: int, boundary: float, budget: dict[str, int],
+                      stats: Counter[str]) -> dict[str, Any]:
+    url = candidate["normalized_url"]
+    is_direct_ts = candidate.get("media_type") == "DIRECT_TS"
     result: dict[str, Any] = {"checks": {
         "ipv4": NA if is_direct_ts else INCOMPLETE,
         "http": INCOMPLETE,
         "hls": NA if is_direct_ts else INCOMPLETE,
         "ts": NA if is_direct_ts else INCOMPLETE,
     }, "measurements": [], "probe_results": {}, "overall": INCOMPLETE}
-                                         "http": INCOMPLETE,
-                                         "hls": NA if is_direct_ts else INCOMPLETE},
-                              "measurements": [], "probe_results": {}, "overall": INCOMPLETE}
     stats["attempted_candidates"] += 1
     phases = (("http", "http"),) if is_direct_ts else (("ipv4", "ping"), ("http", "http"))
     for phase, kind in phases:
