@@ -180,23 +180,31 @@ class GlobalpingAdmissionFlowTests(unittest.TestCase):
             }
             for i in range(1, 4)
         ]
-        remote_result = {
-            "checks": {
-                "ipv4": globalping.PASS,
-                "http": globalping.PASS,
-                "hls": globalping.PASS,
-            },
-            "overall": globalping.PASS,
-        }
         activity = {"active": 0, "maximum": 0}
 
-        def measure(*args):
+        def measure(candidate, *args):
             activity["active"] += 1
             activity["maximum"] = max(
                 activity["maximum"], activity["active"]
             )
+            source_id = candidate["primary_source"]["source_id"]
+            result = {
+                "checks": {
+                    "ipv4": globalping.PASS,
+                    "http": globalping.PASS,
+                    "hls": globalping.PASS,
+                },
+                "overall": globalping.PASS,
+                "measurements": [
+                    {"phase": "ipv4", "id": f"ipv4-{source_id}"},
+                    {"phase": "http", "id": f"http-{source_id}"},
+                ],
+                "probe_results": {
+                    "http": [{"probe": {"city": source_id}}],
+                },
+            }
             activity["active"] -= 1
-            return remote_result
+            return result
 
         with patch.object(globalping, "_read_limits", return_value={
             "remaining": 10, "rate_remaining": 10, "credits_remaining": 0,
@@ -242,9 +250,18 @@ class GlobalpingAdmissionFlowTests(unittest.TestCase):
                 record["local"]["checks"],
                 candidate["checks"],
             )
+            source_id = candidate["primary_source"]["source_id"]
             self.assertEqual(
-                record["remote"]["checks"],
-                remote_result["checks"],
+                record["candidate"]["source_history"],
+                candidate["source_history"],
+            )
+            self.assertEqual(
+                record["remote"]["measurements"][1]["id"],
+                f"http-{source_id}",
+            )
+            self.assertEqual(
+                record["remote"]["probe_results"]["http"][0]["probe"]["city"],
+                source_id,
             )
 class DirectTSAndQuotaTests(unittest.TestCase):
     def test_direct_ts_uses_http_only_and_consumes_actual_probe_quota(self):
