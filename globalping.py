@@ -1077,41 +1077,84 @@ def run_globalping(queue: list[dict[str, Any]], settings: dict[str, Any],
     accepted: list[dict[str, Any]] = []
     channel_counts: Counter[str] = Counter()
     records: list[dict[str, Any]] = []
+
     for priority, candidate in enumerate(queue, 1):
         channel = candidate["channel"]
-        identity = (channel, candidate["normalized_url"])
+        normalized_url = candidate["normalized_url"]
+        identity = (channel, normalized_url)
+
+        local_reason = _local_admission_reason(candidate)
+
+        # 每条候选先建立统一的审计记录。
+        # 本地证据与远程证据分别保存，不互相覆盖。
+        record = {
+            "identity": list(identity),
+            "priority_order": priority,
+            "candidate": {
+                "channel": channel,
+                "normalized_url": normalized_url,
+                "media_type": candidate.get("media_type"),
+                "primary_source": candidate.get("primary_source"),
+                "source_history": candidate.get("source_history"),
+            },
+            "local": {
+                "checks": candidate.get("checks"),
+                "admission": "PASS" if local_reason is None else "REJECTED",
+                "reason": local_reason,
+            },
+            "remote": None,
+            "admission": None,
+            "reason": None,
+        }
+
         if channel_counts[channel] >= max_per_channel:
             stats["channel_full_skipped"] += 1
-            records.append({"identity": list(identity), "priority_order": priority,
-                            "admission": "SKIPPED_CHANNEL_FULL", "reason": "该频道已达到正式准入名额"})
+            record["admission"] = "SKIPPED_CHANNEL_FULL"
+            record["reason"] = "该频道已达到正式准入名额"
+            records.append(record)
             continue
-        local_reason = _local_admission_reason(candidate)
+
         if local_reason:
-            records.append({"identity": list(identity), "priority_order": priority,
-                            "admission": "REJECTED_LOCAL", "reason": local_reason})
+            record["admission"] = "REJECTED_LOCAL"
+            record["reason"] = local_reason
+            records.append(record)
             continue
+
         if budget["stop_new"] or budget["remaining"] <= 0:
             stats["quota_blocked_candidates"] += 1
-            records.append({"identity": list(identity), "priority_order": priority,
-                            "admission": "INCOMPLETE", "reason": "额度不足或限流，未创建新测量"})
+            record["admission"] = "INCOMPLETE"
+            record["reason"] = "额度不足或限流，未创建新测量"
+            records.append(record)
             continue
-        remote = _candidate_remote(candidate, locations, probe_limit, boundary, budget, stats)
+
+        remote = _candidate_remote(
+            candidate, locations, probe_limit, boundary, budget, stats
+        )
         eligible, reason = _remote_admission(candidate, remote)
+
         stats["remote_pass_candidates"] += int(remote.get("overall") == PASS)
         stats["remote_fail_candidates"] += int(remote.get("overall") == FAIL)
-        stats["remote_incomplete_candidates"] += int(remote.get("overall") == INCOMPLETE)
+        stats["remote_incomplete_candidates"] += int(
+            remote.get("overall") == INCOMPLETE
+        )
+
         if remote.get("creation_uncertain"):
             eligible = False
             reason = "测量创建结果不确定，不参与正式准入"
+
+        record["remote"] = remote
+
         if eligible and channel_counts[channel] < max_per_channel:
             accepted.append(candidate)
             channel_counts[channel] += 1
             stats["admitted_candidates"] += 1
-            admission = "ADMITTED"
+            record["admission"] = "ADMITTED"
         else:
-            admission = "REJECTED_REMOTE"
-        records.append({"identity": list(identity), "priority_order": priority,
-                        "remote": remote, "admission": admission, "reason": reason})
+            record["admission"] = "REJECTED_REMOTE"
+
+        record["reason"] = reason
+        records.append(record)
+
 
     stats["accepted_routes"] = len(accepted)
     stats["accepted_channels"] = len(channel_counts)
