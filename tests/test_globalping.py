@@ -684,6 +684,101 @@ class GlobalpingCreditsTests(unittest.TestCase):
                 globalping._read_limits()
 
 
+class RemoteAdmissionTests(unittest.TestCase):
+    def _candidate(self, media="HLS"):
+        return {"media_type": media}
+
+    def test_hls_requires_all_applicable_checks_to_pass(self):
+        remote = {
+            "checks": {
+                "ipv4": globalping.PASS,
+                "http": globalping.PASS,
+                "hls": globalping.PASS,
+            },
+            "overall": globalping.PASS,
+        }
+        eligible, _ = globalping._remote_admission(
+            self._candidate(), remote
+        )
+        self.assertTrue(eligible)
+
+    def test_direct_ts_requires_http_pass_and_other_checks_na(self):
+        remote = {
+            "checks": {
+                "ipv4": globalping.NA,
+                "http": globalping.PASS,
+                "hls": globalping.NA,
+            },
+            "overall": globalping.PASS,
+        }
+        eligible, _ = globalping._remote_admission(
+            self._candidate("DIRECT_TS"), remote
+        )
+        self.assertTrue(eligible)
+
+    def test_incomplete_unknown_fail_and_missing_states_are_rejected(self):
+        for state in (
+            globalping.INCOMPLETE,
+            "UNKNOWN",
+            globalping.FAIL,
+            None,
+        ):
+            with self.subTest(state=state):
+                remote = {
+                    "checks": {
+                        "ipv4": globalping.PASS,
+                        "http": state,
+                        "hls": globalping.PASS,
+                    },
+                    "overall": globalping.PASS,
+                }
+                eligible, _ = globalping._remote_admission(
+                    self._candidate(), remote
+                )
+                self.assertFalse(eligible)
+
+    def test_missing_applicable_check_is_rejected(self):
+        remote = {
+            "checks": {
+                "ipv4": globalping.PASS,
+                "http": globalping.PASS,
+            },
+            "overall": globalping.PASS,
+        }
+        eligible, _ = globalping._remote_admission(
+            self._candidate(), remote
+        )
+        self.assertFalse(eligible)
+
+    def test_overall_state_must_be_pass(self):
+        remote = {
+            "checks": {
+                "ipv4": globalping.PASS,
+                "http": globalping.PASS,
+                "hls": globalping.PASS,
+            },
+            "overall": globalping.INCOMPLETE,
+        }
+        eligible, _ = globalping._remote_admission(
+            self._candidate(), remote
+        )
+        self.assertFalse(eligible)
+
+    def test_direct_ts_rejects_invalid_na_states(self):
+        remote = {
+            "checks": {
+                "ipv4": globalping.PASS,
+                "http": globalping.PASS,
+                "hls": globalping.NA,
+            },
+            "overall": globalping.PASS,
+        }
+        eligible, _ = globalping._remote_admission(
+            self._candidate("DIRECT_TS"), remote
+        )
+        self.assertFalse(eligible)
+
+
 if __name__ == "__main__":
     unittest.main()
 
