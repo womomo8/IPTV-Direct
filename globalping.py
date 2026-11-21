@@ -448,29 +448,44 @@ def _local_admission_reason(candidate: dict[str, Any]) -> str | None:
             return f"本地 {key.upper()} 未通过"
     return None
 
-
 def _remote_admission(candidate: dict[str, Any], remote: dict[str, Any]) -> tuple[bool, str]:
     media = candidate.get("media_type")
-    expected = ("ipv4", "http", "hls") if media == "HLS" else ("http",) if media == "DIRECT_TS" else None
+    expected = (
+        ("ipv4", "http", "hls")
+        if media == "HLS"
+        else ("http",)
+        if media == "DIRECT_TS"
+        else None
+    )
+
     if expected is None:
         return False, "媒体类型无效"
+
     checks = remote.get("checks")
     if not isinstance(checks, dict):
         return False, "缺少远程分项结果"
-    if media == "DIRECT_TS" and (checks.get("ipv4") != NA or checks.get("hls") != NA):
+
+    if media == "DIRECT_TS" and (
+        checks.get("ipv4") != NA or checks.get("hls") != NA
+    ):
         return False, "直接 TS 的远程 IPv4 和 HLS 状态必须均为 N/A"
+
     for key in expected:
         state = checks.get(key)
+
         if state == FAIL:
             return False, f"远程 {key.upper()} 明确失败"
-        if state not in {PASS, INCOMPLETE}:
-            return False, f"远程 {key.upper()} 缺少有效状态"
-    derived = FAIL if any(checks.get(key) == FAIL for key in expected) else PASS if all(checks.get(key) == PASS for key in expected) else INCOMPLETE
-    if remote.get("overall") != derived:
-        return False, "远程总体状态与适用分项状态不一致"
-    # INCOMPLETE 按计划允许降级参与名额竞争，但不改写真实分项状态。
-    return True, "远程状态符合正式准入门槛（含真实 INCOMPLETE 降级）"
 
+        if state == INCOMPLETE:
+            return False, f"远程 {key.upper()} 未完成"
+
+        if state != PASS:
+            return False, f"远程 {key.upper()} 缺少有效 PASS 状态"
+
+    if remote.get("overall") != PASS:
+        return False, "远程总体状态不是 PASS，或与适用分项状态不一致"
+
+    return True, "所有适用远程检测项目均为 PASS"
 
 def _ordered_accepted(accepted: list[dict[str, Any]], channels: list[str]) -> list[dict[str, Any]]:
     """按 channels.txt 的频道顺序组织；频道内保留 Globalping 准入顺序。"""
