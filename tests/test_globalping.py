@@ -851,7 +851,7 @@ class RemoteAdmissionTests(unittest.TestCase):
         )
         self.assertTrue(eligible)
 
-     def test_direct_ts_requires_http_pass_and_other_checks_na(self):
+         def test_direct_ts_requires_http_pass_and_other_checks_na(self):
         remote = {
             "checks": {
                 "ipv4": globalping.NA,
