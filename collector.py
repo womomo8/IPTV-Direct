@@ -292,18 +292,10 @@ def inspect_source_structure(downloaded: dict[str, Any]) -> dict[str, Any]:
             if not line.startswith("#") and _valid_http_url(urljoin(base, line)):
                 entries += 1
     elif any(x.upper().startswith("#EXTM3U") for x in nonempty[:3]):
-        fmt, entries, pending = "m3u", 0, False
-        for line in lines:
-            if not line:
-                continue
-            if line.upper().startswith("#EXTINF:"):
-                pending = True
-            elif line.startswith("#"):
-                continue
-            else:
-                if pending and _valid_http_url(urljoin(base, line)):
-                    entries += 1
-                pending = False
+        fmt, entries = "m3u", 0
+        for line in nonempty:
+            if not line.startswith("#") and _valid_http_url(urljoin(base, line)):
+                entries += 1
     else:
         fmt, entries = "txt", 0
         for line in nonempty:
