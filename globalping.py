@@ -465,10 +465,10 @@ def _remote_admission(candidate: dict[str, Any], remote: dict[str, Any]) -> tupl
     if not isinstance(checks, dict):
         return False, "缺少远程分项结果"
 
-    if media == "DIRECT_TS" and (
-        checks.get("ipv4") != NA or checks.get("hls") != NA
+    if media == "DIRECT_TS" and any(
+        checks.get(key) != NA for key in ("ipv4", "hls", "ts")
     ):
-        return False, "直接 TS 的远程 IPv4 和 HLS 状态必须均为 N/A"
+        return False, "直接 TS 的远程 IPv4、HLS 和 TS 状态必须均为 N/A"
 
     for key in expected:
         state = checks.get(key)
@@ -886,13 +886,12 @@ def _publish(accepted: list[dict[str, Any]], output_dir: Path, channels: list[st
                 except OSError:
                     pass
 
-
-def _candidate_remote(candidate: dict[str, Any], locations: list[dict[str, Any]],
-                      probe_limit: int, boundary: float, budget: dict[str, int],
-                      stats: Counter[str]) -> dict[str, Any]:
-    url = candidate["normalized_url"]
-    is_direct_ts = candidate.get("media_type") == "DIRECT_TS"
-    result: dict[str, Any] = {"checks": {"ipv4": NA if is_direct_ts else INCOMPLETE,
+    result: dict[str, Any] = {"checks": {
+        "ipv4": NA if is_direct_ts else INCOMPLETE,
+        "http": INCOMPLETE,
+        "hls": NA if is_direct_ts else INCOMPLETE,
+        "ts": NA if is_direct_ts else INCOMPLETE,
+    }, "measurements": [], "probe_results": {}, "overall": INCOMPLETE}
                                          "http": INCOMPLETE,
                                          "hls": NA if is_direct_ts else INCOMPLETE},
                               "measurements": [], "probe_results": {}, "overall": INCOMPLETE}
