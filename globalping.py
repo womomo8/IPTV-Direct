@@ -1073,7 +1073,7 @@ def run_globalping(queue: list[dict[str, Any]], settings: dict[str, Any],
                 "stats": {**dict(stats), "no_probes": 1},
                 "publication": {"status": "blocked", "reason": "没有符合要求的中国大陆 eyeball 探针"}}
     boundary = max(1.0, float(settings.get("detection", {}).get("candidate_active_budget_seconds", 8)))
-    max_per_channel = int(settings.get("selection", {}).get("max_routes_per_channel", 2))
+    max_per_channel = min(2, int(settings.get("selection", {}).get("max_routes_per_channel", 2)))
     accepted: list[dict[str, Any]] = []
     channel_counts: Counter[str] = Counter()
     records: list[dict[str, Any]] = []
