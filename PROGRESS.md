@@ -4,7 +4,7 @@ IPTV-Direct — PROGRESS.md
 
 规范依据：MASTER_PLAN.md v4.0.1
 
-文件状态：已确认，待按阶段施工
+文件状态：施工中，S0 已完成
 
 ---
 
@@ -503,8 +503,6 @@ PROGRESS.md 只记录：
 14. 不得把 GitHub Actions 中的详细测试记录和原始证据重复堆入 PROGRESS.md。
 
 ---
-
-文件状态：施工中，S0 已完成
 
 规范依据：MASTER_PLAN.md v4.0.1
 
