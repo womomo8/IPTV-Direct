@@ -163,7 +163,89 @@ class GlobalpingAdmissionFlowTests(unittest.TestCase):
             ["REJECTED_LOCAL", "REJECTED_REMOTE"],
         )
         self.assertEqual(result["accepted"], [])
+    def test_channel_cap_preserves_evidence_and_serializes_measurements(self):
+        candidates = [
+            {
+                "channel": "CCTV-1",
+                "normalized_url": f"https://example.com/{i}.m3u8",
+                "media_type": "HLS",
+                "primary_source": {"source_id": f"source-{i}"},
+                "source_history": [{"source_id": f"source-{i}"}],
+                "checks": {
+                    "ipv4": {"status": globalping.PASS},
+                    "http": {"status": globalping.PASS},
+                    "hls": {"status": globalping.PASS},
+                    "ts": {"status": globalping.PASS},
+                },
+            }
+            for i in range(1, 4)
+        ]
+        remote_result = {
+            "checks": {
+                "ipv4": globalping.PASS,
+                "http": globalping.PASS,
+                "hls": globalping.PASS,
+            },
+            "overall": globalping.PASS,
+        }
+        activity = {"active": 0, "maximum": 0}
 
+        def measure(*args):
+            activity["active"] += 1
+            activity["maximum"] = max(
+                activity["maximum"], activity["active"]
+            )
+            activity["active"] -= 1
+            return remote_result
+
+        with patch.object(globalping, "_read_limits", return_value={
+            "remaining": 10, "rate_remaining": 10, "credits_remaining": 0,
+        }), patch.object(
+            globalping, "_probe_locations", return_value=([{}], 1)
+        ), patch.object(
+            globalping, "_candidate_remote", side_effect=measure
+        ) as remote, patch.object(
+            globalping, "_publish", return_value={"status": "blocked"}
+        ):
+            result = globalping.run_globalping(
+                candidates,
+                {
+                    "globalping": {"max_probes": 1},
+                    "selection": {"max_routes_per_channel": 2},
+                },
+                ["CCTV-1"],
+            )
+
+        self.assertEqual(remote.call_count, 2)
+        self.assertEqual(activity["maximum"], 1)
+        self.assertEqual(len(result["accepted"]), 2)
+        self.assertEqual(
+            result["results"][2]["admission"],
+            "SKIPPED_CHANNEL_FULL",
+        )
+
+        for index, record in enumerate(result["results"][:2]):
+            candidate = candidates[index]
+            self.assertEqual(
+                record["identity"],
+                [candidate["channel"], candidate["normalized_url"]],
+            )
+            self.assertEqual(
+                record["candidate"]["media_type"],
+                candidate["media_type"],
+            )
+            self.assertEqual(
+                record["candidate"]["primary_source"],
+                candidate["primary_source"],
+            )
+            self.assertEqual(
+                record["local"]["checks"],
+                candidate["checks"],
+            )
+            self.assertEqual(
+                record["remote"]["checks"],
+                remote_result["checks"],
+            )
 class DirectTSAndQuotaTests(unittest.TestCase):
     def test_direct_ts_uses_http_only_and_consumes_actual_probe_quota(self):
         candidate = {
