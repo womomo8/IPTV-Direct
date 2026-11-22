@@ -1,6 +1,7 @@
 
 """normalizer.py：解析、频道匹配、URL 归一和去重专项测试。"""
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -194,6 +195,52 @@ class SourceParsingTests(unittest.TestCase):
             "https://example.test/live.ts",
         )
 
+    def test_ibert_txt_aliases_use_actual_settings(self):
+        root = Path(__file__).resolve().parents[1]
+
+        settings = json.loads(
+            (root / "settings.json").read_text(encoding="utf-8")
+        )
+        channels = load_channels(root / "channels.txt")
+
+        content = "\n".join([
+            "CCTV-1_(1080p),https://example.test/cctv1",
+            "CCTV-5+_(1080p),https://example.test/cctv5plus",
+            "Hunan_TV_(2160p),https://example.test/hunan",
+            "BRTV_北京卫视_(1080p),https://example.test/beijing",
+            "江苏卫视_(1080p),https://example.test/jiangsu",
+            "浙江卫视_(1080p),https://example.test/zhejiang",
+            "五星体育_(720p),https://example.test/sports",
+            "凤凰中文_(720p),https://example.test/phoenix",
+            "[BD]广东卫视[ipv6],https://example.test/guangdong",
+            "[SD]江苏卫视[ipv6],https://example.test/jiangsu2",
+            "CCTV-4K_(1080p),https://example.test/cctv4k",
+        ])
+
+        result = parse_source_content(
+            content,
+            SOURCE,
+            channels,
+            aliases=settings["aliases"],
+        )
+
+        actual = {
+            item["tvg_name"]: item["channel"]
+            for item in result["candidates"]
+        }
+
+        self.assertEqual(actual["CCTV-1_(1080p)"], "CCTV-1")
+        self.assertEqual(actual["CCTV-5+_(1080p)"], "CCTV-5+")
+        self.assertEqual(actual["Hunan_TV_(2160p)"], "湖南卫视")
+        self.assertEqual(actual["BRTV_北京卫视_(1080p)"], "北京卫视")
+        self.assertEqual(actual["江苏卫视_(1080p)"], "江苏卫视")
+        self.assertEqual(actual["浙江卫视_(1080p)"], "浙江卫视")
+        self.assertEqual(actual["五星体育_(720p)"], "五星体育")
+        self.assertEqual(actual["凤凰中文_(720p)"], "凤凰卫视中文台")
+        self.assertEqual(actual["[BD]广东卫视[ipv6]"], "广东卫视")
+        self.assertEqual(actual["[SD]江苏卫视[ipv6]"], "江苏卫视")
+        self.assertIsNone(actual["CCTV-4K_(1080p)"])
+    
     def test_parse_m3u_and_extract_channel_attributes(self):
         content = (
             "#EXTM3U\n"
