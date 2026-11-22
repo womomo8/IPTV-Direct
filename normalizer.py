@@ -355,6 +355,7 @@ def normalize_source_content(
     max_hls_manifest_bytes=1048576,
     aliases=None,
     max_candidates_remaining=None,
+    channels_path=None,
 ):
     """执行候选上限、频道过滤、URL 归一和全局去重。"""
     for value, name in (
@@ -385,6 +386,15 @@ def normalize_source_content(
         aliases,
         limit,
     )
+
+    category_by_channel = (
+        load_channel_categories(channels_path)
+        if channels_path else {}
+    )
+
+    for candidate in parsed["candidates"]:
+        channel = candidate.get("channel")
+        candidate["category"] = category_by_channel.get(channel, "")
 
     if not parsed["recognized"]:
         return {
@@ -427,7 +437,6 @@ def normalize_source_content(
             )
             continue
 
-        # 未匹配频道的 URL 不占用全局去重记录。
         if candidate["channel"] is None:
             continue
 
@@ -463,3 +472,4 @@ def normalize_source_content(
         "retained_candidates": len(retained),
         "limit_reached": source_limited,
     }
+
