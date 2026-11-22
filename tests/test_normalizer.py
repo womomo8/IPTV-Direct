@@ -241,7 +241,7 @@ class SourceParsingTests(unittest.TestCase):
         self.assertEqual(actual["[SD]江苏卫视[ipv6]"], "江苏卫视")
         self.assertIsNone(actual["CCTV-4K_(1080p)"])
 
-     def test_iptv_org_aliases_use_actual_settings(self):
+    def test_iptv_org_aliases_use_actual_settings(self):
         root = Path(__file__).resolve().parents[1]
 
         settings = json.loads(
