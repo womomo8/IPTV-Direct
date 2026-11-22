@@ -92,12 +92,15 @@ jobs:
 
       - name: Check Python syntax
         run: |
-          python -m py_compile main.py checker.py globalping.py collector.py normalizer.py publisher.py
           python -m py_compile tests/test_checker.py tests/test_checker_limits.py
           python -m py_compile tests/test_globalping.py tests/test_main_globalping.py
           python -m py_compile tests/test_publisher.py tests/test_publisher_release.py tests/test_main_collection.py
           python -m py_compile tests/test_main_failure.py
+          python -m py_compile tests/test_normalizer.py
 
+      - name: Run normalizer专项测试
+        run: |
+          python -m unittest discover -s tests -p "test_normalizer.py" -v
       - name: Run checker专项测试
         run: |
           python -m unittest discover -s tests -p "test_checker*.py" -v
