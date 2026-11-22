@@ -27,7 +27,7 @@ jobs:
     if: >-
       github.event_name == 'schedule' ||
       (github.event_name == 'workflow_dispatch' &&
-      inputs.mode == '手动正式运行')
+      inputs.mode == '正式')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -72,7 +72,7 @@ jobs:
     name: 手动测试运行
     if: >-
       github.event_name == 'workflow_dispatch' &&
-      inputs.mode == '手动测试运行'
+      inputs.mode == '测试'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -129,7 +129,7 @@ jobs:
     name: 手动诊断 - Globalping 中国 IPv4 诊断
     if: >-
       github.event_name == 'workflow_dispatch' &&
-      inputs.mode == '手动诊断'
+      inputs.mode == '诊断'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
