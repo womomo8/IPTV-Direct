@@ -29,6 +29,30 @@ def load_channels(path):
     return channels
 
 
+def load_channel_categories(path):
+    """读取 channels.txt 中每个频道所属的分类。"""
+    try:
+        lines = Path(path).read_text(encoding="utf-8-sig").splitlines()
+    except OSError as exc:
+        raise ChannelConfigError(f"读取 channels.txt 失败：{exc}") from exc
+
+    categories = {}
+    category = ""
+
+    for line in lines:
+        line = line.strip()
+
+        if not line:
+            continue
+
+        if line.startswith("#"):
+            category = line[1:].strip()
+        else:
+            categories.setdefault(line, category)
+
+    return categories
+
+
 def _is_absolute_http_url(value):
     """判断是否为绝对 HTTP/HTTPS URL，不区分协议头大小写。"""
     if not isinstance(value, str) or not value:
