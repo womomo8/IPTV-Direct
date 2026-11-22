@@ -16,6 +16,8 @@ https://raw.githubusercontent.com/jiandantv/IPTV2026/main/live_lite.txt
 https://m3u.ibert.me/txt/o_s_cn.txt
 https://m3u.ibert.me/txt/cn_p.txt
 https://iptv-org.github.io/iptv/countries/cn.m3u
+https://iptv-org.github.io/iptv/countries/hk.m3u
+https://iptv-org.github.io/iptv/countries/mo.m3u
 
 # 体育来源
 https://iptv-org.github.io/iptv/categories/sports.m3u
