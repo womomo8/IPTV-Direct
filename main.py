@@ -603,6 +603,7 @@ def run_formal_flow(config: dict[str, Any]) -> int:
                 ),
                 aliases=aliases,
                 max_candidates_remaining=remaining,
+                channels_path=str(ROOT / "channels.txt"),
             )
         except Exception as exc:
             safe_message = _safe_diagnostic_text(exc)
