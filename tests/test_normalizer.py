@@ -240,6 +240,46 @@ class SourceParsingTests(unittest.TestCase):
         self.assertEqual(actual["[BD]广东卫视[ipv6]"], "广东卫视")
         self.assertEqual(actual["[SD]江苏卫视[ipv6]"], "江苏卫视")
         self.assertIsNone(actual["CCTV-4K_(1080p)"])
+
+     def test_iptv_org_aliases_use_actual_settings(self):
+        root = Path(__file__).resolve().parents[1]
+
+        settings = json.loads(
+            (root / "settings.json").read_text(encoding="utf-8")
+        )
+        channels = load_channels(root / "channels.txt")
+
+        items = [
+            ("beIN SPORTS XTRA (1080p)", "beIN SPORTS XTRA"),
+            ("ESPN (United States) HD (720p)", "ESPN"),
+            ("ESPN 2 (United States) HD (720p)", "ESPN 2"),
+            ("Eurosport 2 (1080p)", "Eurosport 2"),
+            ("Fox Sports 1 (720p)", "Fox Sports 1"),
+            ("NBA TV (720p)", "NBA TV"),
+            ("Jade (1080p)", "翡翠台"),
+            ("Phoenix Chinese Channel (720p)", "凤凰卫视中文台"),
+            ("Phoenix InfoNews Channel (720p)", "凤凰资讯台"),
+            ("Lotus TV (720p)", "澳门莲花卫视"),
+        ]
+
+        lines = ["#EXTM3U"]
+        for index, (name, _) in enumerate(items):
+            lines.extend([
+                f'#EXTINF:-1 tvg-id="external-{index}",{name}',
+                f"https://example.test/{index}.m3u8",
+            ])
+
+        result = parse_source_content(
+            "\n".join(lines),
+            SOURCE,
+            channels,
+            aliases=settings["aliases"],
+        )
+
+        self.assertEqual(
+            [item["channel"] for item in result["candidates"]],
+            [channel for _, channel in items],
+        )   
     
     def test_parse_m3u_and_extract_channel_attributes(self):
         content = (
