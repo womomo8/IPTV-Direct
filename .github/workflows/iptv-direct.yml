@@ -13,10 +13,10 @@ on:
         required: true
         type: choice
         options:
-          - 手动正式运行
-          - 手动测试运行
-          - 手动诊断
-        default: 手动正式运行
+          - 正式
+          - 测试
+          - 诊断
+        default: 测试
 
 permissions:
   contents: read
