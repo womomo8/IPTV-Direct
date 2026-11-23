@@ -266,9 +266,13 @@ class SourceBatchPipelineTests(unittest.TestCase):
         manual = make_candidate(
             "频道二", 2, priority=0, order=0
         )
+        third = make_candidate(
+            "频道一", 3, priority=1, order=1
+        )
 
         result, _, _, _, remote = self.run_batch(
-            [automatic, manual]
+            [automatic, manual, third],
+            ["PASS", "FAIL", "INCOMPLETE"],
         )
 
         first_remote_candidate = remote.call_args_list[0].args[0][0]
@@ -282,8 +286,17 @@ class SourceBatchPipelineTests(unittest.TestCase):
             [
                 automatic["normalized_url"],
                 manual["normalized_url"],
+                third["normalized_url"],
             ],
         )
+        self.assertEqual(
+            [
+                item["globalping"]["status"]
+                for item in result[0]
+            ],
+            ["PASS", "FAIL", "INCOMPLETE"],
+        )
+        self.assertEqual(remote.call_count, 3)
 
     def test_hls_pass_is_preserved(self):
         candidate = make_candidate("频道一", 1)
