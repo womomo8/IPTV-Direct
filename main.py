@@ -649,7 +649,7 @@ def run_formal_flow(config: dict[str, Any]) -> int:
         candidates = normalized["candidates"]
 
         if normalized.get("extracted_candidates", 0) > 0:
-    valid_sources += 1
+            valid_sources += 1
 
         accepted_now = 0
         rejected_now = 0
