@@ -371,6 +371,54 @@ class SourceParsingTests(unittest.TestCase):
             "https://example.test/live/stream.ts",
         )
 
+    def test_parse_m3u_ignores_leading_hyphen_url(self):
+        content = (
+            "#EXTM3U\n"
+            '#EXTINF:-1 tvg-name="CCTV-5",CCTV-5\n'
+            "-https://example.test/wrong.ts\n"
+            '#EXTINF:-1 tvg-name="CCTV-1",CCTV-1\n'
+            "../live/stream.ts\n"
+        )
+
+        result = parse_source_content(
+            content,
+            SOURCE,
+            CHANNELS,
+        )
+
+        self.assertEqual(
+            [item["channel"] for item in result["candidates"]],
+            ["CCTV-1"],
+        )
+        self.assertTrue(
+            any("前导连字符" in error for error in result["errors"])
+        )
+
+    def test_parse_m3u_ignores_leading_hyphen_extinf(self):
+        content = (
+            "#EXTM3U\n"
+            '#EXTINF:-1 tvg-name="CCTV-5",CCTV-5\n'
+            '-#EXTINF:-1 tvg-name="CCTV-5",CCTV-5\n'
+            "https://example.test/wrong.ts\n"
+            '#EXTINF:-1 tvg-name="CCTV-1",CCTV-1\n'
+            "../live/stream.ts\n"
+        )
+
+        result = parse_source_content(
+            content,
+            SOURCE,
+            CHANNELS,
+        )
+
+        self.assertIsNone(result["candidates"][0]["channel"])
+        self.assertEqual(
+            result["candidates"][-1]["channel"],
+            "CCTV-1",
+        )
+        self.assertTrue(
+            any("前导连字符" in error for error in result["errors"])
+        )
+
     def test_m3u_alias_maps_to_canonical_channel(self):
         content = (
             "#EXTM3U\n"
