@@ -26,7 +26,7 @@
   },
   "schedule": {
     "timezone": "Asia/Shanghai",
-    "daily_time": "06:17"
+    "daily_time": "00:00"
   },
   "aliases": {
     "CCTV1": "CCTV-1",
