@@ -215,6 +215,7 @@ def _probe(url: str) -> dict[str, Any]:
         "field_order": stream.get("field_order"),
     }
 
+
 def _decode(url: str) -> None:
     command = [
         "ffmpeg",
@@ -223,6 +224,7 @@ def _decode(url: str) -> None:
         "-loglevel", "error",
         "-xerror",
         "-err_detect", "explode",
+        "-progress", "pipe:1",
         "-rw_timeout", "4000000",
         "-i", url,
         "-map", "0:v:0",
@@ -237,6 +239,26 @@ def _decode(url: str) -> None:
     if result.returncode != 0:
         raise StreamQualityError(
             f"FFmpeg 解码失败：{result.stderr.strip()[:300]}"
+        )
+
+    decoded_frames = None
+
+    for line in result.stdout.splitlines():
+        if line.startswith("frame="):
+            try:
+                decoded_frames = int(
+                    line.partition("=")[2].strip()
+                )
+            except ValueError:
+                decoded_frames = None
+
+    if decoded_frames is None:
+        raise StreamQualityError("无法确认实际解码帧数")
+
+    if decoded_frames < DECODE_FRAMES:
+        raise StreamQualityError(
+            f"实际解码帧数不足："
+            f"{decoded_frames}/{DECODE_FRAMES}"
         )
 
 
