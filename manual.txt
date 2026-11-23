@@ -10,7 +10,6 @@ https://raw.githubusercontent.com/hujingguang/ChinaIPTV/main/cnTV_AutoUpdate.m3u
 https://raw.githubusercontent.com/womomo8/IPTV-Auto/main/output/iptv.m3u
 https://raw.githubusercontent.com/best-fan/iptv-sources/main/cn_province.m3u8
 https://raw.githubusercontent.com/best-fan/iptv-sources/main/cn_all.m3u8
-https://raw.githubusercontent.com/jiandantv/IPTV2026/main/live_lite.txt
 
 # 国内分类来源
 https://m3u.ibert.me/txt/o_s_cn.txt
@@ -74,13 +73,64 @@ http://221.7.175.154:8445/tsfile/live/1021_1.m3u8?key=txiptv&playlive=1&authid=0
 http://cdn.163189.xyz/live/fct4k/stream.m3u8
 #EXTINF:-1 tvg-name="澳门莲花" group-title="港澳台",澳门莲花
 http://anren.live/HK/BiIOU11uLA.m3u8
+# jiandantv 来源补充：避免单来源100条上限截断
+
+#EXTINF:-1 tvg-name="中天新闻" group-title="港澳台",中天新闻
+http://flv3948069e.live.126.net/live/dabadqdszbtest78612.flv
+#EXTINF:-1 tvg-name="中天新闻" group-title="港澳台",中天新闻
+http://app.kds666.top:5566/api.php?id=1&s=3
+
+#EXTINF:-1 tvg-name="广东体育" group-title="体育",广东体育
+http://173.208.234.146/live/gdty.m3u8
+#EXTINF:-1 tvg-name="广东体育" group-title="体育",广东体育
+http://cdn2.163189.xyz/live/gdty/stream.m3u8
+#EXTINF:-1 tvg-name="广东体育" group-title="体育",广东体育
+http://38.75.136.137:98/gslb/dsdqpub/gdty.m3u8?auth=testpub
+#EXTINF:-1 tvg-name="广东体育" group-title="体育",广东体育
+https://epg.pw/stream/7b470f9fc5c305db0c8622117b7b25ca00eb35ba3e93e865cf0ff9df5c736681.m3u8
+#EXTINF:-1 tvg-name="广东体育" group-title="体育",广东体育
+http://php.jdshipin.com/PLTV/iptv.php?id=gdty
+#EXTINF:-1 tvg-name="广东体育" group-title="体育",广东体育
+http://kkk.888.3116598.xyz/api.php?n=liujiahui&id=EFT0s4&tk=bknhp6JvJlqE
+#EXTINF:-1 tvg-name="广东体育" group-title="体育",广东体育
+http://kkk.888.3116598.xyz/api.php?n=tttt&id=kNP855&tk=FgM0vQMejxvG
+#EXTINF:-1 tvg-name="广东体育" group-title="体育",广东体育
+http://183.11.239.36:808/hls/2/index.m3u8
+#EXTINF:-1 tvg-name="广东体育" group-title="体育",广东体育
+http://php.jdshipin.com/TVOD/iptv.php?id=gdty
+#EXTINF:-1 tvg-name="广东体育" group-title="体育",广东体育
+http://r.jdshipin.com/LiYdg
+#EXTINF:-1 tvg-name="广东体育" group-title="体育",广东体育
+http://8.138.7.223/tv/gd.php?id=00031
+#EXTINF:-1 tvg-name="广东体育" group-title="体育",广东体育
+http://167.88.62.43:64013/0.ts
+
+#EXTINF:-1 tvg-name="睛彩竞技" group-title="体育",睛彩竞技
+http://ottrrs.hl.chinamobile.com/PLTV/88888888/224/3221226472/index.m3u8
+#EXTINF:-1 tvg-name="睛彩竞技" group-title="体育",睛彩竞技
+http://ottrrs.hl.chinamobile.com/PLTV/88888888/224/3221226124/index.m3u8
+#EXTINF:-1 tvg-name="睛彩竞技" group-title="体育",睛彩竞技
+http://39.134.67.108/PLTV/88888888/224/3221225897/1.m3u8
+#EXTINF:-1 tvg-name="睛彩竞技" group-title="体育",睛彩竞技
+http://kkk.888.3116598.xyz/api.php?n=tttt&id=49nLjl&tk=FgM0vQMejxvG
+#EXTINF:-1 tvg-name="睛彩竞技" group-title="体育",睛彩竞技
+http://kkk.888.3116598.xyz/api.php?n=tttt&id=2TKnNO&tk=FgM0vQMejxvG
+#EXTINF:-1 tvg-name="睛彩竞技" group-title="体育",睛彩竞技
+http://kkk.888.3116598.xyz/api.php?n=tttt&id=i210MD&tk=FgM0vQMejxvG
+
+#EXTINF:-1 tvg-name="睛彩篮球" group-title="体育",睛彩篮球
+http://ottrrs.hl.chinamobile.com/PLTV/88888888/224/3221226469/index.m3u8
+#EXTINF:-1 tvg-name="睛彩篮球" group-title="体育",睛彩篮球
+http://ottrrs.hl.chinamobile.com/PLTV/88888888/224/3221226147/index.m3u8
+#EXTINF:-1 tvg-name="睛彩篮球" group-title="体育",睛彩篮球
+http://39.134.67.108/PLTV/88888888/224/3221225895/1.m3u8
+#EXTINF:-1 tvg-name="睛彩篮球" group-title="体育",睛彩篮球
+http://kkk.888.3116598.xyz/api.php?n=tttt&id=ATiiGA&tk=FgM0vQMejxvG
+#EXTINF:-1 tvg-name="睛彩篮球" group-title="体育",睛彩篮球
+http://kkk.888.3116598.xyz/api.php?n=tttt&id=imBKNx&tk=FgM0vQMejxvG
+#EXTINF:-1 tvg-name="睛彩篮球" group-title="体育",睛彩篮球
+http://kkk.888.3116598.xyz/api.php?n=tttt&id=nXR0Sc&tk=FgM0vQMejxvG
 #END-M3U
-
-# 港澳台及综合补充来源
-https://raw.githubusercontent.com/o0i/iptv/master/test.txt
-
-# 国内综合及体育补充来源
-https://raw.githubusercontent.com/10yanhon/iptv/main/iptv-21
 
 # 国际体育补充来源
 https://raw.githubusercontent.com/tibby0413/Tv/main/Tv-usb.m3u
