@@ -74,7 +74,9 @@ class SourceBatchPipelineTests(unittest.TestCase):
             "error": None,
         }
 
-    def run_batch(self, candidates, statuses=None):
+    def run_batch(
+        self, candidates, statuses=None, stream_status="PASS"
+    ):
         local_results = [make_local(item) for item in candidates]
         statuses = statuses or ["PASS"] * len(candidates)
 
@@ -89,12 +91,25 @@ class SourceBatchPipelineTests(unittest.TestCase):
             for index, item in enumerate(candidates)
         }
 
+        stream_results = [
+            {
+                **item,
+                "stream_quality": {"status": stream_status},
+            }
+            for item in local_results
+        ]
+
         with (
             patch.object(
                 main.checker,
                 "check_candidates",
                 return_value=local_results,
             ) as local,
+            patch.object(
+                main.stream,
+                "check_candidates",
+                return_value=stream_results,
+            ),
             patch.object(
                 main.globalping,
                 "create_session",
@@ -115,6 +130,29 @@ class SourceBatchPipelineTests(unittest.TestCase):
 
         return result, local, create_session, remote
 
+    def test_stream_failure_does_not_call_globalping(self):
+        """视频质量检测失败，不得提交 Globalping。"""
+
+        candidates = [
+            make_candidate("频道一", 1),
+        ]
+
+        result, _, create_session, remote = self.run_batch(
+            candidates,
+            stream_status="FAIL",
+        )
+
+        self.assertEqual(
+            result[0][0]["stream_quality"]["status"],
+            "FAIL",
+        )
+        self.assertEqual(
+            len(result[1]["accepted_routes"]),
+            0,
+        )
+        create_session.assert_not_called()
+        remote.assert_not_called()
+    
     def test_local_check_and_session_are_each_created_once(self):
         candidates = [
             make_candidate("频道一", 1),
