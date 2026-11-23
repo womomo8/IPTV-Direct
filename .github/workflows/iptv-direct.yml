@@ -112,6 +112,7 @@ jobs:
           python -m py_compile tests/test_publisher.py tests/test_publisher_release.py tests/test_main_collection.py
           python -m py_compile tests/test_main_failure.py
           python -m py_compile tests/test_normalizer.py
+          python -m py_compile tests/test_stream.py
           python -m py_compile tests/test_source.py
 
       - name: Run main来源批次逐条调度专项测试
@@ -123,6 +124,11 @@ jobs:
       - name: Run normalizer专项测试
         run: |
           python -m unittest discover -s tests -p "test_normalizer.py" -v
+
+      - name: Run stream视频质量专项测试
+        run: |
+          python -m unittest discover -s tests -p "test_stream.py" -v
+          
       - name: Run checker专项测试
         run: |
           python -m unittest discover -s tests -p "test_checker*.py" -v
