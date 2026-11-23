@@ -382,6 +382,71 @@ class StatusAndFlowTests(unittest.TestCase):
                 )
         request.assert_not_called()
 
+    def test_insufficient_quota_stops_later_candidate_measurements(self):
+        def quota_exhausted(url, locations, budget, headers=None):
+            gp._create_measurement(
+                url,
+                locations,
+                budget,
+                headers,
+            )
+
+        candidates = [
+            {
+                "id": "c1",
+                "media_type": "DIRECT_TS",
+                "normalized_url": "http://example.test/a.ts",
+            },
+            {
+                "id": "c2",
+                "media_type": "DIRECT_TS",
+                "normalized_url": "http://example.test/b.ts",
+            },
+        ]
+
+        with patch.object(
+            gp,
+            "read_limits",
+            return_value={"limit": 50, "remaining": 10, "reset": 1},
+        ), patch.object(
+            gp,
+            "choose_probes",
+            return_value=[
+                {
+                    "country": "CN",
+                    "asn": 9808,
+                    "tags": ["eyeball-network"],
+                    "limit": 1,
+                }
+            ],
+        ), patch.object(
+            gp,
+            "_remaining_budget",
+            return_value=0,
+        ) as remaining, patch.object(
+            gp,
+            "_stage",
+            side_effect=quota_exhausted,
+        ) as stage:
+            output = gp.check_candidates(
+                candidates,
+                {"max_probes": 3},
+            )
+
+        self.assertEqual(stage.call_count, 1)
+        self.assertEqual(remaining.call_count, 1)
+        self.assertEqual(
+            output[0]["globalping"]["status"],
+            gp.INCOMPLETE,
+        )
+        self.assertEqual(
+            output[1]["globalping"]["status"],
+            gp.INCOMPLETE,
+        )
+        self.assertIn(
+            "停止",
+            output[1]["globalping"]["error"],
+        )
 
 if __name__ == "__main__":
     unittest.main()
