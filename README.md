@@ -11,7 +11,7 @@ IPTV-Direct
 
 自动运行
 
-GitHub Actions 每天北京时间晚上 00：00 自动运行，也支持手动正式运行、测试运行和诊断。
+GitHub Actions 每天北京时间 00:00 自动运行，也支持手动正式运行、测试运行和诊断运行。
 
 订阅地址
 
@@ -20,6 +20,5 @@ GitHub Actions 每天北京时间晚上 00：00 自动运行，也支持手动�
 
 项目文档
 
-- "MASTER_PLAN.md"：项目标准。
-- "CORE_FLOW.md"：运行流程。
-- "PROGRESS.md"：开发进度。
+- "MASTER_PLAN.md"：项目唯一正式标准。
+- "PROGRESS.md"：开发进度、测试结果和待处理事项。
