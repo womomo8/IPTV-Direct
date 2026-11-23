@@ -207,17 +207,6 @@ def _probe(url: str) -> dict[str, Any]:
         "field_order": stream.get("field_order"),
     }
 
-
-    return {
-        "codec": codec,
-        "width": width,
-        "height": height,
-        "fps": fps,
-        "bitrate": bitrate,
-        "field_order": stream.get("field_order"),
-    }
-
-
 def _decode(url: str) -> None:
     command = [
         "ffmpeg",
