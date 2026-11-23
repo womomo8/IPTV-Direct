@@ -75,7 +75,11 @@ class SourceBatchPipelineTests(unittest.TestCase):
         }
 
     def run_batch(
-        self, candidates, statuses=None, stream_status="PASS"
+        self,
+        candidates,
+        statuses=None,
+        stream_status="PASS",
+        stream_error=None,
     ):
         local_results = [make_local(item) for item in candidates]
         statuses = statuses or ["PASS"] * len(candidates)
@@ -109,7 +113,8 @@ class SourceBatchPipelineTests(unittest.TestCase):
                 main.stream,
                 "check_candidates",
                 return_value=stream_results,
-            ),
+                side_effect=stream_error,
+            ) as stream_check,
             patch.object(
                 main.globalping,
                 "create_session",
@@ -128,23 +133,66 @@ class SourceBatchPipelineTests(unittest.TestCase):
                 CHANNELS,
             )
 
-        return result, local, create_session, remote
+        return (
+            result,
+            local,
+            stream_check,
+            create_session,
+            remote,
+        )
 
-    def test_stream_failure_does_not_call_globalping(self):
-        """视频质量检测失败，不得提交 Globalping。"""
+    def test_only_stream_pass_can_enter_globalping(self):
+        """FAIL、INCOMPLETE 和无效状态均不得进入 Globalping。"""
+
+        for status in ("FAIL", "INCOMPLETE", None, "UNKNOWN"):
+            with self.subTest(stream_status=status):
+                candidates = [
+                    make_candidate("频道一", 1),
+                ]
+
+                (
+                    result,
+                    _,
+                    _,
+                    create_session,
+                    remote,
+                ) = self.run_batch(
+                    candidates,
+                    stream_status=status,
+                )
+
+                self.assertEqual(
+                    result[0][0]["stream_quality"]["status"],
+                    status,
+                )
+                self.assertEqual(
+                    len(result[1]["accepted_routes"]),
+                    0,
+                )
+                create_session.assert_not_called()
+                remote.assert_not_called()
+
+    def test_stream_exception_does_not_call_globalping(self):
+        """视频质量检测异常必须按 INCOMPLETE 处理。"""
 
         candidates = [
             make_candidate("频道一", 1),
         ]
 
-        result, _, create_session, remote = self.run_batch(
+        (
+            result,
+            _,
+            _,
+            create_session,
+            remote,
+        ) = self.run_batch(
             candidates,
-            stream_status="FAIL",
+            stream_error=RuntimeError("模拟视频检测异常"),
         )
 
         self.assertEqual(
             result[0][0]["stream_quality"]["status"],
-            "FAIL",
+            "INCOMPLETE",
         )
         self.assertEqual(
             len(result[1]["accepted_routes"]),
@@ -152,18 +200,19 @@ class SourceBatchPipelineTests(unittest.TestCase):
         )
         create_session.assert_not_called()
         remote.assert_not_called()
-    
+
     def test_local_check_and_session_are_each_created_once(self):
         candidates = [
             make_candidate("频道一", 1),
             make_candidate("频道二", 2),
         ]
 
-        result, local, create_session, remote = self.run_batch(
-            candidates
+        result, local, stream_check, create_session, remote = (
+            self.run_batch(candidates)
         )
 
         local.assert_called_once()
+        stream_check.assert_called_once()
         create_session.assert_called_once()
         self.assertEqual(remote.call_count, 2)
         self.assertEqual(len(result[0]), 2)
@@ -176,7 +225,7 @@ class SourceBatchPipelineTests(unittest.TestCase):
             make_candidate("频道一", 3, order=2),
         ]
 
-        result, _, _, remote = self.run_batch(candidates)
+        result, _, _, _, remote = self.run_batch(candidates)
 
         self.assertEqual(remote.call_count, 2)
         self.assertEqual(len(result[1]["accepted_routes"]), 2)
@@ -196,7 +245,7 @@ class SourceBatchPipelineTests(unittest.TestCase):
             "频道二", 2, priority=0, order=0
         )
 
-        result, _, _, remote = self.run_batch(
+        result, _, _, _, remote = self.run_batch(
             [automatic, manual]
         )
 
@@ -218,7 +267,7 @@ class SourceBatchPipelineTests(unittest.TestCase):
         failed = make_candidate("频道一", 1, order=0)
         incomplete = make_candidate("频道二", 2, order=1)
 
-        result, _, _, _ = self.run_batch(
+        result, _, _, _, _ = self.run_batch(
             [failed, incomplete],
             ["FAIL", "INCOMPLETE"],
         )
