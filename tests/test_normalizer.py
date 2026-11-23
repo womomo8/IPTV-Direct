@@ -263,6 +263,7 @@ class SourceParsingTests(unittest.TestCase):
             ("Phoenix Chinese Channel (720p)", "凤凰卫视中文台"),
             ("Phoenix InfoNews Channel (720p)", "凤凰资讯台"),
             ("Lotus TV (720p)", "澳门莲花卫视"),
+            ("TVB明珠", "明珠台"),
         ]
 
         lines = ["#EXTM3U"]
@@ -307,6 +308,51 @@ class SourceParsingTests(unittest.TestCase):
         self.assertEqual(candidate["tvg_name"], "CCTV-1")
         self.assertEqual(candidate["category"], "央视")
 
+    def test_parse_m3u_title_with_commas_in_quoted_attributes(self):
+        root = Path(__file__).resolve().parents[1]
+
+        settings = json.loads(
+            (root / "settings.json").read_text(encoding="utf-8")
+        )
+        channels = load_channels(root / "channels.txt")
+
+        content = (
+            "#EXTM3U\n"
+            '#EXTINF:-1 tvg-id="SkySportsF1.uk@SD" '
+            'http-referrer="https://stmify.com/" '
+            'http-user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+            'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 '
+            'Safari/537.36" group-title="Sports",Sky Sports F1 (720p)\n'
+            '#EXTVLCOPT:http-referrer=https://stmify.com/\n'
+            '#EXTVLCOPT:http-user-agent=Mozilla/5.0 test\n'
+            "https://example.test/sky.m3u8\n"
+            '#EXTINF:-1 tvg-id="LotusTV.mo@SD" '
+            'http-user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+            'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 '
+            'Safari/537.36" group-title="General",Lotus TV (720p)\n'
+            '#EXTVLCOPT:http-user-agent=Mozilla/5.0 test\n'
+            "https://example.test/lotus.m3u8\n"
+        )
+
+        result = parse_source_content(
+            content,
+            SOURCE,
+            channels,
+            aliases=settings["aliases"],
+        )
+
+        self.assertEqual(
+            [item["channel"] for item in result["candidates"]],
+            ["Sky Sports F1", "澳门莲花卫视"],
+        )
+        self.assertEqual(
+            [item["raw_url"] for item in result["candidates"]],
+            [
+                "https://example.test/sky.m3u8",
+                "https://example.test/lotus.m3u8",
+            ],
+        )
+    
     def test_parse_m3u_relative_url(self):
         content = (
             "#EXTM3U\n"
