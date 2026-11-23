@@ -94,11 +94,15 @@ jobs:
         run: |
           python -m py_compile tests/test_checker.py tests/test_checker_limits.py
           python -m py_compile tests/test_globalping.py tests/test_main_globalping.py
+          python -m py_compile tests/test_main_source_batch.py
           python -m py_compile tests/test_publisher.py tests/test_publisher_release.py tests/test_main_collection.py
           python -m py_compile tests/test_main_failure.py
           python -m py_compile tests/test_normalizer.py
           python -m py_compile tests/test_source.py
 
+      - name: Run main来源批次逐条调度专项测试
+        run: |
+          python -m unittest discover -s tests -p "test_main_source_batch.py" -v
       - name: Run source专项测试
         run: |
           python -m unittest discover -s tests -p "test_source.py" -v
