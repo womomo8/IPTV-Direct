@@ -649,6 +649,54 @@ class SourceNormalizationTests(unittest.TestCase):
         self.assertEqual(second["duplicate_candidates"], 1)
         self.assertEqual(second["candidates"], [])
 
+    def test_duplicate_does_not_consume_single_source_limit(self):
+        seen = {"https://example.test/duplicate.ts"}
+
+        content = (
+            "CCTV-1,https://example.test/duplicate.ts\n"
+            "CCTV-5,https://example.test/valid.ts\n"
+            "湖南卫视,https://example.test/extra.ts\n"
+        )
+
+        result = normalize_source_content(
+            content=content,
+            source=SOURCE,
+            channels=CHANNELS,
+            max_candidates_per_source=1,
+            seen_urls=seen,
+        )
+
+        self.assertEqual(
+            [item["normalized_url"] for item in result["candidates"]],
+            ["https://example.test/valid.ts"],
+        )
+        self.assertEqual(result["duplicate_candidates"], 1)
+        self.assertEqual(result["extracted_candidates"], 1)
+        self.assertTrue(result["limit_reached"])
+
+    def test_invalid_url_does_not_consume_single_source_limit(self):
+        content = (
+            "CCTV-1,https://example.test:bad/invalid.ts\n"
+            "CCTV-5,https://example.test/valid.ts\n"
+        )
+
+        result = normalize_source_content(
+            content=content,
+            source=SOURCE,
+            channels=CHANNELS,
+            max_candidates_per_source=1,
+            seen_urls=set(),
+        )
+
+        self.assertEqual(
+            [item["normalized_url"] for item in result["candidates"]],
+            ["https://example.test/valid.ts"],
+        )
+        self.assertEqual(result["extracted_candidates"], 1)
+        self.assertTrue(
+            any("无效线路 URL" in error for error in result["errors"])
+        )
+    
     def test_channel_category_comes_from_channels_file(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "channels.txt"
