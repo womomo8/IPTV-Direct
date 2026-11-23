@@ -97,7 +97,11 @@ jobs:
           python -m py_compile tests/test_publisher.py tests/test_publisher_release.py tests/test_main_collection.py
           python -m py_compile tests/test_main_failure.py
           python -m py_compile tests/test_normalizer.py
+          python -m py_compile tests/test_source.py
 
+      - name: Run source专项测试
+        run: |
+          python -m unittest discover -s tests -p "test_source.py" -v
       - name: Run normalizer专项测试
         run: |
           python -m unittest discover -s tests -p "test_normalizer.py" -v
