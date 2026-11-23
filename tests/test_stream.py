@@ -284,5 +284,63 @@ class StreamProbeMeasurementTests(unittest.TestCase):
             self.probe_with_data(data)
 
 
+class StreamDecodeTests(unittest.TestCase):
+
+    @patch("stream._run")
+    def test_decode_passes_with_30_frames(self, run):
+        run.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="frame=30\nprogress=end\n",
+            stderr="",
+        )
+
+        stream._decode("https://example.com/live.ts")
+
+        command = run.call_args.args[0]
+        self.assertIn("-progress", command)
+        self.assertIn("pipe:1", command)
+        run.assert_called_once_with(
+            command,
+            stream.DECODE_TIMEOUT,
+        )
+
+    @patch("stream._run")
+    def test_decode_rejects_fewer_than_30_frames(self, run):
+        run.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="frame=10\nprogress=end\n",
+            stderr="",
+        )
+
+        with self.assertRaises(stream.StreamQualityError):
+            stream._decode("https://example.com/live.ts")
+
+    @patch("stream._run")
+    def test_decode_rejects_missing_frame_count(self, run):
+        run.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="progress=end\n",
+            stderr="",
+        )
+
+        with self.assertRaises(stream.StreamQualityError):
+            stream._decode("https://example.com/live.ts")
+
+    @patch("stream._run")
+    def test_decode_rejects_ffmpeg_error(self, run):
+        run.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout="frame=10\n",
+            stderr="decode error",
+        )
+
+        with self.assertRaises(stream.StreamQualityError):
+            stream._decode("https://example.com/live.ts")
+
+
 if __name__ == "__main__":
     unittest.main()
