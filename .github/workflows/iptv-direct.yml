@@ -2,7 +2,7 @@ name: IPTV-Direct Unified Workflow
 
 on:
   schedule:
-    # 北京时间每天 00:00（UTC 前一天 16:00）
+    # 北京时间每天晚上 12:00（UTC 前一天 16:00）
     - cron: "0 16 * * *"
 
   workflow_dispatch:
