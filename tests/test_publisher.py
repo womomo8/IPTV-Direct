@@ -54,6 +54,7 @@ def make_candidate(
         "priority": priority,
         "source_order": source_order,
         "source_type": "manual" if priority == 0 else "automatic",
+        "stream_quality": {"status": "PASS"},
         "checks": local_checks,
         "globalping": {
             "status": global_status,
@@ -101,6 +102,29 @@ class PublisherAdmissionTests(unittest.TestCase):
             "N/A",
         )
 
+    def test_stream_quality_must_explicitly_pass(self):
+        """视频质量缺失、失败或未完成，都不得正式准入。"""
+
+        for status in ("FAIL", "INCOMPLETE", None):
+            candidate = make_candidate()
+
+            if status is None:
+                candidate.pop("stream_quality")
+            else:
+                candidate["stream_quality"]["status"] = status
+
+            result = self.process([candidate])
+
+            self.assertEqual(
+                len(result["accepted_routes"]),
+                0,
+                f"视频质量状态 {status} 不应准入",
+            )
+            self.assertEqual(
+                result["results"][0]["status"],
+                publisher.REJECTED,
+            )
+    
     def test_local_failure_is_rejected(self):
         """本地任一适用检测失败，不得准入。"""
 
