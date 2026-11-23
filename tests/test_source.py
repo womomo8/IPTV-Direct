@@ -130,7 +130,7 @@ class SourceFlowTests(unittest.TestCase):
                 "truncated_media_probe": False,
             }
 
-        def fake_detection(candidates, settings):
+        def fake_detection(candidates, settings, channels):
             detected_candidates.extend(candidates)
             return candidates
 
