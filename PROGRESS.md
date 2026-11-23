@@ -44,8 +44,8 @@ IPTV-Direct — PROGRESS.md
 3. "main.py" 已将 "settings.json" 中的明确频道别名传入 "normalizer"。
 4. CCTV-5、CCTV-5+、CCTV-4 中文国际的明确别名测试已覆盖。
 5. 未知相似频道名称不得模糊匹配的测试已覆盖。
-6. "settings.json" 已增加 10 条明确频道别名，并通过实际配置解析测试。
-7. 新增别名专项测试 "test_iptv_org_aliases_use_actual_settings" 已通过。
+6. "settings.json" 已配置多来源明确频道别名，覆盖 iBert、IPTV-org、o0i 等来源。
+7. 已通过实际配置解析测试，覆盖来源名称映射、未知频道拒绝匹配及新增别名回归测试。
 
 ☑ 阶段三：来源采集、解析和候选交接
 
