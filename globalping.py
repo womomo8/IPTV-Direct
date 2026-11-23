@@ -936,10 +936,64 @@ def _failed_candidate(candidate: dict[str, Any], reason: str) -> dict[str, Any]:
     }
     return {**candidate, "globalping": result}
 
+def create_session(settings: dict[str, Any]) -> dict[str, Any]:
+    """为一个来源批次初始化一次探针选择和共享额度预算。"""
+    if not isinstance(settings, dict):
+        raise TypeError("settings 必须是配置对象。")
+
+    max_probes = settings.get("max_probes")
+    if (
+        isinstance(max_probes, bool)
+        or not isinstance(max_probes, int)
+        or max_probes < 1
+    ):
+        raise ValueError("globalping.max_probes 必须是正整数。")
+
+    max_probes = min(max_probes, 3)
+
+    try:
+        limits = read_limits()
+        remaining = limits["remaining"]
+
+        if remaining < 1:
+            raise GlobalpingError("Globalping 当前没有剩余额度。")
+
+        locations = choose_probes(min(max_probes, remaining))
+        if not locations:
+            raise GlobalpingError("没有可用的中国大陆探针。")
+
+        probe_count = sum(
+            int(item.get("limit", 1))
+            for item in locations
+        )
+        if probe_count < 1:
+            raise GlobalpingError("Globalping 选择的探针数量无效。")
+
+    except GlobalpingError as exc:
+        return {
+            "locations": [],
+            "budget": {
+                "remaining": 0,
+                "probe_count": 0,
+                "halted": True,
+            },
+            "error": str(exc),
+        }
+
+    return {
+        "locations": locations,
+        "budget": {
+            "remaining": remaining,
+            "probe_count": probe_count,
+            "halted": False,
+        },
+        "error": None,
+    }
 
 def check_candidates(
     candidates: list[dict[str, Any]],
     settings: dict[str, Any],
+    session: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """检测候选列表；settings 接收 settings.json 的 globalping 区段。"""
     if not isinstance(candidates, list):
@@ -979,23 +1033,39 @@ def check_candidates(
     if not eligible:
         return [item for item in output if item is not None]
 
-    # 本次正式调用先读取实时额度，再发现在线探针。
-    try:
-        limits = read_limits()
-        if limits["remaining"] < 1:
-            raise GlobalpingError("Globalping 当前没有剩余额度。")
-        locations = choose_probes(min(max_probes, limits["remaining"]))
-    except GlobalpingError as exc:
+    # 同一来源批次复用同一个 Globalping 会话。
+    if session is None:
+        session = create_session(settings)
+
+    if not isinstance(session, dict):
+        raise TypeError("Globalping session 必须是对象。")
+
+    locations = session.get("locations")
+    budget = session.get("budget")
+    error = session.get("error")
+
+    if (
+        not isinstance(locations, list)
+        or not isinstance(budget, dict)
+        or not isinstance(budget.get("halted"), bool)
+        or isinstance(budget.get("remaining"), bool)
+        or not isinstance(budget.get("remaining"), int)
+        or isinstance(budget.get("probe_count"), bool)
+        or not isinstance(budget.get("probe_count"), int)
+        or (error is not None and not isinstance(error, str))
+    ):
+        raise TypeError("Globalping session 结构无效。")
+
+    if error or budget["halted"]:
+        reason = error or (
+            "Globalping 额度不足或触发限流，已停止本轮后续测量创建。"
+        )
         for index, candidate in eligible:
-            output[index] = incomplete_result(candidate, str(exc))
+            output[index] = incomplete_result(candidate, reason)
         return [item for item in output if item is not None]
 
-    probe_count = sum(int(item.get("limit", 1)) for item in locations)
-    budget: dict[str, Any] = {
-        "remaining": limits["remaining"],
-        "probe_count": probe_count,
-        "halted": False,
-    }
+    if not locations:
+        raise TypeError("Globalping session 没有可用探针。")
 
     for index, candidate in eligible:
         if budget["halted"]:
