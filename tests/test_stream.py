@@ -1,4 +1,6 @@
 
+import json
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -196,6 +198,90 @@ class StreamQualityTests(unittest.TestCase):
                 "stream_quality": {"status": stream.INCOMPLETE}
             })
         )
+
+
+class StreamProbeMeasurementTests(unittest.TestCase):
+
+    def probe_with_data(self, data):
+        result = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps(data),
+            stderr="",
+        )
+
+        with patch("stream._run", return_value=result):
+            return stream._probe("https://example.com/live.ts")
+
+    def base_data(self):
+        return {
+            "streams": [{
+                "codec_type": "video",
+                "codec_name": "h264",
+                "width": 1920,
+                "height": 1080,
+                "avg_frame_rate": "25/1",
+                "r_frame_rate": "25/1",
+                "bit_rate": "6000000",
+            }],
+            "packets": [
+                {
+                    "pts_time": "0",
+                    "size": "312500",
+                    "duration_time": "1",
+                },
+                {
+                    "pts_time": "1",
+                    "size": "312500",
+                    "duration_time": "1",
+                },
+            ],
+        }
+
+    def test_packet_bitrate_includes_last_packet_duration(self):
+        bitrate = stream._packet_bitrate([
+            {
+                "pts_time": "0",
+                "size": "312500",
+                "duration_time": "1",
+            },
+            {
+                "pts_time": "1",
+                "size": "312500",
+                "duration_time": "1",
+            },
+        ])
+
+        self.assertEqual(bitrate, 2_500_000)
+
+    def test_missing_packet_duration_returns_none(self):
+        bitrate = stream._packet_bitrate([
+            {
+                "pts_time": "0",
+                "size": "312500",
+                "duration_time": "1",
+            },
+            {
+                "pts_time": "1",
+                "size": "312500",
+            },
+        ])
+
+        self.assertIsNone(bitrate)
+
+    def test_missing_average_fps_does_not_fallback_to_r_fps(self):
+        data = self.base_data()
+        data["streams"][0]["avg_frame_rate"] = "0/0"
+
+        with self.assertRaises(stream.StreamQualityError):
+            self.probe_with_data(data)
+
+    def test_missing_packet_bitrate_does_not_fallback_to_declared_bitrate(self):
+        data = self.base_data()
+        data["packets"] = []
+
+        with self.assertRaises(stream.StreamQualityError):
+            self.probe_with_data(data)
 
 
 if __name__ == "__main__":
