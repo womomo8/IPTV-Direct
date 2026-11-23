@@ -102,6 +102,20 @@ class MainCollectionFlowTests(unittest.TestCase):
         output = io.StringIO()
         errors = io.StringIO()
 
+        def fake_source_batch(
+            candidates,
+            accepted_routes,
+            settings,
+            channels,
+        ):
+            admission = admission_side_effect(
+                candidates,
+                accepted_routes,
+                channels,
+                settings,
+            )
+            return candidates, admission, candidates
+
         with (
             patch(
                 "main.iter_source_contents",
@@ -116,14 +130,10 @@ class MainCollectionFlowTests(unittest.TestCase):
                 ),
             ),
             patch(
-                "main.run_detection_pipeline",
-                side_effect=lambda candidates, current_settings, channels: candidates,
-            ),
-            patch("main._print_detection_summary"),
-            patch(
-                "main.process_admission_batch",
-                side_effect=admission_side_effect,
+                "main.run_source_batch_pipeline",
+                side_effect=fake_source_batch,
             ) as admission_mock,
+            patch("main._print_detection_summary"),
             patch(
                 "main.publisher.build_subscriptions",
                 return_value={
