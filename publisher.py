@@ -243,6 +243,86 @@ def _channel_counts(
     return counts
 
 
+def next_candidate_for_detection(
+    candidates: list[dict[str, Any]],
+    accepted_routes: list[dict[str, Any]],
+    channels: list[str],
+    settings: dict[str, Any],
+) -> dict[str, Any] | None:
+    """按正式准入规则选择下一条值得执行 Globalping 的候选。"""
+    if not isinstance(candidates, list):
+        raise PublisherError("candidates 必须是列表")
+
+    if not isinstance(accepted_routes, list):
+        raise PublisherError("accepted_routes 必须是列表")
+
+    if (
+        not isinstance(channels, list)
+        or any(not isinstance(item, str) or not item for item in channels)
+    ):
+        raise PublisherError("channels 必须是有效频道名称列表")
+
+    if not isinstance(settings, dict):
+        raise PublisherError("settings 必须是配置对象")
+
+    selection = settings.get("selection")
+    if not isinstance(selection, dict):
+        raise PublisherError("settings 缺少 selection 配置")
+
+    if selection.get("max_routes_per_channel") != MAX_ROUTES_PER_CHANNEL:
+        raise PublisherError(
+            "每个频道最多保留线路数必须符合 MASTER_PLAN.md：2"
+        )
+
+    counts = _channel_counts(accepted_routes, channels)
+
+    seen_urls = set()
+    for route in accepted_routes:
+        if not isinstance(route, dict):
+            raise PublisherError("累计准入数据中存在无效线路")
+        url = route.get("normalized_url")
+        if isinstance(url, str):
+            seen_urls.add(url)
+
+    indexed = list(enumerate(candidates))
+
+    def sort_key(item):
+        index, candidate = item
+        if not isinstance(candidate, dict):
+            return (999999, 999999, index)
+        try:
+            priority, order = _candidate_order(candidate)
+            return (priority, order, index)
+        except PublisherError:
+            return (999999, 999999, index)
+
+    indexed.sort(key=sort_key)
+
+    for _, candidate in indexed:
+        if not isinstance(candidate, dict):
+            continue
+
+        channel = candidate.get("channel")
+        if channel not in counts:
+            continue
+
+        if counts[channel] >= MAX_ROUTES_PER_CHANNEL:
+            continue
+
+        url = candidate.get("normalized_url")
+        if not _valid_url(url) or url in seen_urls:
+            continue
+
+        if _local_admission_reason(candidate):
+            continue
+
+        return candidate
+
+    return None
+
+
+
+
 def process_batch(
     candidates: list[dict[str, Any]],
     accepted_routes: list[dict[str, Any]],
