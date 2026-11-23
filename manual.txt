@@ -43,3 +43,12 @@ http://cmhiott.hvs.fj.chinamobile.com/PLTV/88888888/224/3221225805/index.m3u8?se
 #EXTINF:-1 tvg-id="CCTV9" tvg-name="CCTV-9" group-title="福建移动",CCTV-9
 http://cmhiott.hvs.fj.chinamobile.com/PLTV/88888888/224/3221225820/index.m3u8?servicetype=1
 #END-M3U
+
+# 港澳台及综合补充来源
+https://raw.githubusercontent.com/o0i/iptv/master/test.txt
+
+# 国内综合及体育补充来源
+https://raw.githubusercontent.com/10yanhon/iptv/main/iptv-21
+
+# 国际体育补充来源
+https://raw.githubusercontent.com/tibby0413/Tv/main/Tv-usb.m3u
