@@ -433,7 +433,7 @@ def normalize_source_content(
         content_type,
         max_hls_manifest_bytes,
         aliases,
-        limit,
+        None,
     )
 
     category_by_channel = (
@@ -455,29 +455,16 @@ def normalize_source_content(
             "limit_reached": False,
         }
 
-    target_candidate_count = sum(
-        candidate["channel"] is not None
-        for candidate in parsed["candidates"]
-    )
-
-    source_limited = (
-        target_candidate_count > max_candidates_per_source
-    )
-    total_limited = (
-        max_candidates_remaining is not None
-        and target_candidate_count > max_candidates_remaining
-    )
-
-    selected = [
-        candidate
-        for candidate in parsed["candidates"]
-        if candidate["channel"] is not None
-    ][:limit]
     retained = []
     duplicates = 0
     matched = 0
+    source_limited = False
+    total_limited = False
 
-    for candidate in selected:
+    for candidate in parsed["candidates"]:
+        if candidate["channel"] is None:
+            continue
+
         try:
             url = normalize_url(candidate["raw_url"])
         except (TypeError, ValueError):
@@ -486,14 +473,22 @@ def normalize_source_content(
             )
             continue
 
-        if candidate["channel"] is None:
-            continue
-
         matched += 1
 
         if url in seen_urls:
             duplicates += 1
             continue
+
+        # 只有规范化成功且全局未重复的候选才占用名额。
+        if len(retained) >= limit:
+            source_limited = (
+                len(retained) >= max_candidates_per_source
+            )
+            total_limited = (
+                max_candidates_remaining is not None
+                and len(retained) >= max_candidates_remaining
+            )
+            break
 
         seen_urls.add(url)
         retained.append({
@@ -515,7 +510,7 @@ def normalize_source_content(
     return {
         **parsed,
         "candidates": retained,
-        "extracted_candidates": len(selected),
+        "extracted_candidates": len(retained),
         "matched_target_candidates": matched,
         "duplicate_candidates": duplicates,
         "retained_candidates": len(retained),
