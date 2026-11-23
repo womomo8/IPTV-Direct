@@ -32,7 +32,7 @@ def make_local(candidate, media_type="HLS"):
     }
     if media_type == "DIRECT_TS":
         checks["hls"] = {
-            "status": "NA",
+            "status": "N/A",
             "reason": "直接 TS 不适用 HLS 检测",
         }
 
@@ -365,11 +365,11 @@ class SourceBatchPipelineTests(unittest.TestCase):
         def make_direct_ts(result):
             result["media_type"] = "DIRECT_TS"
             result["checks"]["hls"] = {
-                "status": "NA",
+                "status": "N/A",
                 "reason": "直接 TS 不适用 HLS 检测",
             }
             result["globalping"]["checks"]["hls"] = {
-                "status": "NA",
+                "status": "N/A",
                 "reason": "直接 TS 不适用 HLS 检测",
             }
             return result
@@ -382,10 +382,10 @@ class SourceBatchPipelineTests(unittest.TestCase):
 
         item = result[0][0]
         self.assertEqual(item["globalping"]["status"], "PASS")
-        self.assertEqual(item["checks"]["hls"]["status"], "NA")
+        self.assertEqual(item["checks"]["hls"]["status"], "N/A")
         self.assertEqual(
             item["globalping"]["checks"]["hls"]["status"],
-            "NA",
+            "N/A",
         )
         self.assertEqual(
             item["globalping"]["checks"]["ts"]["status"],
