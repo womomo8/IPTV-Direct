@@ -285,6 +285,40 @@ class SourceParsingTests(unittest.TestCase):
             [channel for _, channel in items],
         )   
 
+    def test_jiandantv_aliases_use_actual_settings(self):
+        root = Path(__file__).resolve().parents[1]
+
+        settings = json.loads(
+            (root / "settings.json").read_text(encoding="utf-8")
+        )
+        channels = load_channels(root / "channels.txt")
+
+        items = [
+            ("凤凰中文", "凤凰卫视中文台"),
+            ("凤凰资讯", "凤凰资讯台"),
+            ("TVB翡翠", "翡翠台"),
+            ("澳门莲花", "澳门莲花卫视"),
+        ]
+
+        lines = ["#EXTM3U"]
+        for index, (name, _) in enumerate(items):
+            lines.extend([
+                f'#EXTINF:-1 tvg-id="jiandantv-{index}",{name}',
+                f"https://example.test/{index}.m3u8",
+            ])
+
+        result = parse_source_content(
+            "\n".join(lines),
+            SOURCE,
+            channels,
+            aliases=settings["aliases"],
+        )
+
+        self.assertEqual(
+            [item["channel"] for item in result["candidates"]],
+            [channel for _, channel in items],
+        )
+    
     def test_o0i_txt_aliases_use_actual_settings(self):
         root = Path(__file__).resolve().parents[1]
 
