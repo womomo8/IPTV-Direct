@@ -285,6 +285,114 @@ class SourceBatchPipelineTests(unittest.TestCase):
             ],
         )
 
+     def test_hls_pass_is_preserved(self):
+        candidate = make_candidate("频道一", 1)
+
+        def add_details(result):
+            result["globalping"]["stages"] = {
+                "test_stage": {"status": "PASS"}
+            }
+            result["globalping"]["probes"] = {
+                "test_probe": {"country": "CN"}
+            }
+            return result
+
+        result, _, _, _, remote = self.run_batch(
+            [candidate],
+            remote_transform=add_details,
+        )
+
+        remote_result = result[0][0]["globalping"]
+        self.assertEqual(remote_result["status"], "PASS")
+        self.assertEqual(remote_result["checks"]["hls"]["status"], "PASS")
+        self.assertEqual(
+            remote_result["stages"]["test_stage"]["status"],
+            "PASS",
+        )
+        self.assertEqual(
+            remote_result["probes"]["test_probe"]["country"],
+            "CN",
+        )
+        remote.assert_called_once()
+
+    def test_hls_fail_is_preserved(self):
+        candidate = make_candidate("频道一", 1)
+
+        def add_failure(result):
+            result["globalping"]["checks"]["http"] = {
+                "status": "FAIL",
+                "reason": "HTTP 检测明确失败",
+            }
+            return result
+
+        result, _, _, _, remote = self.run_batch(
+            [candidate],
+            statuses=["FAIL"],
+            remote_transform=add_failure,
+        )
+
+        remote_result = result[0][0]["globalping"]
+        self.assertEqual(remote_result["status"], "FAIL")
+        self.assertEqual(
+            remote_result["checks"]["http"]["status"],
+            "FAIL",
+        )
+        self.assertIn(
+            "HTTP 检测明确失败",
+            remote_result["checks"]["http"]["reason"],
+        )
+        remote.assert_called_once()
+
+    def test_hls_incomplete_is_preserved(self):
+        candidate = make_candidate("频道一", 1)
+
+        result, _, _, _, remote = self.run_batch(
+            [candidate],
+            statuses=["INCOMPLETE"],
+        )
+
+        remote_result = result[0][0]["globalping"]
+        self.assertEqual(remote_result["status"], "INCOMPLETE")
+        self.assertEqual(
+            remote_result["checks"]["ts"]["status"],
+            "INCOMPLETE",
+        )
+        remote.assert_called_once()
+
+    def test_direct_ts_preserves_hls_na(self):
+        candidate = make_candidate("频道一", 1)
+
+        def make_direct_ts(result):
+            result["media_type"] = "DIRECT_TS"
+            result["checks"]["hls"] = {
+                "status": "NA",
+                "reason": "直接 TS 不适用 HLS 检测",
+            }
+            result["globalping"]["checks"]["hls"] = {
+                "status": "NA",
+                "reason": "直接 TS 不适用 HLS 检测",
+            }
+            return result
+
+        result, _, _, _, remote = self.run_batch(
+            [candidate],
+            local_media_type="DIRECT_TS",
+            remote_transform=make_direct_ts,
+        )
+
+        item = result[0][0]
+        self.assertEqual(item["globalping"]["status"], "PASS")
+        self.assertEqual(item["checks"]["hls"]["status"], "NA")
+        self.assertEqual(
+            item["globalping"]["checks"]["hls"]["status"],
+            "NA",
+        )
+        self.assertEqual(
+            item["globalping"]["checks"]["ts"]["status"],
+            "PASS",
+        )
+        remote.assert_called_once()   
+    
     def test_globalping_fail_rejected_and_incomplete_uses_downgrade(self):
         failed = make_candidate("频道一", 1, order=0)
         incomplete = make_candidate("频道二", 2, order=1)
