@@ -117,7 +117,7 @@ class MainCollectionFlowTests(unittest.TestCase):
             ),
             patch(
                 "main.run_detection_pipeline",
-                side_effect=lambda candidates, current_settings: candidates,
+                side_effect=lambda candidates, current_settings, channels: candidates,
             ),
             patch("main._print_detection_summary"),
             patch(
