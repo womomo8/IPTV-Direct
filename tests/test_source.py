@@ -130,17 +130,15 @@ class SourceFlowTests(unittest.TestCase):
                 "truncated_media_probe": False,
             }
 
-        def fake_detection(candidates, settings, channels):
-            detected_candidates.extend(candidates)
-            return candidates
-
-        def fake_admission(
+        def fake_detection(
             candidates,
             accepted_routes,
-            channels,
             settings,
+            channels,
         ):
-            return {
+            detected_candidates.extend(candidates)
+
+            admission = {
                 "accepted_routes": accepted_routes,
                 "channel_counts": {
                     channel: 0 for channel in channels
@@ -148,6 +146,8 @@ class SourceFlowTests(unittest.TestCase):
                 "all_channels_reached": False,
                 "results": [],
             }
+
+            return candidates, admission, candidates
 
         subscriptions = {
             "route_count": 0,
@@ -177,13 +177,8 @@ class SourceFlowTests(unittest.TestCase):
             ),
             patch.object(
                 main,
-                "run_detection_pipeline",
+                "run_source_batch_pipeline",
                 side_effect=fake_detection,
-            ),
-            patch.object(
-                main,
-                "process_admission_batch",
-                side_effect=fake_admission,
             ),
             patch.object(main, "_print_detection_summary"),
             patch.object(
