@@ -448,5 +448,141 @@ class StatusAndFlowTests(unittest.TestCase):
             output[1]["globalping"]["error"],
         )
 
+
+    def test_shared_session_reuses_quota_and_probes(self):
+        settings = {"max_probes": 3}
+        candidates = [
+            {
+                "id": "c1",
+                "media_type": "DIRECT_TS",
+                "normalized_url": "http://example.test/a.ts",
+            },
+            {
+                "id": "c2",
+                "media_type": "DIRECT_TS",
+                "normalized_url": "http://example.test/b.ts",
+            },
+        ]
+        ts_result = finished_http(
+            valid_ts(), 206,
+            {
+                "Content-Range": "bytes 0-1023/4096",
+                "Content-Length": "1024",
+            },
+        )
+
+        with patch.object(
+            gp,
+            "read_limits",
+            return_value={"limit": 50, "remaining": 20, "reset": 1},
+        ) as limits, patch.object(
+            gp,
+            "choose_probes",
+            return_value=[
+                {
+                    "country": "CN",
+                    "asn": 9808,
+                    "tags": ["eyeball-network"],
+                    "limit": 1,
+                }
+            ],
+        ) as probes, patch.object(
+            gp,
+            "_stage",
+            return_value=("m1", measurement(result_item(ts_result))),
+        ) as stage:
+            session = gp.create_session(settings)
+
+            first = gp.check_candidates(
+                [candidates[0]], settings, session=session
+            )
+            second = gp.check_candidates(
+                [candidates[1]], settings, session=session
+            )
+
+        self.assertEqual(limits.call_count, 1)
+        self.assertEqual(probes.call_count, 1)
+        self.assertEqual(stage.call_count, 2)
+        self.assertEqual(first[0]["globalping"]["status"], gp.PASS)
+        self.assertEqual(second[0]["globalping"]["status"], gp.PASS)
+
+    def test_shared_session_stops_after_rate_limit(self):
+        settings = {"max_probes": 3}
+        candidates = [
+            {
+                "id": "c1",
+                "media_type": "DIRECT_TS",
+                "normalized_url": "http://example.test/a.ts",
+            },
+            {
+                "id": "c2",
+                "media_type": "DIRECT_TS",
+                "normalized_url": "http://example.test/b.ts",
+            },
+        ]
+
+        with patch.object(
+            gp,
+            "read_limits",
+            return_value={"limit": 50, "remaining": 20, "reset": 1},
+        ), patch.object(
+            gp,
+            "choose_probes",
+            return_value=[
+                {
+                    "country": "CN",
+                    "asn": 9808,
+                    "tags": ["eyeball-network"],
+                    "limit": 1,
+                }
+            ],
+        ):
+            session = gp.create_session(settings)
+
+        with patch.object(
+            gp,
+            "_stage",
+            side_effect=gp.GlobalpingError(
+                "HTTP 429", rate_limited=True
+            ),
+        ) as stage:
+            first = gp.check_candidates(
+                [candidates[0]], settings, session=session
+            )
+            second = gp.check_candidates(
+                [candidates[1]], settings, session=session
+            )
+
+        self.assertEqual(stage.call_count, 1)
+        self.assertTrue(session["budget"]["halted"])
+        self.assertEqual(first[0]["globalping"]["status"], gp.INCOMPLETE)
+        self.assertEqual(second[0]["globalping"]["status"], gp.INCOMPLETE)
+
+    def test_session_initialization_error_is_preserved(self):
+        settings = {"max_probes": 3}
+        candidate = {
+            "id": "c1",
+            "media_type": "DIRECT_TS",
+            "normalized_url": "http://example.test/a.ts",
+        }
+
+        with patch.object(
+            gp,
+            "read_limits",
+            side_effect=gp.GlobalpingError("额度查询失败"),
+        ), patch.object(gp, "choose_probes") as probes:
+            session = gp.create_session(settings)
+
+        with patch.object(gp, "_stage") as stage:
+            output = gp.check_candidates(
+                [candidate], settings, session=session
+            )
+
+        self.assertIn("额度查询失败", session["error"])
+        self.assertEqual(output[0]["globalping"]["status"], gp.INCOMPLETE)
+        probes.assert_not_called()
+        stage.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
