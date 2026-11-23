@@ -24,6 +24,14 @@ SETTINGS = {
     },
 }
 
+TARGET_CHANNELS = [
+    "测试频道",
+    "直接 TS 测试频道",
+    "频道一",
+    "频道二",
+    "频道三",
+]
+
 
 def make_candidate(name="测试频道", url="https://example.test/live.m3u8"):
     return {
@@ -87,6 +95,7 @@ class MainGlobalpingIntegrationTests(unittest.TestCase):
         result = main.run_detection_pipeline(
             [candidate],
             SETTINGS,
+            TARGET_CHANNELS,
             local,
             remote,
         )
@@ -223,6 +232,7 @@ class MainGlobalpingIntegrationTests(unittest.TestCase):
         result = main.run_detection_pipeline(
             [candidate],
             SETTINGS,
+            TARGET_CHANNELS,
             local,
             remote,
         )
@@ -254,6 +264,7 @@ class MainGlobalpingIntegrationTests(unittest.TestCase):
         result = main.run_detection_pipeline(
             [candidate],
             SETTINGS,
+            TARGET_CHANNELS,
             local,
             remote,
         )
@@ -289,6 +300,7 @@ class MainGlobalpingIntegrationTests(unittest.TestCase):
         result = main.run_detection_pipeline(
             [candidate],
             SETTINGS,
+            TARGET_CHANNELS,
             local,
             remote,
         )
@@ -322,6 +334,7 @@ class MainGlobalpingIntegrationTests(unittest.TestCase):
         result = main.run_detection_pipeline(
             [candidate],
             SETTINGS,
+            TARGET_CHANNELS,
             local,
             remote,
         )
@@ -366,6 +379,7 @@ class MainGlobalpingIntegrationTests(unittest.TestCase):
         result = main.run_detection_pipeline(
             candidates,
             SETTINGS,
+            TARGET_CHANNELS,
             local,
             remote,
         )
@@ -379,6 +393,42 @@ class MainGlobalpingIntegrationTests(unittest.TestCase):
             [PASS, FAIL, INCOMPLETE],
         )
 
+    def test_non_target_channel_does_not_call_globalping(self):
+        candidate = make_candidate(
+            "非目标频道",
+            "https://example.test/non-target.m3u8",
+        )
+
+        local = Mock(
+            return_value=[
+                make_local_result(candidate, "HLS", PASS)
+            ]
+        )
+        remote = Mock(
+            side_effect=AssertionError(
+                "非目标频道不得提交 Globalping"
+            )
+        )
+
+        result = main.run_detection_pipeline(
+            [candidate],
+            SETTINGS,
+            TARGET_CHANNELS,
+            local,
+            remote,
+        )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(
+            result[0]["globalping"]["status"],
+            INCOMPLETE,
+        )
+        self.assertIn(
+            "不在 channels.txt 目标频道列表中",
+            result[0]["globalping"]["error"],
+        )
+        local.assert_called_once()
+        remote.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()
