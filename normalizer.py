@@ -153,6 +153,23 @@ def _channel_match(names, channels, aliases):
 def _parse_attributes(text):
     return dict(re.findall(r'([\w-]+)="([^"]*)"', text))
 
+def _extract_extinf_title(line):
+    """提取 #EXTINF 标题，忽略引号属性内部的逗号。"""
+    in_quotes = False
+    escaped = False
+
+    for index, char in enumerate(line):
+        if char == '"' and not escaped:
+            in_quotes = not in_quotes
+        elif char == "," and not in_quotes:
+            return line[index + 1:].strip()
+
+        if char == "\\" and not escaped:
+            escaped = True
+        else:
+            escaped = False
+
+    return ""
 
 def _looks_like_ts(data):
     """检查连续五个 188 字节 TS 同步位置。"""
@@ -283,7 +300,7 @@ def parse_source_content(
             continue
 
         if line.upper().startswith("#EXTINF:"):
-            title = line.split(",", 1)[1].strip() if "," in line else ""
+            title = _extract_extinf_title(line)
             pending = (title, _parse_attributes(line))
             continue
 
