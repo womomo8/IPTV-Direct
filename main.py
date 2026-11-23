@@ -610,7 +610,7 @@ def _print_detection_summary(
         f"本地全部通过 {local_ok} 条；"
         f"本地未通过/未完成 {local_bad} 条；"
         f"Globalping 已提交 {len(submitted_items)} 条、"
-        f"未提交 {local_bad} 条；"
+        f"未提交 {len(results) - len(submitted_items)} 条；"
         f"实际远程结果 PASS {remote_counts[PASS]} 条、"
         f"FAIL {remote_counts[FAIL]} 条、"
         f"INCOMPLETE {remote_counts[INCOMPLETE]} 条。"
