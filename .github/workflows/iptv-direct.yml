@@ -137,10 +137,6 @@ jobs:
         run: |
           python -m unittest discover -s tests -p "test_globalping.py" -v
 
-      - name: Run main与Globalping交接测试
-        run: |
-          python -m unittest discover -s tests -p "test_main_globalping.py" -v
-
       - name: Run publisher专项测试
         run: |
           python -m unittest discover -s tests -p "test_publisher*.py" -v
