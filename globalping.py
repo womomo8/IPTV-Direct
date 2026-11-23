@@ -335,6 +335,7 @@ def _create_measurement(
 
     budget["remaining"] = min(int(budget["remaining"]), live_remaining)
     if budget["remaining"] < estimated:
+        budget["halted"] = True
         raise GlobalpingError(
             f"Globalping 剩余额度不足：剩余 {budget['remaining']}，本阶段最多需要 {estimated}。"
         )
@@ -1000,7 +1001,7 @@ def check_candidates(
         if budget["halted"]:
             output[index] = incomplete_result(
                 candidate,
-                "Globalping 返回 HTTP 429，已停止本轮后续测量创建。",
+                "Globalping 额度不足或触发限流，已停止本轮后续测量创建。",
             )
             continue
 
