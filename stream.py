@@ -109,19 +109,27 @@ def _packet_bitrate(packets: Any) -> int | None:
 
         try:
             timestamp = float(timestamp)
+            duration = float(packet.get("duration_time"))
         except (TypeError, ValueError):
-            continue
+            return None
 
-        if not math.isfinite(timestamp):
-            continue
+        if (
+            not math.isfinite(timestamp)
+            or not math.isfinite(duration)
+            or duration <= 0
+        ):
+            return None
 
         total_bytes += size
-        timestamps.append(timestamp)
+        timestamps.append((timestamp, timestamp + duration))
 
     if total_bytes <= 0 or len(timestamps) < 2:
         return None
 
-    duration = max(timestamps) - min(timestamps)
+    start = min(item[0] for item in timestamps)
+    end = max(item[1] for item in timestamps)
+    duration = end - start
+
     if duration <= 0:
         return None
 
@@ -142,7 +150,7 @@ def _probe(url: str) -> dict[str, Any]:
         "-show_entries",
         "stream=codec_type,codec_name,width,height,field_order,"
         "avg_frame_rate,r_frame_rate,bit_rate:"
-        "packet=pts_time,dts_time,size",
+        "packet=pts_time,dts_time,size,duration_time",
         "-of", "json",
         url,
     ]
