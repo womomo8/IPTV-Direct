@@ -310,6 +310,14 @@ def parse_source_content(
         is_absolute_url = _is_absolute_http_url(line)
 
         # M3U 中非注释行均按播放地址处理，支持相对 URL。
+        if is_m3u and re.match(
+            r"^-(?:https?://|#EXTINF:)", line, re.IGNORECASE
+        ):
+            pending = None
+            errors.append(
+                f"忽略带前导连字符的异常 M3U 记录：{line[:100]}"
+            )
+            continue
         is_m3u_url = is_m3u and not line.startswith("#")
 
         if is_absolute_url or is_m3u_url:
