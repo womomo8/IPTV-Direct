@@ -100,12 +100,7 @@ class MainFormalFailureTests(unittest.TestCase):
                 },
             ),
             patch(
-                "main.run_detection_pipeline",
-                return_value=[make_candidate()],
-            ),
-            patch("main._print_detection_summary"),
-            patch(
-                "main.process_admission_batch",
+                "main.run_source_batch_pipeline",
                 side_effect=publisher.PublisherError(
                     "模拟准入异常"
                 ),
