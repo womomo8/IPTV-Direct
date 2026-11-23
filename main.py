@@ -305,14 +305,299 @@ def run_detection_pipeline(
     ]
 
 
-def _print_detection_summary(results: list[dict[str, Any]]) -> None:
+def run_source_batch_pipeline(
+    candidates: list[dict[str, Any]],
+    accepted_routes: list[dict[str, Any]],
+    settings: dict[str, Any],
+    channels: list[str],
+) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
+    """逐条执行 Globalping，并在每条检测后立即交 publisher。"""
+
+    if not candidates:
+        admission = publisher.process_batch(
+            [], accepted_routes, channels, settings
+        )
+        return [], admission, []
+
+    if not isinstance(channels, list) or any(
+        not isinstance(channel, str) or not channel.strip()
+        for channel in channels
+    ):
+        raise ValueError("Globalping 交接必须提供有效的目标频道列表")
+
+    target_channels = {channel.casefold() for channel in channels}
+    originals = [_identity(item) for item in candidates]
+
+    try:
+        local_results = checker.check_candidates(
+            candidates, settings["detection"]
+        )
+        if (
+            not isinstance(local_results, list)
+            or len(local_results) != len(candidates)
+            or any(
+                not isinstance(item, dict)
+                or _identity(item) != originals[index]
+                for index, item in enumerate(local_results)
+            )
+        ):
+            raise ValueError("checker 返回数量、顺序或候选身份不匹配")
+    except Exception as exc:
+        reason = f"本地检测调用异常或结果校验失败：{exc}"
+        local_results = [
+            {
+                **item,
+                "media_type": "UNKNOWN",
+                "checks": {
+                    key: {"status": INCOMPLETE, "reason": reason}
+                    for key in ("ipv4", "http", "hls", "ts")
+                },
+            }
+            for item in candidates
+        ]
+
+    output: list[dict[str, Any] | None] = [None] * len(candidates)
+    pending: list[tuple[int, dict[str, Any]]] = []
+
+    for index, item in enumerate(local_results):
+        channel = item.get("channel")
+
+        if (
+            not isinstance(channel, str)
+            or channel.casefold() not in target_channels
+        ):
+            output[index] = globalping.incomplete_result(
+                item,
+                "候选频道不在 channels.txt 目标频道列表中，未提交 Globalping。",
+            )
+        elif not checker.local_checks_passed(item):
+            output[index] = globalping.incomplete_result(
+                item,
+                "本地检测未全部通过，未提交 Globalping；不代表远程检测失败。",
+            )
+        else:
+            pending.append((index, item))
+
+    admission = publisher.process_batch(
+        [], accepted_routes, channels, settings
+    )
+    current_routes = admission["accepted_routes"]
+    admission_by_index: dict[int, dict[str, Any]] = {}
+    submitted_candidates: list[dict[str, Any]] = []
+
+    session = None
+    session_error = None
+    session_created = False
+
+    while pending:
+        selected = publisher.next_candidate_for_detection(
+            [item for _, item in pending],
+            current_routes,
+            channels,
+            settings,
+        )
+
+        if selected is None:
+            break
+
+        pending_position = next(
+            (
+                position
+                for position, (_, item) in enumerate(pending)
+                if item is selected
+            ),
+            None,
+        )
+        if pending_position is None:
+            raise publisher.PublisherError(
+                "publisher 返回了不属于当前来源批次的候选"
+            )
+
+        original_index, candidate = pending.pop(pending_position)
+
+        if not session_created:
+            session_created = True
+            try:
+                session = globalping.create_session(
+                    settings["globalping"]
+                )
+            except Exception as exc:
+                session_error = f"Globalping 会话初始化异常：{exc}"
+
+        if session_error:
+            result = globalping.incomplete_result(
+                candidate, session_error
+            )
+        else:
+            try:
+                remote_results = globalping.check_candidates(
+                    [candidate],
+                    settings["globalping"],
+                    session=session,
+                )
+
+                if (
+                    not isinstance(remote_results, list)
+                    or len(remote_results) != 1
+                ):
+                    raise ValueError("Globalping 返回数量与单条候选不一致")
+
+                result = remote_results[0]
+
+                if (
+                    not isinstance(result, dict)
+                    or _identity(result) != _identity(candidate)
+                ):
+                    raise ValueError("Globalping 返回候选身份不匹配")
+
+                remote = result.get("globalping")
+                if (
+                    not isinstance(remote, dict)
+                    or remote.get("status") not in (
+                        PASS, FAIL, INCOMPLETE
+                    )
+                ):
+                    raise ValueError("Globalping 缺少有效总体状态")
+
+            except Exception as exc:
+                result = globalping.incomplete_result(
+                    candidate,
+                    f"Globalping 调用异常或结果校验失败：{exc}",
+                )
+
+        output[original_index] = result
+
+        remote = result.get("globalping", {})
+        measurements = (
+            remote.get("measurements", [])
+            if isinstance(remote, dict)
+            else []
+        )
+        stages = (
+            remote.get("stages", {})
+            if isinstance(remote, dict)
+            else {}
+        )
+        has_measurement = (
+            isinstance(measurements, list) and bool(measurements)
+        ) or (
+            isinstance(stages, dict)
+            and any(
+                isinstance(stage, dict) and stage.get("measurement_id")
+                for stage in stages.values()
+            )
+        )
+        if has_measurement:
+            submitted_candidates.append(result)
+
+        current_admission = publisher.process_batch(
+            [result],
+            current_routes,
+            channels,
+            settings,
+        )
+        if len(current_admission.get("results", [])) != 1:
+            raise publisher.PublisherError(
+                "publisher 单条准入结果数量不一致"
+            )
+
+        admission_by_index[original_index] = (
+            current_admission["results"][0]
+        )
+        current_routes = current_admission["accepted_routes"]
+        admission = current_admission
+
+    for index, candidate in pending:
+        output[index] = globalping.incomplete_result(
+            candidate,
+            "频道线路已满或候选不符合正式筛选条件，未提交 Globalping。",
+        )
+
+    unprocessed_indices = [
+        index
+        for index in range(len(candidates))
+        if index not in admission_by_index
+    ]
+
+    if unprocessed_indices:
+        unprocessed_results = [
+            output[index] for index in unprocessed_indices
+        ]
+
+        current_admission = publisher.process_batch(
+            unprocessed_results,
+            current_routes,
+            channels,
+            settings,
+        )
+
+        returned = current_admission.get("results", [])
+        if len(returned) != len(unprocessed_indices):
+            raise publisher.PublisherError(
+                "publisher 未完整返回本批剩余候选的准入结果"
+            )
+
+        index_by_identity: dict[
+            tuple[Any, Any], list[int]
+        ] = {}
+        for index in unprocessed_indices:
+            index_by_identity.setdefault(
+                _identity(output[index]), []
+            ).append(index)
+
+        for item in returned:
+            candidate = item.get("candidate")
+            if not isinstance(candidate, dict):
+                raise publisher.PublisherError(
+                    "publisher 返回了无效候选身份"
+                )
+
+            matches = index_by_identity.get(_identity(candidate), [])
+            if not matches:
+                raise publisher.PublisherError(
+                    "publisher 返回了不属于剩余候选的准入结果"
+                )
+
+            admission_by_index[matches.pop(0)] = item
+
+        current_routes = current_admission["accepted_routes"]
+        admission = current_admission
+
+    if len(admission_by_index) != len(candidates):
+        raise publisher.PublisherError(
+            "本批候选没有全部取得 publisher 准入结果"
+        )
+
+    admission = dict(admission)
+    admission["accepted_routes"] = current_routes
+    admission["results"] = [
+        admission_by_index[index]
+        for index in range(len(candidates))
+    ]
+
+    return (
+        [item for item in output if item is not None],
+        admission,
+        submitted_candidates,
+    )
+
+
+def _print_detection_summary(
+    results: list[dict[str, Any]],
+    submitted_candidates: list[dict[str, Any]] | None = None,
+) -> None:
     """汇总本地检测结果，以及真正提交给 Globalping 的检测明细。"""
 
     local_ok = sum(checker.local_checks_passed(item) for item in results)
     local_bad = len(results) - local_ok
-    submitted_items = [
-        item for item in results if checker.local_checks_passed(item)
-    ]
+    submitted_items = (
+        submitted_candidates
+        if submitted_candidates is not None
+        else [
+            item for item in results
+            if checker.local_checks_passed(item)
+        ]
+    )
 
     remote_counts = {state: 0 for state in (PASS, FAIL, INCOMPLETE)}
     for item in submitted_items:
@@ -651,22 +936,23 @@ def run_formal_flow(config: dict[str, Any]) -> int:
         if normalized.get("extracted_candidates", 0) > 0:
             valid_sources += 1
 
+
         accepted_now = 0
         rejected_now = 0
         batch_results: list[dict[str, Any]] = []
         admission_results: list[dict[str, Any]] = []
 
         if candidates:
-            batch_results = run_detection_pipeline(candidates, settings, channels)
-            detected.extend(batch_results)
-            _print_detection_summary(batch_results)
-
             try:
-                admission = process_admission_batch(
-                    candidates=batch_results,
+                (
+                    batch_results,
+                    admission,
+                    submitted_candidates,
+                ) = run_source_batch_pipeline(
+                    candidates=candidates,
                     accepted_routes=accepted_routes,
-                    channels=channels,
                     settings=settings,
+                    channels=channels,
                 )
             except publisher.PublisherError as exc:
                 errors.append(f"线路准入系统错误：{exc}")
@@ -674,16 +960,22 @@ def run_formal_flow(config: dict[str, Any]) -> int:
                 system_error = True
                 break
 
+            detected.extend(batch_results)
+            _print_detection_summary(
+                batch_results,
+                submitted_candidates,
+            )
+
             accepted_routes = admission["accepted_routes"]
-            admission_results = admission.get("results", [])
+            admission_results = admission["results"]
 
             accepted_now = sum(
                 result.get("status") == publisher.ACCEPTED
-                for result in admission["results"]
+                for result in admission_results
             )
             rejected_now = sum(
                 result.get("status") == publisher.REJECTED
-                for result in admission["results"]
+                for result in admission_results
             )
 
             print(
@@ -699,6 +991,7 @@ def run_formal_flow(config: dict[str, Any]) -> int:
                     for channel, count in admission["channel_counts"].items()
                 )
             )
+
 
         _print_manual_source_details(
             source, normalized, batch_results, admission_results
