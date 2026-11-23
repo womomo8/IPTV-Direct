@@ -80,15 +80,28 @@ class SourceBatchPipelineTests(unittest.TestCase):
         statuses=None,
         stream_status="PASS",
         stream_error=None,
+        local_failure=False,
+        remote_error=None,
+        remote_transform=None,
     ):
         local_results = [make_local(item) for item in candidates]
+        if local_failure and local_results:
+            local_results[0]["checks"]["http"] = {
+                "status": "FAIL",
+                "reason": "模拟本地 HTTP 失败",
+            }
         statuses = statuses or ["PASS"] * len(candidates)
 
         def remote_side_effect(items, settings, session=None):
             self.assertEqual(len(items), 1)
             candidate = items[0]
+            if remote_error is not None:
+                raise RuntimeError(remote_error)
             status = statuses_by_url[candidate["normalized_url"]]
-            return [make_remote(candidate, status)]
+            result = make_remote(candidate, status)
+            if remote_transform is not None:
+                result = remote_transform(result)
+            return [result]
 
         statuses_by_url = {
             item["normalized_url"]: statuses[index]
@@ -289,6 +302,78 @@ class SourceBatchPipelineTests(unittest.TestCase):
             publisher.ACCEPTED,
         )
 
+    def test_local_failure_does_not_call_globalping(self):
+        candidate = make_candidate("频道一", 1)
+        result, local, stream_check, create_session, remote = (
+            self.run_batch([candidate], local_failure=True)
+        )
+
+        self.assertEqual(result[0][0]["checks"]["http"]["status"], "FAIL")
+        self.assertEqual(result[0][0]["globalping"]["status"], "INCOMPLETE")
+        local.assert_called_once()
+        stream_check.assert_not_called()
+        create_session.assert_not_called()
+        remote.assert_not_called()
+
+    def test_globalping_exception_becomes_incomplete(self):
+        candidate = make_candidate("频道一", 1)
+        result, _, _, create_session, remote = self.run_batch(
+            [candidate],
+            remote_error="模拟 Globalping API 异常",
+        )
+
+        self.assertEqual(result[0][0]["globalping"]["status"], "INCOMPLETE")
+        self.assertIn("模拟 Globalping API 异常", result[0][0]["globalping"]["error"])
+        create_session.assert_called_once()
+        remote.assert_called_once()
+
+    def test_wrong_remote_identity_becomes_incomplete(self):
+        candidate = make_candidate("频道一", 1)
+
+        def wrong_identity(_result):
+            wrong = make_candidate("频道二", 99)
+            return make_remote(wrong)
+
+        result, _, _, _, remote = self.run_batch(
+            [candidate],
+            remote_transform=wrong_identity,
+        )
+
+        self.assertEqual(result[0][0]["globalping"]["status"], "INCOMPLETE")
+        self.assertIn("身份不匹配", result[0][0]["globalping"]["error"])
+        remote.assert_called_once()
+
+    def test_invalid_remote_status_becomes_incomplete(self):
+        candidate = make_candidate("频道一", 1)
+
+        def invalid_status(remote_result):
+            remote_result["globalping"]["status"] = "UNKNOWN"
+            return remote_result
+
+        result, _, _, _, remote = self.run_batch(
+            [candidate],
+            remote_transform=invalid_status,
+        )
+
+        self.assertEqual(result[0][0]["globalping"]["status"], "INCOMPLETE")
+        self.assertIn("有效总体状态", result[0][0]["globalping"]["error"])
+        remote.assert_called_once()
+
+    def test_non_target_channel_does_not_call_globalping(self):
+        candidate = make_candidate("非目标频道", 1)
+        result, local, stream_check, create_session, remote = (
+            self.run_batch([candidate])
+        )
+
+        self.assertEqual(result[0][0]["globalping"]["status"], "INCOMPLETE")
+        self.assertIn(
+            "不在 channels.txt 目标频道列表中",
+            result[0][0]["globalping"]["error"],
+        )
+        local.assert_called_once()
+        stream_check.assert_not_called()
+        create_session.assert_not_called()
+        remote.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()
