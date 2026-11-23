@@ -193,10 +193,19 @@ def _identity(item: dict[str, Any]) -> tuple[Any, Any]:
 def run_detection_pipeline(
     candidates: list[dict[str, Any]],
     settings: dict[str, Any],
+    channels: list[str],
     local_check=checker.check_candidates,
     remote_check=globalping.check_candidates,
 ) -> list[dict[str, Any]]:
-    """编排本地检测与 Globalping 检测，并校验模块交接结果。"""
+    """编排本地检测与 Globalping 检测，并校验目标频道身份。"""
+
+    if not isinstance(channels, list) or any(
+        not isinstance(channel, str) or not channel.strip()
+        for channel in channels
+    ):
+        raise ValueError("Globalping 交接必须提供有效的目标频道列表")
+
+    target_channels = {channel.casefold() for channel in channels}
 
     if not candidates:
         return []
@@ -232,18 +241,30 @@ def run_detection_pipeline(
 
     eligible_indices = [
         index for index, item in enumerate(local_results)
-        if checker.local_checks_passed(item)
+        if (
+            isinstance(item.get("channel"), str)
+            and item["channel"].casefold() in target_channels
+            and checker.local_checks_passed(item)
+        )
     ]
     eligible = [local_results[index] for index in eligible_indices]
     eligible_set = set(eligible_indices)
     output: list[dict[str, Any] | None] = [None] * len(local_results)
 
     for index, item in enumerate(local_results):
-        if index not in eligible_set:
-            output[index] = globalping.incomplete_result(
-                item,
-                "本地检测未全部通过，未提交 Globalping；不代表远程检测失败。",
-            )
+        if index in eligible_set:
+            continue
+
+        channel = item.get("channel")
+        if (
+            not isinstance(channel, str)
+            or channel.casefold() not in target_channels
+        ):
+            reason = "候选频道不在 channels.txt 目标频道列表中，未提交 Globalping。"
+        else:
+            reason = "本地检测未全部通过，未提交 Globalping；不代表远程检测失败。"
+
+        output[index] = globalping.incomplete_result(item, reason)
 
     if eligible:
         try:
@@ -636,7 +657,7 @@ def run_formal_flow(config: dict[str, Any]) -> int:
         admission_results: list[dict[str, Any]] = []
 
         if candidates:
-            batch_results = run_detection_pipeline(candidates, settings)
+            batch_results = run_detection_pipeline(candidates, settings, channels)
             detected.extend(batch_results)
             _print_detection_summary(batch_results)
 
