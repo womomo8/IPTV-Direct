@@ -1,10 +1,5 @@
 
-"""来源测试：验证 collector → main → normalizer 的真实交接。
-
-使用仓库实际配置和福建移动六频道内嵌 M3U；
-网络下载、线路检测、准入和正式发布均使用模拟结果。
-不访问真实直播源，不调用 Globalping，不修改正式订阅。
-"""
+"""来源测试：验证 collector → main → normalizer 的真实交接。"""
 
 import contextlib
 import io
@@ -17,20 +12,35 @@ import main
 
 class SourceFlowTests(unittest.TestCase):
 
-    def test_real_source_flow_with_manual_playlist_and_index(self):
-        # 读取仓库当前真实配置。
+    def test_real_source_flow_with_all_source_types(self):
         config = main.load_configuration()
 
-        # 保留 manual.txt 中真实的福建移动六频道内嵌 M3U。
-        config["manual_sources"] = [
+        # 使用仓库真实人工来源配置中的前两条远程来源。
+        remote_sources = [
+            source
+            for source in config["manual_sources"]
+            if source.get("mode") == "manual"
+        ]
+        inline_sources = [
             source
             for source in config["manual_sources"]
             if source.get("mode") == "inline"
         ]
 
-        self.assertEqual(len(config["manual_sources"]), 1)
+        self.assertGreaterEqual(len(remote_sources), 2)
+        self.assertEqual(len(inline_sources), 1)
 
-        # 增加模拟自动播放列表和索引来源。
+        manual_txt = remote_sources[0]
+        manual_m3u = remote_sources[1]
+        inline_m3u = inline_sources[0]
+
+        config["manual_sources"] = [
+            manual_txt,
+            manual_m3u,
+            inline_m3u,
+        ]
+
+        # 模拟自动播放列表和索引来源。
         playlist_url = "https://playlist.test/list.m3u"
         index_url = "https://index.test/catalog"
         index_playlist_url = "https://index.test/from-index.txt"
@@ -38,7 +48,7 @@ class SourceFlowTests(unittest.TestCase):
         config["automatic_sources"] = [
             {
                 "id": "test-playlist",
-                "name": "模拟播放列表",
+                "name": "模拟自动播放列表",
                 "url": playlist_url,
                 "enabled": True,
                 "mode": "playlist",
@@ -58,13 +68,27 @@ class SourceFlowTests(unittest.TestCase):
             },
         ]
 
-        # 所有网络内容均为模拟数据。
+        # 所有远程下载均使用模拟内容，不访问真实网络。
         downloads = {
+            manual_txt["url"]: {
+                "content": (
+                    "CCTV-2,https://media.test/manual-txt.m3u8\n"
+                ).encode("utf-8"),
+                "content_type": "text/plain",
+            },
+            manual_m3u["url"]: {
+                "content": (
+                    "#EXTM3U\n"
+                    '#EXTINF:-1 tvg-name="CCTV-3",CCTV-3\n'
+                    "https://media.test/manual-m3u.m3u8\n"
+                ).encode("utf-8"),
+                "content_type": "application/vnd.apple.mpegurl",
+            },
             playlist_url: {
                 "content": (
-                    '#EXTM3U\n'
-                    '#EXTINF:-1 tvg-name="CCTV-2",CCTV-2\n'
-                    'https://media.test/cctv2.m3u8\n'
+                    "#EXTM3U\n"
+                    '#EXTINF:-1 tvg-name="CCTV-4",CCTV-4\n'
+                    "https://media.test/automatic.m3u8\n"
                 ).encode("utf-8"),
                 "content_type": "application/vnd.apple.mpegurl",
             },
@@ -73,13 +97,13 @@ class SourceFlowTests(unittest.TestCase):
                     '<html><body>'
                     '<a href="from-index.txt">播放列表</a>'
                     '<a href="ordinary.html">普通网页</a>'
-                    '</body></html>'
+                    "</body></html>"
                 ).encode("utf-8"),
                 "content_type": "text/html",
             },
             index_playlist_url: {
                 "content": (
-                    "CCTV-3,https://media.test/cctv3.m3u8\n"
+                    "CCTV-5,https://media.test/index.m3u8\n"
                 ).encode("utf-8"),
                 "content_type": "text/plain",
             },
@@ -92,7 +116,9 @@ class SourceFlowTests(unittest.TestCase):
             downloaded_urls.append(url)
 
             if url not in downloads:
-                raise AssertionError(f"测试访问了未设置的来源：{url}")
+                raise AssertionError(
+                    f"测试访问了未设置的来源：{url}"
+                )
 
             item = downloads[url]
 
@@ -142,8 +168,8 @@ class SourceFlowTests(unittest.TestCase):
             "first_publish": True,
         }
 
-        # 真实执行 collector、main、normalizer。
-        # 只模拟网络下载、检测、准入和发布边界。
+        # 保留真实 collector、main、normalizer。
+        # 只模拟网络、线路检测、准入和发布边界。
         with (
             patch.object(
                 collector,
@@ -178,8 +204,8 @@ class SourceFlowTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
 
-        # 六个福建移动频道 + 自动 M3U + 索引发现的 TXT。
-        self.assertEqual(len(detected_candidates), 8)
+        # 六条福建移动线路，加上四条模拟远程来源候选。
+        self.assertEqual(len(detected_candidates), 10)
 
         channels = {
             candidate["channel"]
@@ -190,21 +216,30 @@ class SourceFlowTests(unittest.TestCase):
             "CCTV-1",
             "CCTV-2",
             "CCTV-3",
+            "CCTV-4",
             "CCTV-5",
             "CCTV-5+",
             "CCTV-7",
             "CCTV-9",
         }.issubset(channels))
 
-        # 人工内嵌来源确实进入解析和检测。
+        # 人工来源：普通 URL、远程 M3U、内嵌 M3U。
         manual_candidates = [
             candidate
             for candidate in detected_candidates
             if candidate["source_type"] == "manual"
         ]
-        self.assertEqual(len(manual_candidates), 6)
+        self.assertEqual(len(manual_candidates), 8)
 
-        # 自动播放列表和索引发现的播放列表均进入检测。
+        manual_source_urls = {
+            candidate["source_url"]
+            for candidate in manual_candidates
+        }
+
+        self.assertIn(manual_txt["url"], manual_source_urls)
+        self.assertIn(manual_m3u["url"], manual_source_urls)
+
+        # 自动 M3U 和索引发现的播放列表分别进入检测。
         automatic_candidates = [
             candidate
             for candidate in detected_candidates
@@ -222,12 +257,18 @@ class SourceFlowTests(unittest.TestCase):
             {playlist_url, index_playlist_url},
         )
 
-        # 索引页面只用于提取链接，不能作为播放列表进入解析。
+        # 索引页面本身和普通网页均不能作为播放列表进入解析。
         self.assertNotIn(index_url, automatic_source_urls)
 
         self.assertEqual(
             downloaded_urls,
-            [playlist_url, index_url, index_playlist_url],
+            [
+                manual_txt["url"],
+                manual_m3u["url"],
+                playlist_url,
+                index_url,
+                index_playlist_url,
+            ],
         )
 
 
