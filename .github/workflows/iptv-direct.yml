@@ -1,10 +1,9 @@
-
 name: IPTV-Direct Unified Workflow
 
 on:
   schedule:
-# 北京时间每天 00:00（UTC 前一天 16:00）
-- cron: "0 16 * * *"
+    # 北京时间每天 00:00（UTC 前一天 16:00）
+    - cron: "0 16 * * *"
 
   workflow_dispatch:
     inputs:
@@ -128,7 +127,7 @@ jobs:
       - name: Run stream视频质量专项测试
         run: |
           python -m unittest discover -s tests -p "test_stream.py" -v
-          
+
       - name: Run checker专项测试
         run: |
           python -m unittest discover -s tests -p "test_checker*.py" -v
