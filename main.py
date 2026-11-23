@@ -648,8 +648,8 @@ def run_formal_flow(config: dict[str, Any]) -> int:
 
         candidates = normalized["candidates"]
 
-        if normalized.get("matched_target_candidates", 0) > 0:
-            valid_sources += 1
+        if normalized.get("extracted_candidates", 0) > 0:
+    valid_sources += 1
 
         accepted_now = 0
         rejected_now = 0
