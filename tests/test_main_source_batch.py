@@ -285,7 +285,7 @@ class SourceBatchPipelineTests(unittest.TestCase):
             ],
         )
 
-     def test_hls_pass_is_preserved(self):
+    def test_hls_pass_is_preserved(self):
         candidate = make_candidate("频道一", 1)
 
         def add_details(result):
