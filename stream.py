@@ -187,24 +187,26 @@ def _probe(url: str) -> dict[str, Any]:
     ):
         raise StreamQualityError("无法确认真实视频分辨率")
 
+
     fps = _parse_fps(stream.get("avg_frame_rate"))
-    if fps is None:
-        fps = _parse_fps(stream.get("r_frame_rate"))
 
     if fps is None:
-        raise StreamQualityError("无法确认有效视频帧率")
+        raise StreamQualityError("无法确认实际平均视频帧率")
 
     bitrate = _packet_bitrate(data.get("packets"))
 
     if bitrate is None:
-        declared_bitrate = stream.get("bit_rate")
-        try:
-            bitrate = int(declared_bitrate)
-        except (TypeError, ValueError):
-            bitrate = None
+        raise StreamQualityError("无法确认实际视频包码率")
 
-    if bitrate is None or bitrate <= 0:
-        raise StreamQualityError("无法确认有效视频码率")
+    return {
+        "codec": codec,
+        "width": width,
+        "height": height,
+        "fps": fps,
+        "bitrate": bitrate,
+        "field_order": stream.get("field_order"),
+    }
+
 
     return {
         "codec": codec,
