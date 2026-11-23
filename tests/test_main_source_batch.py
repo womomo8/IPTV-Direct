@@ -25,17 +25,22 @@ def make_candidate(channel, number, priority=0, order=0):
         "source_order": order,
     }
 
+def make_local(candidate, media_type="HLS"):
+    checks = {
+        name: {"status": "PASS", "reason": "测试通过"}
+        for name in ("ipv4", "http", "hls", "ts")
+    }
+    if media_type == "DIRECT_TS":
+        checks["hls"] = {
+            "status": "NA",
+            "reason": "直接 TS 不适用 HLS 检测",
+        }
 
-def make_local(candidate):
     return {
         **candidate,
-        "media_type": "HLS",
-        "checks": {
-            name: {"status": "PASS", "reason": "测试通过"}
-            for name in ("ipv4", "http", "hls", "ts")
-        },
+        "media_type": media_type,
+        "checks": checks,
     }
-
 
 def make_remote(candidate, status="PASS", measured=True):
     checks = {
@@ -83,8 +88,12 @@ class SourceBatchPipelineTests(unittest.TestCase):
         local_failure=False,
         remote_error=None,
         remote_transform=None,
+        local_media_type="HLS",
     ):
-        local_results = [make_local(item) for item in candidates]
+        local_results = [
+            make_local(item, local_media_type)
+            for item in candidates
+        ]
         if local_failure and local_results:
             local_results[0]["checks"]["http"] = {
                 "status": "FAIL",
