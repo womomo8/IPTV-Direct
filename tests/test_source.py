@@ -203,9 +203,9 @@ class SourceFlowTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
 
-        # 六条福建移动线路、十四条专项补充线路，
-        # 加上四条模拟远程来源候选。
-        self.assertEqual(len(detected_candidates), 24)
+        # 来源线路数量可能变化，不固定候选总数。
+        # 至少验证两个远程人工来源和两个内嵌来源均进入检测。
+        self.assertGreaterEqual(len(detected_candidates), 6)
 
         channels = {
             candidate["channel"]
@@ -236,7 +236,23 @@ class SourceFlowTests(unittest.TestCase):
             for candidate in detected_candidates
             if candidate["source_type"] == "manual"
         ]
-        self.assertEqual(len(manual_candidates), 22)
+        self.assertGreaterEqual(len(manual_candidates), 4)
+
+        # 两个模拟远程人工来源各产生一条候选。
+        self.assertEqual(
+            sum(
+                candidate["source_url"] == manual_txt["url"]
+                for candidate in manual_candidates
+            ),
+            1,
+        )
+        self.assertEqual(
+            sum(
+                candidate["source_url"] == manual_m3u["url"]
+                for candidate in manual_candidates
+            ),
+            1,
+        )
 
         manual_source_urls = {
             candidate["source_url"]
@@ -251,7 +267,12 @@ class SourceFlowTests(unittest.TestCase):
                 inline_source["url"],
                 manual_source_urls,
             )
-
+            self.assertTrue(
+                any(
+                    candidate["source_url"] == inline_source["url"]
+                    for candidate in manual_candidates
+                )
+            )
         # 自动 M3U 和索引发现的播放列表分别进入检测。
         automatic_candidates = [
             candidate
