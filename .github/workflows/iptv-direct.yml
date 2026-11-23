@@ -44,6 +44,13 @@ jobs:
         with:
           python-version: "3.x"
 
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version
+          ffprobe -version
+
       - name: Show run mode
         run: echo "运行模式：正式运行"
 
@@ -79,6 +86,7 @@ jobs:
       contents: read
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -87,6 +95,12 @@ jobs:
         with:
           python-version: "3.x"
 
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version
+          ffprobe -version
       - name: Show run mode
         run: echo "运行模式：测试运行"
 
