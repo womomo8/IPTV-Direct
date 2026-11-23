@@ -219,6 +219,45 @@ class MainCollectionFlowTests(unittest.TestCase):
         self.assertIn("达到有效来源上限 1", output)
         build_mock.assert_called_once()
 
+    def test_duplicate_source_does_not_consume_valid_source_limit(self):
+        consumed = []
+
+        def source_stream():
+            for index in range(3):
+                consumed.append(index)
+                yield make_source_item(index)
+
+        def normalize_callback(**kwargs):
+            source = kwargs["source"]
+
+            if source["order"] == 0:
+                return {
+                    "recognized": True,
+                    "format": "m3u",
+                    "extracted_candidates": 0,
+                    "duplicate_candidates": 1,
+                    "matched_target_candidates": 1,
+                    "candidates": [],
+                }
+
+            return make_normalized(source)
+
+        def admit(candidates, accepted_routes, channels, settings):
+            return self.make_admission(accepted_routes)
+
+        result, output, _, admission_mock, build_mock = self.run_flow(
+            source_stream(),
+            make_settings(max_valid_sources=1),
+            admit,
+            normalize_callback=normalize_callback,
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(consumed, [0, 1])
+        self.assertEqual(admission_mock.call_count, 1)
+        self.assertIn("达到有效来源上限 1", output)
+        build_mock.assert_called_once()
+    
     def test_candidate_total_limit_stops_before_next_source(self):
         consumed = []
 
@@ -371,45 +410,6 @@ class CollectionStopReasonTests(unittest.TestCase):
         )
 
         self.assertEqual(reason, "达到有效来源上限 40")
-
-    def test_duplicate_source_does_not_consume_valid_source_limit(self):
-        consumed = []
-
-        def source_stream():
-            for index in range(3):
-                consumed.append(index)
-                yield make_source_item(index)
-
-        def normalize_callback(**kwargs):
-            source = kwargs["source"]
-
-            if source["order"] == 0:
-                return {
-                    "recognized": True,
-                    "format": "m3u",
-                    "extracted_candidates": 0,
-                    "duplicate_candidates": 1,
-                    "matched_target_candidates": 1,
-                    "candidates": [],
-                }
-
-            return make_normalized(source)
-
-        def admit(candidates, accepted_routes, channels, settings):
-            return self.make_admission(accepted_routes)
-
-        result, output, _, admission_mock, build_mock = self.run_flow(
-            source_stream(),
-            make_settings(max_valid_sources=1),
-            admit,
-            normalize_callback=normalize_callback,
-        )
-
-        self.assertEqual(result, 0)
-        self.assertEqual(consumed, [0, 1])
-        self.assertEqual(admission_mock.call_count, 1)
-        self.assertIn("达到有效来源上限 1", output)
-        build_mock.assert_called_once()
     
     def test_candidate_total_limit(self):
         reason = main._collection_stop_reason(
