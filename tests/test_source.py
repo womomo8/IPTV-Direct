@@ -28,16 +28,15 @@ class SourceFlowTests(unittest.TestCase):
         ]
 
         self.assertGreaterEqual(len(remote_sources), 2)
-        self.assertEqual(len(inline_sources), 1)
+        self.assertEqual(len(inline_sources), 2)
 
         manual_txt = remote_sources[0]
         manual_m3u = remote_sources[1]
-        inline_m3u = inline_sources[0]
 
         config["manual_sources"] = [
             manual_txt,
             manual_m3u,
-            inline_m3u,
+            *inline_sources,
         ]
 
         # 模拟自动播放列表和索引来源。
@@ -204,8 +203,9 @@ class SourceFlowTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
 
-        # 六条福建移动线路，加上四条模拟远程来源候选。
-        self.assertEqual(len(detected_candidates), 10)
+        # 六条福建移动线路、十四条专项补充线路，
+        # 加上四条模拟远程来源候选。
+        self.assertEqual(len(detected_candidates), 24)
 
         channels = {
             candidate["channel"]
@@ -221,15 +221,22 @@ class SourceFlowTests(unittest.TestCase):
             "CCTV-5+",
             "CCTV-7",
             "CCTV-9",
+            "广东体育",
+            "睛彩竞技",
+            "睛彩篮球",
+            "凤凰卫视中文台",
+            "凤凰资讯台",
+            "翡翠台",
+            "澳门莲花卫视",
         }.issubset(channels))
 
-        # 人工来源：普通 URL、远程 M3U、内嵌 M3U。
+        # 人工来源：普通 URL、远程 M3U、两个内嵌 M3U。
         manual_candidates = [
             candidate
             for candidate in detected_candidates
             if candidate["source_type"] == "manual"
         ]
-        self.assertEqual(len(manual_candidates), 8)
+        self.assertEqual(len(manual_candidates), 22)
 
         manual_source_urls = {
             candidate["source_url"]
@@ -238,6 +245,12 @@ class SourceFlowTests(unittest.TestCase):
 
         self.assertIn(manual_txt["url"], manual_source_urls)
         self.assertIn(manual_m3u["url"], manual_source_urls)
+
+        for inline_source in inline_sources:
+            self.assertIn(
+                inline_source["url"],
+                manual_source_urls,
+            )
 
         # 自动 M3U 和索引发现的播放列表分别进入检测。
         automatic_candidates = [
