@@ -284,6 +284,32 @@ class SourceParsingTests(unittest.TestCase):
             [item["channel"] for item in result["candidates"]],
             [channel for _, channel in items],
         )   
+
+    def test_o0i_txt_aliases_use_actual_settings(self):
+        root = Path(__file__).resolve().parents[1]
+
+        settings = json.loads(
+            (root / "settings.json").read_text(encoding="utf-8")
+        )
+        channels = load_channels(root / "channels.txt")
+
+        content = "\n".join([
+            "CCTV-5蓝光,https://example.test/cctv5.m3u8",
+            "CCTV-5+蓝光,https://example.test/cctv5plus.m3u8",
+            "五星体育蓝光,https://example.test/wuxing.m3u8",
+        ])
+
+        result = parse_source_content(
+            content,
+            SOURCE,
+            channels,
+            aliases=settings["aliases"],
+        )
+
+        self.assertEqual(
+            [item["channel"] for item in result["candidates"]],
+            ["CCTV-5", "CCTV-5+", "五星体育"],
+        )
     
     def test_parse_m3u_and_extract_channel_attributes(self):
         content = (
