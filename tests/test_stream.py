@@ -13,65 +13,108 @@ class StreamQualityTests(unittest.TestCase):
             "width": 1920,
             "height": 1080,
             "field_order": "progressive",
-            "bitrate": 4000000,
+            "fps": 25.0,
+            "bitrate": 5_000_000,
         }
         result.update(overrides)
         return result
 
-    @patch("stream.shutil.which", return_value="/usr/bin/ffmpeg")
-    @patch("stream._probe")
-    @patch("stream._decode")
-    def test_1080p_progressive_decode_passes(
-        self, decode, probe, which
-    ):
-        probe.return_value = self.metadata()
+    def check(self, metadata):
+        with (
+            patch("stream.shutil.which", return_value="/usr/bin/ffmpeg"),
+            patch("stream._probe", return_value=metadata),
+            patch("stream._decode") as decode,
+        ):
+            result = stream.check_stream(
+                "https://example.com/live.ts"
+            )
+        return result, decode
 
-        result = stream.check_stream(
-            "https://example.com/live.ts"
-        )
+    def test_h264_1080p_meeting_all_thresholds_passes(self):
+        result, decode = self.check(self.metadata())
 
         self.assertEqual(result["status"], stream.PASS)
         self.assertEqual(result["width"], 1920)
         self.assertEqual(result["height"], 1080)
+        self.assertEqual(result["fps"], 25.0)
+        self.assertEqual(result["bitrate"], 5_000_000)
         decode.assert_called_once()
 
-    @patch("stream.shutil.which", return_value="/usr/bin/ffmpeg")
-    @patch("stream._probe")
-    @patch("stream._decode")
-    def test_resolution_below_1080p_fails(
-        self, decode, probe, which
-    ):
-        probe.return_value = self.metadata(width=1280, height=720)
+    def test_hevc_1080p_with_4mbps_passes(self):
+        result, decode = self.check(
+            self.metadata(
+                codec="hevc",
+                bitrate=4_000_000,
+            )
+        )
 
-        result = stream.check_stream(
-            "https://example.com/live.ts"
+        self.assertEqual(result["status"], stream.PASS)
+        decode.assert_called_once()
+
+    def test_resolution_width_below_threshold_fails(self):
+        result, decode = self.check(
+            self.metadata(width=1919)
         )
 
         self.assertEqual(result["status"], stream.FAIL)
         decode.assert_not_called()
 
-    @patch("stream.shutil.which", return_value="/usr/bin/ffmpeg")
-    @patch("stream._probe")
-    @patch("stream._decode")
-    def test_interlaced_video_fails(
-        self, decode, probe, which
-    ):
-        probe.return_value = self.metadata(
-            field_order="tt"
-        )
-
-        result = stream.check_stream(
-            "https://example.com/live.ts"
+    def test_resolution_height_below_threshold_fails(self):
+        result, decode = self.check(
+            self.metadata(height=1079)
         )
 
         self.assertEqual(result["status"], stream.FAIL)
         decode.assert_not_called()
 
-    @patch("stream.shutil.which", return_value=None)
-    def test_missing_ffmpeg_returns_incomplete(self, which):
-        result = stream.check_stream(
-            "https://example.com/live.ts"
+    def test_unsupported_codec_fails(self):
+        result, decode = self.check(
+            self.metadata(codec="mpeg2video")
         )
+
+        self.assertEqual(result["status"], stream.FAIL)
+        decode.assert_not_called()
+
+    def test_fps_below_23_fails(self):
+        result, decode = self.check(
+            self.metadata(fps=22.99)
+        )
+
+        self.assertEqual(result["status"], stream.FAIL)
+        decode.assert_not_called()
+
+    def test_h264_bitrate_below_5mbps_fails(self):
+        result, decode = self.check(
+            self.metadata(bitrate=4_999_999)
+        )
+
+        self.assertEqual(result["status"], stream.FAIL)
+        decode.assert_not_called()
+
+    def test_hevc_bitrate_below_4mbps_fails(self):
+        result, decode = self.check(
+            self.metadata(
+                codec="hevc",
+                bitrate=3_999_999,
+            )
+        )
+
+        self.assertEqual(result["status"], stream.FAIL)
+        decode.assert_not_called()
+
+    def test_interlaced_video_is_not_rejected_by_field_order(self):
+        result, decode = self.check(
+            self.metadata(field_order="tt")
+        )
+
+        self.assertEqual(result["status"], stream.PASS)
+        decode.assert_called_once()
+
+    def test_missing_ffmpeg_returns_incomplete(self):
+        with patch("stream.shutil.which", return_value=None):
+            result = stream.check_stream(
+                "https://example.com/live.ts"
+            )
 
         self.assertEqual(result["status"], stream.INCOMPLETE)
 
