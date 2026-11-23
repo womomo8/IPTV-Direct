@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 import checker
 import globalping
 import publisher
+import stream
 
 from collector import (
     SourceConfigError,
@@ -355,7 +356,49 @@ def run_source_batch_pipeline(
             }
             for item in candidates
         ]
+    stream_indices = [
+        index
+        for index, item in enumerate(local_results)
+        if (
+            isinstance(item.get("channel"), str)
+            and item["channel"].casefold() in target_channels
+            and checker.local_checks_passed(item)
+        )
+    ]
 
+    stream_candidates = [
+        local_results[index] for index in stream_indices
+    ]
+
+    if stream_candidates:
+        try:
+            stream_results = stream.check_candidates(stream_candidates)
+
+            if (
+                not isinstance(stream_results, list)
+                or len(stream_results) != len(stream_candidates)
+                or any(
+                    not isinstance(item, dict)
+                    or _identity(item) != _identity(stream_candidates[position])
+                    for position, item in enumerate(stream_results)
+                )
+            ):
+                raise ValueError("stream 返回数量、顺序或候选身份不匹配")
+
+            for index, result in zip(stream_indices, stream_results):
+                local_results[index] = result
+
+        except Exception as exc:
+            reason = f"视频质量检测调用异常或结果校验失败：{exc}"
+
+            for index in stream_indices:
+                local_results[index] = {
+                    **local_results[index],
+                    "stream_quality": {
+                        "status": INCOMPLETE,
+                        "reason": reason,
+                    },
+                }
     output: list[dict[str, Any] | None] = [None] * len(candidates)
     pending: list[tuple[int, dict[str, Any]]] = []
 
@@ -374,6 +417,11 @@ def run_source_batch_pipeline(
             output[index] = globalping.incomplete_result(
                 item,
                 "本地检测未全部通过，未提交 Globalping；不代表远程检测失败。",
+            )
+        elif not stream.quality_passed(item):
+            output[index] = globalping.incomplete_result(
+                item,
+                "视频质量检测未明确通过，未提交 Globalping。",
             )
         else:
             pending.append((index, item))
