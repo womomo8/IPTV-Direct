@@ -1,13 +1,15 @@
 
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""使用 FFprobe 和 FFmpeg 检测直播流的真实视频质量。"""
+"""使用 FFprobe 和 FFmpeg 检测并淘汰不合格直播流。"""
 
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import subprocess
+from fractions import Fraction
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -16,10 +18,17 @@ PASS = "PASS"
 FAIL = "FAIL"
 INCOMPLETE = "INCOMPLETE"
 
-PROBE_TIMEOUT = 4
+PROBE_TIMEOUT = 12
 DECODE_TIMEOUT = 4
 MIN_WIDTH = 1920
 MIN_HEIGHT = 1080
+MIN_FPS = 23.0
+MIN_BITRATE = {
+    "h264": 5_000_000,
+    "hevc": 4_000_000,
+}
+ALLOWED_CODECS = set(MIN_BITRATE)
+BITRATE_SAMPLE_SECONDS = 5
 DECODE_FRAMES = 30
 
 
@@ -56,20 +65,84 @@ def _run(command: list[str], timeout: int) -> subprocess.CompletedProcess:
     except subprocess.TimeoutExpired as exc:
         raise StreamQualityError("视频检测超时") from exc
     except OSError as exc:
-        raise StreamQualityError(f"无法启动检测程序：{exc}") from exc
+        raise StreamQualityError(
+            f"无法启动检测程序：{exc}"
+        ) from exc
+
+
+def _parse_fps(value: Any) -> float | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+
+    try:
+        rate = float(Fraction(value))
+    except (ValueError, ZeroDivisionError, OverflowError):
+        return None
+
+    if not math.isfinite(rate) or rate <= 0:
+        return None
+
+    return rate
+
+
+def _packet_bitrate(packets: Any) -> int | None:
+    if not isinstance(packets, list) or not packets:
+        return None
+
+    timestamps = []
+    total_bytes = 0
+
+    for packet in packets:
+        if not isinstance(packet, dict):
+            continue
+
+        size = packet.get("size")
+        if isinstance(size, str) and size.isdigit():
+            size = int(size)
+
+        if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+            continue
+
+        timestamp = packet.get("pts_time")
+        if timestamp is None:
+            timestamp = packet.get("dts_time")
+
+        try:
+            timestamp = float(timestamp)
+        except (TypeError, ValueError):
+            continue
+
+        if not math.isfinite(timestamp):
+            continue
+
+        total_bytes += size
+        timestamps.append(timestamp)
+
+    if total_bytes <= 0 or len(timestamps) < 2:
+        return None
+
+    duration = max(timestamps) - min(timestamps)
+    if duration <= 0:
+        return None
+
+    return round(total_bytes * 8 / duration)
 
 
 def _probe(url: str) -> dict[str, Any]:
     command = [
         "ffprobe",
         "-v", "error",
-        "-rw_timeout", "4000000",
-        "-analyzeduration", "3000000",
-        "-probesize", "3000000",
+        "-rw_timeout", "10000000",
+        "-analyzeduration", "5000000",
+        "-probesize", "5000000",
+        "-read_intervals", f"%+{BITRATE_SAMPLE_SECONDS}",
         "-select_streams", "v:0",
+        "-show_streams",
+        "-show_packets",
         "-show_entries",
-        "stream=codec_name,width,height,field_order,bit_rate:"
-        "format=bit_rate",
+        "stream=codec_type,codec_name,width,height,field_order,"
+        "avg_frame_rate,r_frame_rate,bit_rate:"
+        "packet=pts_time,dts_time,size",
         "-of", "json",
         url,
     ]
@@ -84,42 +157,62 @@ def _probe(url: str) -> dict[str, Any]:
     try:
         data = json.loads(result.stdout)
     except (TypeError, json.JSONDecodeError) as exc:
-        raise StreamQualityError("FFprobe 返回的数据无法解析") from exc
+        raise StreamQualityError(
+            "FFprobe 返回的数据无法解析"
+        ) from exc
 
     streams = data.get("streams")
     if not isinstance(streams, list) or not streams:
-        raise StreamQualityError("无法确认视频流信息")
+        raise StreamQualityError("没有检测到有效视频流")
 
     stream = streams[0]
 
+    if stream.get("codec_type") != "video":
+        raise StreamQualityError("检测到的媒体流不是视频流")
+
+    codec = stream.get("codec_name")
+    if not isinstance(codec, str) or not codec:
+        raise StreamQualityError("无法确认视频编码")
+
     width = stream.get("width")
     height = stream.get("height")
-    field_order = stream.get("field_order")
 
     if (
         isinstance(width, bool)
         or not isinstance(width, int)
         or isinstance(height, bool)
         or not isinstance(height, int)
+        or width <= 0
+        or height <= 0
     ):
         raise StreamQualityError("无法确认真实视频分辨率")
 
-    if not isinstance(field_order, str) or not field_order:
-        raise StreamQualityError("无法确认视频扫描方式")
+    fps = _parse_fps(stream.get("avg_frame_rate"))
+    if fps is None:
+        fps = _parse_fps(stream.get("r_frame_rate"))
 
-    bitrate = stream.get("bit_rate") or data.get("format", {}).get("bit_rate")
+    if fps is None:
+        raise StreamQualityError("无法确认有效视频帧率")
 
-    try:
-        bitrate = int(bitrate) if bitrate is not None else None
-    except (TypeError, ValueError):
-        bitrate = None
+    bitrate = _packet_bitrate(data.get("packets"))
+
+    if bitrate is None:
+        declared_bitrate = stream.get("bit_rate")
+        try:
+            bitrate = int(declared_bitrate)
+        except (TypeError, ValueError):
+            bitrate = None
+
+    if bitrate is None or bitrate <= 0:
+        raise StreamQualityError("无法确认有效视频码率")
 
     return {
-        "codec": stream.get("codec_name"),
+        "codec": codec,
         "width": width,
         "height": height,
-        "field_order": field_order,
+        "fps": fps,
         "bitrate": bitrate,
+        "field_order": stream.get("field_order"),
     }
 
 
@@ -149,7 +242,7 @@ def _decode(url: str) -> None:
 
 
 def check_stream(url: str) -> dict[str, Any]:
-    """检测单条线路。每次调用只执行一次检测。"""
+    """检测单条线路，任何硬性指标不达标均淘汰。"""
 
     result: dict[str, Any] = {
         "status": INCOMPLETE,
@@ -158,6 +251,7 @@ def check_stream(url: str) -> dict[str, Any]:
         "field_order": None,
         "bitrate": None,
         "codec": None,
+        "fps": None,
         "reason": "",
     }
 
@@ -182,17 +276,34 @@ def check_stream(url: str) -> dict[str, Any]:
             result["reason"] = "实际分辨率低于 1920×1080"
             return result
 
-        if metadata["field_order"] != "progressive":
+        codec = metadata["codec"].lower()
+        if codec not in ALLOWED_CODECS:
+            result["status"] = FAIL
+            result["reason"] = f"不支持的视频编码：{codec}"
+            return result
+
+        if metadata["fps"] < MIN_FPS:
             result["status"] = FAIL
             result["reason"] = (
-                "不是已确认的逐行扫描视频，不能认定为 1080P"
+                f"实际帧率低于 {MIN_FPS:g} fps"
+            )
+            return result
+
+        minimum_bitrate = MIN_BITRATE[codec]
+        if metadata["bitrate"] < minimum_bitrate:
+            result["status"] = FAIL
+            result["reason"] = (
+                f"{codec} 视频码率低于 "
+                f"{minimum_bitrate / 1_000_000:g} Mbps"
             )
             return result
 
         _decode(url)
 
         result["status"] = PASS
-        result["reason"] = "分辨率、逐行扫描和实际解码检测通过"
+        result["reason"] = (
+            "分辨率、编码、帧率、码率和实际解码检测通过"
+        )
         return result
 
     except StreamQualityError as exc:
@@ -228,7 +339,7 @@ def check_candidates(
 
 
 def quality_passed(candidate: dict[str, Any]) -> bool:
-    """只有明确通过视频质量检测的线路才允许继续。"""
+    """只有明确通过全部视频质量检测的线路才允许继续。"""
 
     if not isinstance(candidate, dict):
         return False
