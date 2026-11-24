@@ -116,8 +116,10 @@ def _frame_rate_from_timestamps(frames: Any) -> float | None:
 
     return fps
 
-
 def _classify_scan_type(field_order: Any) -> str:
+    if not isinstance(field_order, str):
+        return "unknown"
+
     if field_order == "progressive":
         return "progressive"
 
@@ -130,7 +132,7 @@ def _packet_bitrate(packets: Any) -> int | None:
     if not isinstance(packets, list) or len(packets) < 2:
         return None
 
-    timestamps = []
+    packet_records = []
     total_bytes = 0
 
     for packet in packets:
@@ -152,26 +154,25 @@ def _packet_bitrate(packets: Any) -> int | None:
         ):
             return None
 
-        timestamp = None
+        packet_timestamps = []
 
-        for value in (
-            packet.get("pts_time"),
-            packet.get("dts_time"),
-        ):
+        for key in ("pts_time", "dts_time"):
+            value = packet.get(key)
+
             if isinstance(value, bool):
+                packet_timestamps.append(None)
                 continue
 
             try:
-                parsed = float(value)
+                timestamp = float(value)
             except (TypeError, ValueError):
+                packet_timestamps.append(None)
                 continue
 
-            if math.isfinite(parsed):
-                timestamp = parsed
-                break
-
-        if timestamp is None:
-            return None
+            if not math.isfinite(timestamp):
+                packet_timestamps.append(None)
+            else:
+                packet_timestamps.append(timestamp)
 
         duration_value = packet.get("duration_time")
 
@@ -189,15 +190,37 @@ def _packet_bitrate(packets: Any) -> int | None:
         ):
             return None
 
-        packet_end = timestamp + packet_duration
-
-        if not math.isfinite(packet_end):
-            return None
-
         total_bytes += size
-        timestamps.append((timestamp, packet_end))
+        packet_records.append(
+            (
+                packet_timestamps[0],
+                packet_timestamps[1],
+                packet_duration,
+            )
+        )
 
-    if total_bytes <= 0 or len(timestamps) < 2:
+    if total_bytes <= 0 or len(packet_records) < 2:
+        return None
+
+    if all(record[0] is not None for record in packet_records):
+        timestamp_index = 0
+    elif all(record[1] is not None for record in packet_records):
+        timestamp_index = 1
+    else:
+        return None
+
+    timestamps = [
+        (
+            record[timestamp_index],
+            record[timestamp_index] + record[2],
+        )
+        for record in packet_records
+    ]
+
+    if any(
+        not math.isfinite(end)
+        for _, end in timestamps
+    ):
         return None
 
     start = min(item[0] for item in timestamps)
