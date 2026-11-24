@@ -267,6 +267,40 @@ class PublisherAdmissionTests(unittest.TestCase):
             source_order=0,
         )
 
+    def test_bitrate_does_not_affect_quality_ranking(self):
+        """旧码率字段不得影响最终线路质量排名。"""
+
+        candidates = [
+            make_candidate(
+                url="https://example.com/c.m3u8",
+            ),
+            make_candidate(
+                url="https://example.com/a.m3u8",
+            ),
+            make_candidate(
+                url="https://example.com/b.m3u8",
+            ),
+        ]
+
+        candidates[0]["stream_quality"]["bitrate"] = 10000000
+        candidates[1]["stream_quality"]["bitrate"] = 1000
+        candidates[2]["stream_quality"]["bitrate"] = 5000000
+
+        result = self.process(candidates)
+
+        urls = [
+            route["normalized_url"]
+            for route in result["accepted_routes"]
+        ]
+
+        self.assertEqual(
+            urls,
+            [
+                "https://example.com/a.m3u8",
+                "https://example.com/b.m3u8",
+            ],
+        )
+        
         automatic.pop("priority", None)
         automatic.pop("source_order", None)
         manual.pop("priority", None)
