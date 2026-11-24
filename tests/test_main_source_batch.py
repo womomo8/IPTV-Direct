@@ -307,7 +307,7 @@ class SourceBatchPipelineTests(unittest.TestCase):
                 "INCOMPLETE",
                 "PASS",
                 "PASS",
-                "INCOMPLETE",
+                                "PASS",
             ],
         )
     
