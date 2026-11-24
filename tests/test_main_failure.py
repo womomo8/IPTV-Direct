@@ -89,6 +89,10 @@ class MainFormalFailureTests(unittest.TestCase):
                 return_value=iter([make_source_item()]),
             ),
             patch(
+                "main._load_historical_candidates",
+                return_value=[],
+            ),
+            patch(
                 "main.normalize_source_content",
                 return_value={
                     "recognized": True,
@@ -126,6 +130,10 @@ class MainFormalFailureTests(unittest.TestCase):
                 return_value=iter([]),
             ),
             patch(
+                "main._load_historical_candidates",
+                return_value=[],
+            ),
+            patch(
                 "main.publisher.build_subscriptions",
                 side_effect=publisher.PublisherError(
                     "模拟订阅生成异常"
@@ -157,11 +165,15 @@ class MainFormalFailureTests(unittest.TestCase):
                 return_value=iter([]),
             ),
             patch(
-                "main.publisher.build_subscriptions",
-                return_value=subscriptions,
+                "main.iter_source_contents",
+                return_value=iter([]),
             ),
             patch(
-                "main.publisher.publish_subscriptions",
+                "main._load_historical_candidates",
+                return_value=[],
+            ),
+            patch(
+                "main.publisher.build_subscriptions",
                 side_effect=OSError("模拟文件替换异常"),
             ) as publish_mock,
         ):
