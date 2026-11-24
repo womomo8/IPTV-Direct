@@ -440,8 +440,6 @@ def run_source_batch_pipeline(
     # 所有通过本地检测和视频质量检测的候选，
     # 都必须逐条完成 Globalping 检测。
     # 不得根据频道当前已有 PASS 数量提前停止。
-
-    pending.sort(key=_globalping_dispatch_order)
     # 所有通过本地检测和视频质量检测的候选，
     # 都必须逐条完成 Globalping 检测。
     # 不得根据频道当前已有 PASS 数量提前停止。
