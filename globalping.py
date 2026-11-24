@@ -1337,6 +1337,7 @@ def check_candidates(
                 reason = (
                     "Globalping 额度不足或触发限流，"
                     "已停止当前线路剩余探针阶段。"
+                )
                 stage_checks = incomplete_result(
                     candidate, reason
                 )["globalping"]["checks"]
