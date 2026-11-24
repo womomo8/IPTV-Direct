@@ -1336,8 +1336,7 @@ def check_candidates(
             if budget["halted"]:
                 reason = (
                     "Globalping 额度不足或触发限流，"
-                    "当前线路无法完成剩余探针阶段。"
-                )
+                    "已停止当前线路剩余探针阶段。"
                 stage_checks = incomplete_result(
                     candidate, reason
                 )["globalping"]["checks"]
