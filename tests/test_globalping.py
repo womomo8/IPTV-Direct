@@ -179,6 +179,81 @@ class ProbeSelectionTests(unittest.TestCase):
             with self.assertRaises(gp.GlobalpingError):
                 gp.choose_probes(3)
 
+class ProbeResultValidationTests(unittest.TestCase):
+    def setUp(self):
+        self.locations = [
+            {
+                "country": "CN",
+                "asn": 9808,
+                "tags": ["eyeball-network"],
+                "limit": 1,
+            }
+        ]
+        self.result = finished_http("", 200)
+
+    def test_accepts_exact_requested_probe(self):
+        result = gp._result_map(
+            measurement(result_item(self.result)),
+            self.locations,
+        )
+        self.assertEqual(len(result), 1)
+
+    def test_rejects_missing_or_extra_results(self):
+        invalid_results = [
+            measurement(),
+            measurement(
+                result_item(self.result),
+                result_item(self.result, {
+                    **PROBE,
+                    "asn": 4134,
+                    "network": "China Telecom",
+                }),
+            ),
+        ]
+
+        for value in invalid_results:
+            with self.subTest(value=value):
+                with self.assertRaises(gp.GlobalpingError):
+                    gp._result_map(value, self.locations)
+
+    def test_rejects_wrong_country(self):
+        probe = {**PROBE, "country": "US"}
+        with self.assertRaises(gp.GlobalpingError):
+            gp._result_map(
+                measurement(result_item(self.result, probe)),
+                self.locations,
+            )
+
+    def test_rejects_wrong_asn(self):
+        probe = {**PROBE, "asn": 4134}
+        with self.assertRaises(gp.GlobalpingError):
+            gp._result_map(
+                measurement(result_item(self.result, probe)),
+                self.locations,
+            )
+
+    def test_rejects_missing_eyeball_network_tag(self):
+        probe = {**PROBE, "tags": ["hosting"]}
+        with self.assertRaises(gp.GlobalpingError):
+            gp._result_map(
+                measurement(result_item(self.result, probe)),
+                self.locations,
+            )
+
+    def test_rejects_different_probe_for_hls_child(self):
+        wrong_probe = {
+            **PROBE,
+            "asn": 4134,
+            "network": "China Telecom",
+        }
+        expected_key = gp._probe_key(PROBE)
+
+        with self.assertRaises(gp.GlobalpingError):
+            gp._result_map(
+                measurement(result_item(self.result, wrong_probe)),
+                expected_probe_key=expected_key,
+            )
+
 class UrlAndBodyTests(unittest.TestCase):
     def test_split_url_preserves_path_query_and_port(self):
         parts = gp._split_url("https://example.test:8443/live/index.m3u8?token=x")
