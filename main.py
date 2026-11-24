@@ -403,31 +403,43 @@ def run_source_batch_pipeline(
             )
         else:
             pending.append((index, item))
-    # Globalping 调度按来源优先级执行：
-    # 人工来源优先，自动来源随后；同一来源按原始顺序处理。
-    # 这里只调整检测提交顺序，最终结果仍按 original_index 回填。
-    def _globalping_dispatch_order(
-        entry: tuple[int, dict[str, Any]],
-    ) -> tuple[int, int, int]:
-        original_index, candidate = entry
-        priority = candidate.get("priority", 1)
-        source_order = candidate.get("source_order", original_index)
+    # 按来源轮流提交 Globalping，避免某一个来源先耗尽检测额度。
+    # 同一来源内部保持原始候选顺序；检测结果仍按原下标回填。
+    pending_by_source = {}
+
+    for original_index, candidate in pending:
+        source_type = candidate.get("source_type")
+        source_url = candidate.get("source_url")
 
         if (
-            isinstance(priority, bool)
-            or not isinstance(priority, int)
-            or priority < 0
+            not isinstance(source_type, str)
+            or not source_type
+            or not isinstance(source_url, str)
+            or not source_url
         ):
-            priority = 2**31 - 1
+            source_key = ("candidate", str(original_index))
+        else:
+            source_key = (source_type, source_url)
 
-        if (
-            isinstance(source_order, bool)
-            or not isinstance(source_order, int)
-            or source_order < 0
-        ):
-            source_order = 2**31 - 1
+        pending_by_source.setdefault(source_key, []).append(
+            (original_index, candidate)
+        )
 
-        return priority, source_order, original_index
+    fair_pending = []
+
+    while pending_by_source:
+        for source_key in list(pending_by_source):
+            source_queue = pending_by_source[source_key]
+            fair_pending.append(source_queue.pop(0))
+
+            if not source_queue:
+                del pending_by_source[source_key]
+
+    pending = fair_pending
+
+    # 所有通过本地检测和视频质量检测的候选，
+    # 都必须逐条完成 Globalping 检测。
+    # 不得根据频道当前已有 PASS 数量提前停止。
 
     pending.sort(key=_globalping_dispatch_order)
     # 所有通过本地检测和视频质量检测的候选，
