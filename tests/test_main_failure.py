@@ -165,15 +165,15 @@ class MainFormalFailureTests(unittest.TestCase):
                 return_value=iter([]),
             ),
             patch(
-                "main.iter_source_contents",
-                return_value=iter([]),
-            ),
-            patch(
                 "main._load_historical_candidates",
                 return_value=[],
             ),
             patch(
                 "main.publisher.build_subscriptions",
+                return_value=subscriptions,
+            ),
+            patch(
+                "main.publisher.publish_subscriptions",
                 side_effect=OSError("模拟文件替换异常"),
             ) as publish_mock,
         ):
@@ -182,7 +182,6 @@ class MainFormalFailureTests(unittest.TestCase):
         self.assertEqual(result, 1)
         publish_mock.assert_called_once()
         self.assertIn("正式订阅发布失败", errors)
-
 
 if __name__ == "__main__":
     unittest.main()
