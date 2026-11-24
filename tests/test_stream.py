@@ -9,6 +9,21 @@ import stream
 
 class StreamQualityTests(unittest.TestCase):
 
+    def test_unvalidated_bitrate_window_cannot_pass(self):
+        with (
+            patch("stream.shutil.which", return_value="/usr/bin/ffmpeg"),
+            patch("stream._probe", return_value=self.metadata()),
+            patch("stream.BITRATE_SAMPLE_VALIDATED", False),
+            patch("stream._decode") as decode,
+        ):
+            result = stream.check_stream(
+                "https://example.com/live.ts"
+            )
+
+        self.assertEqual(result["status"], stream.INCOMPLETE)
+        self.assertIn("真实线路样本验证", result["reason"])
+        decode.assert_not_called()
+    
     def metadata(self, **overrides):
         result = {
             "codec": "h264",
@@ -17,6 +32,7 @@ class StreamQualityTests(unittest.TestCase):
             "field_order": "progressive",
             "fps": 25.0,
             "bitrate": 5_000_000,
+            "scan_type": "progressive",
         }
         result.update(overrides)
         return result
@@ -25,6 +41,7 @@ class StreamQualityTests(unittest.TestCase):
         with (
             patch("stream.shutil.which", return_value="/usr/bin/ffmpeg"),
             patch("stream._probe", return_value=metadata),
+            patch("stream.BITRATE_SAMPLE_VALIDATED", True),
             patch("stream._decode") as decode,
         ):
             result = stream.check_stream(
@@ -220,10 +237,16 @@ class StreamProbeMeasurementTests(unittest.TestCase):
                 "codec_name": "h264",
                 "width": 1920,
                 "height": 1080,
-                "avg_frame_rate": "25/1",
-                "r_frame_rate": "25/1",
+                "field_order": "progressive",
+                "avg_frame_rate": "60/1",
+                "r_frame_rate": "60/1",
                 "bit_rate": "6000000",
             }],
+            "frames": [
+                {"best_effort_timestamp_time": "0.00"},
+                {"best_effort_timestamp_time": "0.04"},
+                {"best_effort_timestamp_time": "0.08"},
+            ],
             "packets": [
                 {
                     "pts_time": "0",
@@ -269,20 +292,39 @@ class StreamProbeMeasurementTests(unittest.TestCase):
 
         self.assertIsNone(bitrate)
 
-    def test_missing_average_fps_does_not_fallback_to_r_fps(self):
+    def test_fps_uses_actual_frame_timestamps(self):
         data = self.base_data()
-        data["streams"][0]["avg_frame_rate"] = "0/0"
+
+        result = self.probe_with_data(data)
+
+        self.assertEqual(result["fps"], 25.0)
+        self.assertEqual(result["scan_type"], "progressive")
+
+    def test_missing_frame_timestamps_does_not_fallback_to_avg_fps(self):
+        data = self.base_data()
+        data["frames"] = []
 
         with self.assertRaises(stream.StreamQualityError):
             self.probe_with_data(data)
 
-    def test_missing_packet_bitrate_does_not_fallback_to_declared_bitrate(self):
+    def test_invalid_frame_timestamp_returns_incomplete_data(self):
         data = self.base_data()
-        data["packets"] = []
+        data["frames"][1]["best_effort_timestamp_time"] = "N/A"
 
         with self.assertRaises(stream.StreamQualityError):
             self.probe_with_data(data)
 
+    def test_interlaced_field_order_is_identified(self):
+        self.assertEqual(
+            stream._classify_scan_type("tt"),
+            "interlaced",
+        )
+
+    def test_unknown_field_order_is_preserved_as_unknown(self):
+        self.assertEqual(
+            stream._classify_scan_type(None),
+            "unknown",
+        )
 
 class StreamDecodeTests(unittest.TestCase):
 
