@@ -43,6 +43,7 @@ def _valid_url(url: Any) -> bool:
 
     try:
         parsed = urlsplit(url)
+        _ = parsed.port
     except ValueError:
         return False
 
@@ -51,7 +52,6 @@ def _valid_url(url: Any) -> bool:
         and bool(parsed.hostname)
     )
 
-
 def _run(command: list[str], timeout: int) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(
@@ -59,7 +59,7 @@ def _run(command: list[str], timeout: int) -> subprocess.CompletedProcess:
             capture_output=True,
             text=True,
             encoding="utf-8",
-            errors="replace",
+            errors="replace",.
             timeout=timeout,
             check=False,
         )
@@ -80,10 +80,13 @@ def _frame_rate_from_timestamps(frames: Any) -> float | None:
         if not isinstance(frame, dict):
             return None
 
+        value = frame.get("best_effort_timestamp_time")
+
+        if isinstance(value, bool):
+            return None
+
         try:
-            timestamp = float(
-                frame.get("best_effort_timestamp_time")
-            )
+            timestamp = float(value)
         except (TypeError, ValueError):
             return None
 
@@ -124,7 +127,7 @@ def _classify_scan_type(field_order: Any) -> str:
     return "unknown"
 
 def _packet_bitrate(packets: Any) -> int | None:
-    if not isinstance(packets, list) or not packets:
+    if not isinstance(packets, list) or len(packets) < 2:
         return None
 
     timestamps = []
@@ -132,34 +135,67 @@ def _packet_bitrate(packets: Any) -> int | None:
 
     for packet in packets:
         if not isinstance(packet, dict):
-            continue
+            return None
 
         size = packet.get("size")
-        if isinstance(size, str) and size.isdigit():
-            size = int(size)
 
-        if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
-            continue
+        if isinstance(size, str):
+            try:
+                size = int(size.strip())
+            except ValueError:
+                return None
 
-        timestamp = packet.get("pts_time")
+        if (
+            isinstance(size, bool)
+            or not isinstance(size, int)
+            or size <= 0
+        ):
+            return None
+
+        timestamp = None
+
+        for value in (
+            packet.get("pts_time"),
+            packet.get("dts_time"),
+        ):
+            if isinstance(value, bool):
+                continue
+
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                continue
+
+            if math.isfinite(parsed):
+                timestamp = parsed
+                break
+
         if timestamp is None:
-            timestamp = packet.get("dts_time")
+            return None
+
+        duration_value = packet.get("duration_time")
+
+        if isinstance(duration_value, bool):
+            return None
 
         try:
-            timestamp = float(timestamp)
-            duration = float(packet.get("duration_time"))
+            packet_duration = float(duration_value)
         except (TypeError, ValueError):
             return None
 
         if (
-            not math.isfinite(timestamp)
-            or not math.isfinite(duration)
-            or duration <= 0
+            not math.isfinite(packet_duration)
+            or packet_duration <= 0
         ):
             return None
 
+        packet_end = timestamp + packet_duration
+
+        if not math.isfinite(packet_end):
+            return None
+
         total_bytes += size
-        timestamps.append((timestamp, timestamp + duration))
+        timestamps.append((timestamp, packet_end))
 
     if total_bytes <= 0 or len(timestamps) < 2:
         return None
@@ -168,10 +204,15 @@ def _packet_bitrate(packets: Any) -> int | None:
     end = max(item[1] for item in timestamps)
     duration = end - start
 
-    if duration <= 0:
+    if not math.isfinite(duration) or duration <= 0:
         return None
 
-    return round(total_bytes * 8 / duration)
+    bitrate = total_bytes * 8 / duration
+
+    if not math.isfinite(bitrate) or bitrate <= 0:
+        return None
+
+    return round(bitrate)
 
 def _probe(url: str) -> dict[str, Any]:
     command = [
@@ -207,11 +248,17 @@ def _probe(url: str) -> dict[str, Any]:
             "FFprobe 返回的数据无法解析"
         ) from exc
 
+    if not isinstance(data, dict):
+        raise StreamQualityError("FFprobe 返回的数据结构无效")
+
     streams = data.get("streams")
     if not isinstance(streams, list) or not streams:
         raise StreamQualityError("没有检测到有效视频流")
 
     stream = streams[0]
+
+    if not isinstance(stream, dict):
+        raise StreamQualityError("FFprobe 返回的视频流结构无效")
 
     if stream.get("codec_type") != "video":
         raise StreamQualityError("检测到的媒体流不是视频流")
