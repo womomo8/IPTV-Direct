@@ -604,6 +604,7 @@ def build_subscriptions(
     ordered.sort(
         key=lambda route: (
             channel_index[route["channel"]],
+            *_quality_order(route),
             *_candidate_order(route),
         )
     )
