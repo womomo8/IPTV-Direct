@@ -858,7 +858,7 @@ def run_formal_flow(config: dict[str, Any]) -> int:
     limits = settings["collection"]
     channels = config["channels"]
 
-     try:
+    try:
         history_candidates = _load_historical_candidates(
             ROOT,
             channels,
