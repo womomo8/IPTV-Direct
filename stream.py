@@ -44,6 +44,20 @@ def _valid_url(url: Any) -> bool:
         and bool(parsed.hostname)
     )
 
+def _classify_scan_type(field_order: Any) -> str:
+    if not isinstance(field_order, str):
+        return "unknown"
+
+    value = field_order.strip().lower()
+
+    if value == "progressive":
+        return "progressive"
+
+    if value in {"tt", "bb", "tb", "bt"}:
+        return "interlaced"
+
+    return "unknown"
+
 def _run(command: list[str], timeout: int) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(
