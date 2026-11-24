@@ -14,7 +14,6 @@ SETTINGS = {
     }
 }
 
-
 def make_candidate(
     url="https://example.com/live.m3u8",
     channel="CCTV-1",
@@ -23,6 +22,10 @@ def make_candidate(
     media_type="HLS",
     local_status="PASS",
     global_status="PASS",
+    width=1920,
+    height=1080,
+    fps=30,
+    bitrate=4000000,
 ):
     """构造完整的线路检测结果。"""
 
@@ -44,7 +47,7 @@ def make_candidate(
         "ipv4": {"status": global_status},
         "http": {"status": global_status},
         "hls": {"status": remote_hls},
-        "ts": {"status": global_status},
+        "ts": {"status": "N/A"},
     }
 
     return {
@@ -54,14 +57,19 @@ def make_candidate(
         "priority": priority,
         "source_order": source_order,
         "source_type": "manual" if priority == 0 else "automatic",
-        "stream_quality": {"status": "PASS"},
+        "stream_quality": {
+            "status": "PASS",
+            "width": width,
+            "height": height,
+            "fps": fps,
+            "bitrate": bitrate,
+        },
         "checks": local_checks,
         "globalping": {
             "status": global_status,
             "checks": remote_checks,
         },
     }
-
 
 class PublisherAdmissionTests(unittest.TestCase):
 
@@ -151,22 +159,21 @@ class PublisherAdmissionTests(unittest.TestCase):
             publisher.REJECTED,
         )
 
-    def test_globalping_incomplete_can_be_accepted(self):
-        """Globalping 未完成时，符合降级规则的线路可以准入。"""
+    def test_globalping_incomplete_is_rejected(self):
+        """Globalping 未完成时，结果不充分，不允许准入。"""
 
         candidate = make_candidate(global_status="INCOMPLETE")
 
-        candidate["globalping"]["checks"]["ipv4"]["status"] = "PASS"
-        candidate["globalping"]["checks"]["http"]["status"] = "INCOMPLETE"
-        candidate["globalping"]["checks"]["hls"]["status"] = "INCOMPLETE"
-        candidate["globalping"]["checks"]["ts"]["status"] = "PASS"
-
         result = self.process([candidate])
 
-        self.assertEqual(len(result["accepted_routes"]), 1)
+        self.assertEqual(len(result["accepted_routes"]), 0)
         self.assertEqual(
-            result["accepted_routes"][0]["globalping"]["status"],
+            result["results"][0]["status"],
+            publisher.REJECTED,
+        )
+        self.assertIn(
             "INCOMPLETE",
+            result["results"][0]["reason"],
         )
 
     def test_unknown_media_type_is_rejected(self):
@@ -200,24 +207,36 @@ class PublisherAdmissionTests(unittest.TestCase):
         self.assertEqual(len(result["accepted_routes"]), 1)
         self.assertEqual(result["channel_counts"]["CCTV-1"], 1)
 
-    def test_channel_keeps_at_most_two_routes(self):
-        """每个频道最多保留两条线路。"""
+    def test_channel_keeps_two_highest_quality_routes(self):
+        """每频道最多两条，优先保留视频质量最高的线路。"""
 
         candidates = [
             make_candidate(
-                url="https://example.com/auto.m3u8",
+                url="https://example.com/low.m3u8",
+                priority=0,
+                source_order=0,
+                width=1280,
+                height=720,
+                fps=30,
+                bitrate=2000000,
+            ),
+            make_candidate(
+                url="https://example.com/high.m3u8",
                 priority=1,
                 source_order=0,
+                width=1920,
+                height=1080,
+                fps=30,
+                bitrate=4000000,
             ),
             make_candidate(
-                url="https://example.com/manual-1.m3u8",
-                priority=0,
-                source_order=0,
-            ),
-            make_candidate(
-                url="https://example.com/manual-2.m3u8",
+                url="https://example.com/mid.m3u8",
                 priority=0,
                 source_order=1,
+                width=1920,
+                height=1080,
+                fps=25,
+                bitrate=3000000,
             ),
         ]
 
@@ -234,13 +253,13 @@ class PublisherAdmissionTests(unittest.TestCase):
         self.assertEqual(
             urls,
             [
-                "https://example.com/manual-1.m3u8",
-                "https://example.com/manual-2.m3u8",
+                "https://example.com/high.m3u8",
+                "https://example.com/mid.m3u8",
             ],
         )
 
-    def test_manual_source_has_priority(self):
-        """人工来源必须优先于自动来源。"""
+    def test_quality_tie_uses_manual_source_priority(self):
+        """质量完全相同时，才按来源优先级排序。"""
 
         candidates = [
             make_candidate(
@@ -261,6 +280,82 @@ class PublisherAdmissionTests(unittest.TestCase):
             result["accepted_routes"][0]["normalized_url"],
             "https://example.com/manual.m3u8",
         )
+
+    def test_historical_routes_are_never_replaced(self):
+        """新线路质量更高，也不能挤掉历史准入线路。"""
+
+        historical = [
+            make_candidate(
+                url="https://example.com/old-1.m3u8",
+                width=1280,
+                height=720,
+            ),
+            make_candidate(
+                url="https://example.com/old-2.m3u8",
+                width=1280,
+                height=720,
+                source_order=1,
+            ),
+        ]
+
+        old_result = self.process(historical)
+
+        new_candidate = make_candidate(
+            url="https://example.com/new-best.m3u8",
+            width=3840,
+            height=2160,
+        )
+
+        result = publisher.process_batch(
+            candidates=[new_candidate],
+            accepted_routes=old_result["accepted_routes"],
+            channels=CHANNELS,
+            settings=SETTINGS,
+        )
+
+        urls = [
+            item["normalized_url"]
+            for item in result["accepted_routes"]
+        ]
+
+        self.assertEqual(
+            urls,
+            [
+                "https://example.com/old-1.m3u8",
+                "https://example.com/old-2.m3u8",
+            ],
+        )
+        self.assertEqual(
+            result["results"][0]["status"],
+            publisher.REJECTED,
+        )
+
+    def test_invalid_historical_routes_raise_error(self):
+        """历史线路无效、重复或超限时必须明确报错。"""
+
+        valid = make_candidate()
+
+        invalid_cases = [
+            [None],
+            [{**valid, "channel": "UNKNOWN"}],
+            [{**valid, "normalized_url": "invalid-url"}],
+            [valid, dict(valid)],
+            [
+                make_candidate(url="https://example.com/1.m3u8"),
+                make_candidate(url="https://example.com/2.m3u8", source_order=1),
+                make_candidate(url="https://example.com/3.m3u8", source_order=2),
+            ],
+        ]
+
+        for historical in invalid_cases:
+            with self.subTest(historical=historical):
+                with self.assertRaises(publisher.PublisherError):
+                    publisher.process_batch(
+                        candidates=[],
+                        accepted_routes=historical,
+                        channels=CHANNELS,
+                        settings=SETTINGS,
+                    )
 
     def test_domestic_verification_is_not_fabricated(self):
         """没有国内实测证据时，必须标记 NOT_VERIFIED。"""
