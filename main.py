@@ -403,7 +403,33 @@ def run_source_batch_pipeline(
             )
         else:
             pending.append((index, item))
+    # Globalping 调度按来源优先级执行：
+    # 人工来源优先，自动来源随后；同一来源按原始顺序处理。
+    # 这里只调整检测提交顺序，最终结果仍按 original_index 回填。
+    def _globalping_dispatch_order(
+        entry: tuple[int, dict[str, Any]],
+    ) -> tuple[int, int, int]:
+        original_index, candidate = entry
+        priority = candidate.get("priority", 1)
+        source_order = candidate.get("source_order", original_index)
 
+        if (
+            isinstance(priority, bool)
+            or not isinstance(priority, int)
+            or priority < 0
+        ):
+            priority = 2**31 - 1
+
+        if (
+            isinstance(source_order, bool)
+            or not isinstance(source_order, int)
+            or source_order < 0
+        ):
+            source_order = 2**31 - 1
+
+        return priority, source_order, original_index
+
+    pending.sort(key=_globalping_dispatch_order)
     # 所有通过本地检测和视频质量检测的候选，
     # 都必须逐条完成 Globalping 检测。
     # 不得根据频道当前已有 PASS 数量提前停止。
