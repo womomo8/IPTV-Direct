@@ -458,6 +458,7 @@ class StatusAndFlowTests(unittest.TestCase):
         asns = iter([9808, 4134, 4837])
         active_probe = {}
         stage_calls = []
+        current_main_id = None
 
         def choose_one(*args, **kwargs):
             asn = next(asns)
@@ -471,19 +472,30 @@ class StatusAndFlowTests(unittest.TestCase):
             }]
 
         def run_stage(url, locations, budget, headers=None):
-            if not isinstance(locations, list) or len(locations) != 1:
-                raise AssertionError("HLS 子清单必须使用当前阶段指定的单个探针。")
-            if locations[0].get("asn") != active_probe.get("asn"):
-                raise AssertionError("HLS 子清单必须使用与主清单相同的 ASN。")            
-            stage_calls.append(url)
-            body = (
-                main_result
-                if url.endswith("/master.m3u8")
-                else media_result
-            )
+            nonlocal current_main_id
+
+            if url.endswith("/master.m3u8"):
+                if not isinstance(locations, list) or len(locations) != 1:
+                    raise AssertionError("主清单必须使用当前阶段指定的单个探针。")
+                if locations[0].get("asn") != active_probe.get("asn"):
+                    raise AssertionError("主清单探针 ASN 与当前阶段不一致。")
+
+                current_main_id = f"main-{active_probe['asn']}"
+                stage_calls.append(("main", url, locations))
+
+                return (
+                    current_main_id,
+                    measurement(result_item(main_result, probe=dict(active_probe))),
+                )
+
+            if locations != current_main_id:
+                raise AssertionError("子清单必须复用主清单的测量 ID。")
+
+            stage_calls.append(("media", url, locations))
+
             return (
-                f"m{len(stage_calls)}",
-                measurement(result_item(body, probe=dict(active_probe))),
+                f"media-{active_probe['asn']}",
+                measurement(result_item(media_result, probe=dict(active_probe))),
             )
 
         with patch.object(
@@ -533,6 +545,13 @@ class StatusAndFlowTests(unittest.TestCase):
                 gp.PASS,
             )
 
+        for index in range(0, len(stage_calls), 2):
+            main_call = stage_calls[index]
+            media_call = stage_calls[index + 1]
+
+            self.assertEqual(main_call[0], "main")
+            self.assertEqual(media_call[0], "media")
+            self.assertEqual(media_call[2], main_call[0] if False else f"main-{main_call[2][0]['asn']}")
 
     def test_fail_or_incomplete_stops_later_probe_stages(self):
         candidate = {
