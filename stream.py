@@ -277,6 +277,21 @@ def check_stream(url: str) -> dict[str, Any]:
             result["reason"] = f"不支持的视频编码：{codec}"
             return result
 
+        if metadata["fps"] < MIN_FPS:
+            result["status"] = FAIL
+            result["reason"] = (
+                f"实际帧率低于 {MIN_FPS:g} fps"
+            )
+            return result
+
+        _decode(url)
+
+        result["status"] = PASS
+        result["reason"] = (
+            "分辨率、编码、实际帧率和30帧解码检测通过"
+        )
+        return result
+
     except Exception as exc:
         result["status"] = INCOMPLETE
         result["reason"] = (
