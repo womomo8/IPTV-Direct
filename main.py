@@ -406,12 +406,6 @@ def run_source_batch_pipeline(
         if has_measurement:
             submitted_candidates.append(result)
 
-    for index, candidate in pending:
-        output[index] = globalping.incomplete_result(
-            candidate,
-            "频道线路已满或候选不符合正式筛选条件，未提交 Globalping。",
-        )
-
     completed_results = []
 
     for index, result in enumerate(output):
