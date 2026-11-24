@@ -310,11 +310,9 @@ def run_source_batch_pipeline(
         else:
             pending.append((index, item))
 
-    admission = publisher.process_batch(
-        [], accepted_routes, channels, settings
-    )
-    current_routes = admission["accepted_routes"]
-    admission_by_index: dict[int, dict[str, Any]] = {}
+    # 临时记录只用于控制每频道最多检测到两条 Globalping PASS。
+    # 最终准入统一在全部候选检测结束后执行。
+    provisional_routes = list(accepted_routes)
     submitted_candidates: list[dict[str, Any]] = []
 
     session = None
@@ -324,7 +322,7 @@ def run_source_batch_pipeline(
     while pending:
         selected = publisher.next_candidate_for_detection(
             [item for _, item in pending],
-            current_routes,
+            provisional_routes,,
             channels,
             settings,
         )
@@ -422,22 +420,11 @@ def run_source_batch_pipeline(
         if has_measurement:
             submitted_candidates.append(result)
 
-        current_admission = publisher.process_batch(
-            [result],
-            current_routes,
-            channels,
-            settings,
-        )
-        if len(current_admission.get("results", [])) != 1:
-            raise publisher.PublisherError(
-                "publisher 单条准入结果数量不一致"
-            )
-
-        admission_by_index[original_index] = (
-            current_admission["results"][0]
-        )
-        current_routes = current_admission["accepted_routes"]
-        admission = current_admission
+        # Globalping 明确 PASS 才计入临时停止计数。
+        # 这里只用于决定该频道是否还需要继续检测，
+        # 不执行 publisher 最终准入。
+        if remote.get("status") == PASS:
+            provisional_routes.append(result)
 
     for index, candidate in pending:
         output[index] = globalping.incomplete_result(
@@ -445,67 +432,80 @@ def run_source_batch_pipeline(
             "频道线路已满或候选不符合正式筛选条件，未提交 Globalping。",
         )
 
-    unprocessed_indices = [
-        index
-        for index in range(len(candidates))
-        if index not in admission_by_index
-    ]
+    completed_results = []
 
-    if unprocessed_indices:
-        unprocessed_results = [
-            output[index] for index in unprocessed_indices
-        ]
+    for index, result in enumerate(output):
+        if not isinstance(result, dict):
+            raise publisher.PublisherError(
+                f"第 {index + 1} 条候选没有取得完整检测结果"
+            )
+        completed_results.append(result)
 
-        current_admission = publisher.process_batch(
-            unprocessed_results,
-            current_routes,
-            channels,
-            settings,
+    # 所有候选完成本地、视频和适用的 Globalping 检测后，
+    # 才统一交给 publisher 执行最终准入。
+    admission = publisher.process_batch(
+        completed_results,
+        accepted_routes,
+        channels,
+        settings,
+    )
+
+    returned = admission.get("results")
+
+    if not isinstance(returned, list) or len(returned) != len(candidates):
+        raise publisher.PublisherError(
+            "publisher 未完整返回全局候选的准入结果"
         )
 
-        returned = current_admission.get("results", [])
-        if len(returned) != len(unprocessed_indices):
+    index_by_identity: dict[
+        tuple[Any, Any], list[int]
+    ] = {}
+
+    for index, candidate in enumerate(candidates):
+        index_by_identity.setdefault(
+            _identity(candidate), []
+        ).append(index)
+
+    admission_by_index: dict[int, dict[str, Any]] = {}
+
+    for item in returned:
+        if not isinstance(item, dict):
             raise publisher.PublisherError(
-                "publisher 未完整返回本批剩余候选的准入结果"
+                "publisher 返回了无效准入结果"
             )
 
-        index_by_identity: dict[
-            tuple[Any, Any], list[int]
-        ] = {}
-        for index in unprocessed_indices:
-            index_by_identity.setdefault(
-                _identity(output[index]), []
-            ).append(index)
+        candidate = item.get("candidate")
 
-        for item in returned:
-            candidate = item.get("candidate")
-            if not isinstance(candidate, dict):
-                raise publisher.PublisherError(
-                    "publisher 返回了无效候选身份"
-                )
+        if not isinstance(candidate, dict):
+            raise publisher.PublisherError(
+                "publisher 返回了无效候选身份"
+            )
 
-            matches = index_by_identity.get(_identity(candidate), [])
-            if not matches:
-                raise publisher.PublisherError(
-                    "publisher 返回了不属于剩余候选的准入结果"
-                )
+        matches = index_by_identity.get(_identity(candidate), [])
 
-            admission_by_index[matches.pop(0)] = item
+        if not matches:
+            raise publisher.PublisherError(
+                "publisher 返回了不属于本批候选的准入结果"
+            )
 
-        current_routes = current_admission["accepted_routes"]
-        admission = current_admission
+        admission_by_index[matches.pop(0)] = item
 
     if len(admission_by_index) != len(candidates):
         raise publisher.PublisherError(
-            "本批候选没有全部取得 publisher 准入结果"
+            "全局候选没有全部取得 publisher 准入结果"
         )
 
     admission = dict(admission)
-    admission["accepted_routes"] = current_routes
     admission["results"] = [
         admission_by_index[index]
         for index in range(len(candidates))
     ]
+
+    return (
+        completed_results,
+        admission,
+        submitted_candidates,
+    )
 
     return (
         [item for item in output if item is not None],
@@ -800,6 +800,9 @@ def run_formal_flow(config: dict[str, Any]) -> int:
     seen_urls: set[str] = set()
     errors: list[str] = []
     detected: list[dict[str, Any]] = []
+    detected: list[dict[str, Any]] = []
+    all_candidates: list[dict[str, Any]] = []
+    source_records: list[dict[str, Any]] = []
 
     accepted_routes: list[dict[str, Any]] = []
     admission = {
@@ -911,65 +914,24 @@ def run_formal_flow(config: dict[str, Any]) -> int:
         if normalized.get("extracted_candidates", 0) > 0:
             valid_sources += 1
 
-
-        accepted_now = 0
-        rejected_now = 0
-        batch_results: list[dict[str, Any]] = []
-        admission_results: list[dict[str, Any]] = []
-
         if candidates:
-            try:
-                (
-                    batch_results,
-                    admission,
-                    submitted_candidates,
-                ) = run_source_batch_pipeline(
-                    candidates=candidates,
-                    accepted_routes=accepted_routes,
-                    settings=settings,
-                    channels=channels,
-                )
-            except publisher.PublisherError as exc:
-                errors.append(f"线路准入系统错误：{exc}")
-                stopped = "publisher 正式准入发生系统错误"
-                system_error = True
-                break
-
-            detected.extend(batch_results)
-            _print_detection_summary(
-                batch_results,
-                submitted_candidates,
+            all_candidates.extend(candidates)
+            source_records.append({
+                "source": source,
+                "normalized": normalized,
+                "candidates": candidates,
+            })
+        else:
+            _print_manual_source_details(
+                source, normalized, [], []
             )
 
-            accepted_routes = admission["accepted_routes"]
-            admission_results = admission["results"]
-
-            accepted_now = sum(
-                result.get("status") == publisher.ACCEPTED
-                for result in admission_results
-            )
-            rejected_now = sum(
-                result.get("status") == publisher.REJECTED
-                for result in admission_results
-            )
-
-            print(
-                f"线路准入：本批准入 {accepted_now} 条；"
-                f"本批拒绝 {rejected_now} 条；"
-                f"累计保留 {len(accepted_routes)} 条。"
-            )
-
-            print(
-                "频道有效线路统计："
-                + "；".join(
-                    f"{channel} {count}/2"
-                    for channel, count in admission["channel_counts"].items()
-                )
-            )
-
-
-        _print_manual_source_details(
-            source, normalized, batch_results, admission_results
+        print(
+            f"来源处理：{label}；"
+            f"识别格式 {normalized['format']}；"
+            f"提取候选 {normalized['extracted_candidates']}；"
+            f"本批去重 {normalized['duplicate_candidates']}；"
+            f"进入全局候选池 {len(candidates)}。"
         )
 
         print(
@@ -991,6 +953,85 @@ def run_formal_flow(config: dict[str, Any]) -> int:
             stopped = stop_reason
             break
 
+    if all_candidates:
+        try:
+            (
+                batch_results,
+                admission,
+                submitted_candidates,
+            ) = run_source_batch_pipeline(
+                candidates=all_candidates,
+                accepted_routes=accepted_routes,
+                settings=settings,
+                channels=channels,
+            )
+        except publisher.PublisherError as exc:
+            errors.append(f"线路准入系统错误：{exc}")
+            stopped = "publisher 正式准入发生系统错误"
+            system_error = True
+        else:
+            detected.extend(batch_results)
+
+            _print_detection_summary(
+                batch_results,
+                submitted_candidates,
+            )
+
+            accepted_routes = admission["accepted_routes"]
+            admission_results = admission["results"]
+
+            for source_record in source_records:
+                identities = {
+                    _identity(candidate)
+                    for candidate in source_record["candidates"]
+                }
+
+                source_batch_results = [
+                    result
+                    for result in batch_results
+                    if _identity(result) in identities
+                ]
+
+                source_admission_results = [
+                    result
+                    for result in admission_results
+                    if (
+                        isinstance(result, dict)
+                        and isinstance(result.get("candidate"), dict)
+                        and _identity(result["candidate"]) in identities
+                    )
+                ]
+
+                _print_manual_source_details(
+                    source_record["source"],
+                    source_record["normalized"],
+                    source_batch_results,
+                    source_admission_results,
+                )
+
+            accepted_now = sum(
+                result.get("status") == publisher.ACCEPTED
+                for result in admission_results
+            )
+            rejected_now = sum(
+                result.get("status") == publisher.REJECTED
+                for result in admission_results
+            )
+
+            print(
+                f"全局准入：本轮准入 {accepted_now} 条；"
+                f"本轮拒绝 {rejected_now} 条；"
+                f"最终保留 {len(accepted_routes)} 条。"
+            )
+
+            print(
+                "频道有效线路统计："
+                + "；".join(
+                    f"{channel} {count}/2"
+                    for channel, count in admission["channel_counts"].items()
+                )
+            )    
+    
     print(
         f"来源汇总：有效来源 {valid_sources}；"
         f"累计提取候选 {extracted_total}；"
