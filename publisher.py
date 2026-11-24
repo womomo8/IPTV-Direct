@@ -162,8 +162,8 @@ def _globalping_admission_reason(
 
     return None
 
-def _quality_order(candidate: dict[str, Any]) -> tuple[float, float, float]:
-    """按分辨率、帧率、码率依次降序排列，异常值按 0 处理。"""
+def _quality_order(candidate: dict[str, Any]) -> tuple[float, float]:
+    """按分辨率像素总量、实际帧率降序排列，异常值按 0 处理。"""
     quality = candidate.get("stream_quality")
 
     if not isinstance(quality, dict):
@@ -185,12 +185,10 @@ def _quality_order(candidate: dict[str, Any]) -> tuple[float, float, float]:
     width = number("width")
     height = number("height")
     fps = number("fps")
-    bitrate = number("bitrate")
 
     return (
         -(width * height),
         -fps,
-        -bitrate,
     )
 
 def _prepare_candidate(
