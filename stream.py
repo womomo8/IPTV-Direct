@@ -70,9 +70,9 @@ def _run(command: list[str], timeout: int) -> subprocess.CompletedProcess:
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
-raise StreamQualityError(
-    f"{command[0]}执行超时（限制 {timeout} 秒）"
-) from exc
+        raise StreamQualityError(
+            f"{command[0]}执行超时（限制 {timeout} 秒）"
+        ) from exc
     except OSError as exc:
         raise StreamQualityError(
             f"无法启动检测程序：{exc}"
