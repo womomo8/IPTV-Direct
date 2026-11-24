@@ -362,9 +362,26 @@ class StatusAndFlowTests(unittest.TestCase):
         self.assertEqual(output[0]["globalping"]["status"], gp.FAIL)
 
     def test_direct_ts_marks_hls_and_ts_na(self):
-        """DIRECT_TS 的 HLS 和 TS 均由 Globalping 标记 N/A。"""
+        """DIRECT_TS 必须经过三个不同 ASN 的完整检测。"""
 
         http_result = finished_http("", 200)
+        asns = iter([9808, 4134, 4837])
+
+        def choose_one(*args, **kwargs):
+            asn = next(asns)
+            return [{
+                "country": "CN",
+                "asn": asn,
+                "tags": ["eyeball-network"],
+                "limit": 1,
+            }]
+
+        def run_stage(url, locations, budget, headers=None):
+            probe = {**PROBE, "asn": locations[0]["asn"]}
+            return (
+                f"m-{probe['asn']}",
+                measurement(result_item(http_result, probe=probe)),
+            )
 
         with patch.object(
             gp,
@@ -373,19 +390,12 @@ class StatusAndFlowTests(unittest.TestCase):
         ), patch.object(
             gp,
             "choose_probes",
-            return_value=[
-                {
-                    "country": "CN",
-                    "asn": 9808,
-                    "tags": ["eyeball-network"],
-                    "limit": 1,
-                }
-            ],
-        ), patch.object(
+            side_effect=choose_one,
+        ) as probes, patch.object(
             gp,
             "_stage",
-            return_value=("m1", measurement(result_item(http_result))),
-        ):
+            side_effect=run_stage,
+        ) as stage:
             output = gp.check_candidates(
                 [
                     {
@@ -397,24 +407,54 @@ class StatusAndFlowTests(unittest.TestCase):
                 {"max_probes": 3},
             )
 
-        checks = output[0]["globalping"]["checks"]
+        result = output[0]["globalping"]
+        checks = result["checks"]
 
         self.assertEqual(checks["hls"]["status"], gp.NA)
         self.assertEqual(checks["ts"]["status"], gp.NA)
         self.assertEqual(checks["ipv4"]["status"], gp.PASS)
         self.assertEqual(checks["http"]["status"], gp.PASS)
-        self.assertEqual(output[0]["globalping"]["status"], gp.PASS)
+        self.assertEqual(result["status"], gp.PASS)
+        self.assertEqual(probes.call_count, 3)
+        self.assertEqual(stage.call_count, 3)
+        self.assertEqual(
+            [result["stages"][name]["asn"] for name in (
+                "probe_1", "probe_2", "probe_3"
+            )],
+            [9808, 4134, 4837],
+        )
 
     def test_hls_requires_main_and_media_playlist_only(self):
-        """HLS 只检测主 M3U8 和适用的媒体子 M3U8。"""
+        """每个 ASN 都必须完成主清单和适用的媒体子清单检测。"""
 
         main_result = finished_http(MASTER_PLAYLIST, 200)
         media_result = finished_http(MEDIA_PLAYLIST, 200)
+        asns = iter([9808, 4134, 4837])
+        active_probe = {}
+        stage_calls = []
 
-        responses = [
-            ("m1", measurement(result_item(main_result))),
-            ("m2", measurement(result_item(media_result))),
-        ]
+        def choose_one(*args, **kwargs):
+            asn = next(asns)
+            active_probe.clear()
+            active_probe.update({**PROBE, "asn": asn})
+            return [{
+                "country": "CN",
+                "asn": asn,
+                "tags": ["eyeball-network"],
+                "limit": 1,
+            }]
+
+        def run_stage(url, locations, budget, headers=None):
+            stage_calls.append(url)
+            body = (
+                main_result
+                if url.endswith("/master.m3u8")
+                else media_result
+            )
+            return (
+                f"m{len(stage_calls)}",
+                measurement(result_item(body, probe=dict(active_probe))),
+            )
 
         with patch.object(
             gp,
@@ -423,18 +463,11 @@ class StatusAndFlowTests(unittest.TestCase):
         ), patch.object(
             gp,
             "choose_probes",
-            return_value=[
-                {
-                    "country": "CN",
-                    "asn": 9808,
-                    "tags": ["eyeball-network"],
-                    "limit": 1,
-                }
-            ],
-        ), patch.object(
+            side_effect=choose_one,
+        ) as probes, patch.object(
             gp,
             "_stage",
-            side_effect=responses,
+            side_effect=run_stage,
         ) as stage:
             output = gp.check_candidates(
                 [
@@ -452,11 +485,23 @@ class StatusAndFlowTests(unittest.TestCase):
         self.assertEqual(result["status"], gp.PASS)
         self.assertEqual(
             set(result["stages"]),
-            {"main_playlist", "media_playlist"},
+            {"probe_1", "probe_2", "probe_3"},
         )
-        self.assertEqual(len(result["measurements"]), 2)
-        self.assertEqual(stage.call_count, 2)
+        self.assertEqual(probes.call_count, 3)
+        self.assertEqual(stage.call_count, 6)
+        self.assertEqual(len(result["measurements"]), 6)
         self.assertEqual(result["checks"]["ts"]["status"], gp.NA)
+
+        for stage_name in ("probe_1", "probe_2", "probe_3"):
+            sub_stages = result["stages"][stage_name]["sub_stages"]
+            self.assertEqual(
+                set(sub_stages),
+                {"main_playlist", "media_playlist"},
+            )
+            self.assertEqual(
+                result["stages"][stage_name]["status"],
+                gp.PASS,
+            )
 
     def test_rate_limit_stops_later_candidate_measurements(self):
         calls = []
@@ -552,7 +597,7 @@ class StatusAndFlowTests(unittest.TestCase):
         )
 
 
-    def test_shared_session_reuses_quota_and_probes(self):
+    def test_shared_session_reuses_quota_and_selects_probes_per_candidate(self):
         settings = {"max_probes": 3}
         candidates = [
             {
@@ -567,6 +612,23 @@ class StatusAndFlowTests(unittest.TestCase):
             },
         ]
         ts_result = finished_http("", 200)
+        asns = iter([9808, 4134, 4837, 9808, 4134, 4837])
+
+        def choose_one(*args, **kwargs):
+            asn = next(asns)
+            return [{
+                "country": "CN",
+                "asn": asn,
+                "tags": ["eyeball-network"],
+                "limit": 1,
+            }]
+
+        def run_stage(url, locations, budget, headers=None):
+            probe = {**PROBE, "asn": locations[0]["asn"]}
+            return (
+                f"m-{probe['asn']}",
+                measurement(result_item(ts_result, probe=probe)),
+            )
 
         with patch.object(
             gp,
@@ -575,18 +637,11 @@ class StatusAndFlowTests(unittest.TestCase):
         ) as limits, patch.object(
             gp,
             "choose_probes",
-            return_value=[
-                {
-                    "country": "CN",
-                    "asn": 9808,
-                    "tags": ["eyeball-network"],
-                    "limit": 1,
-                }
-            ],
+            side_effect=choose_one,
         ) as probes, patch.object(
             gp,
             "_stage",
-            return_value=("m1", measurement(result_item(ts_result))),
+            side_effect=run_stage,
         ) as stage:
             session = gp.create_session(settings)
 
@@ -598,10 +653,18 @@ class StatusAndFlowTests(unittest.TestCase):
             )
 
         self.assertEqual(limits.call_count, 1)
-        self.assertEqual(probes.call_count, 1)
-        self.assertEqual(stage.call_count, 2)
-        self.assertEqual(first[0]["globalping"]["status"], gp.PASS)
-        self.assertEqual(second[0]["globalping"]["status"], gp.PASS)
+        self.assertEqual(probes.call_count, 6)
+        self.assertEqual(stage.call_count, 6)
+
+        for output in (first, second):
+            result = output[0]["globalping"]
+            self.assertEqual(result["status"], gp.PASS)
+            self.assertEqual(
+                [result["stages"][name]["asn"] for name in (
+                    "probe_1", "probe_2", "probe_3"
+                )],
+                [9808, 4134, 4837],
+            )
 
     def test_shared_session_stops_after_rate_limit(self):
         settings = {"max_probes": 3}
