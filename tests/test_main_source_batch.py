@@ -2,6 +2,8 @@
 """main.py 全局候选批次调度专项测试。"""
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import main
@@ -554,6 +556,208 @@ class SourceBatchPipelineTests(unittest.TestCase):
         stream_check.assert_not_called()
         create_session.assert_not_called()
         remote.assert_not_called()
+
+class HistoricalCandidateTests(unittest.TestCase):
+
+    def setUp(self):
+        self.settings = {
+            "collection": {
+                "max_valid_sources": 10,
+                "max_candidates_per_source": 10,
+                "max_candidates_total": 10,
+                "max_index_links_per_page": 10,
+            },
+            "detection": {
+                "max_hls_manifest_bytes": 1024,
+            },
+            "globalping": {
+                "max_probes": 3,
+            },
+            "selection": {
+                "max_routes_per_channel": 2,
+            },
+            "aliases": {},
+        }
+
+    def write_history(self, root):
+        output = root / "output"
+        output.mkdir(parents=True, exist_ok=True)
+
+        (root / "channels.txt").write_text(
+            "频道一\n",
+            encoding="utf-8",
+        )
+
+        m3u = (
+            "#EXTM3U\n"
+            '#EXTINF:-1 tvg-name="频道一",频道一\n'
+            "https://example.test/history.m3u8\n"
+        )
+
+        txt = (
+            "频道一,https://example.test/history.m3u8\n"
+        )
+
+        (output / "iptv.m3u").write_text(
+            m3u,
+            encoding="utf-8",
+        )
+        (output / "iptv.txt").write_text(
+            txt,
+            encoding="utf-8",
+        )
+
+    def test_first_publish_without_history_returns_empty(self):
+        with TemporaryDirectory() as directory:
+            candidates = main._load_historical_candidates(
+                Path(directory),
+                ["频道一"],
+                self.settings,
+            )
+
+        self.assertEqual(candidates, [])
+
+    def test_valid_history_enters_candidate_pool(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_history(root)
+
+            candidates = main._load_historical_candidates(
+                root,
+                ["频道一"],
+                self.settings,
+            )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["channel"], "频道一")
+        self.assertEqual(
+            candidates[0]["normalized_url"],
+            "https://example.test/history.m3u8",
+        )
+        self.assertEqual(candidates[0]["source_type"], "history")
+        self.assertEqual(candidates[0]["priority"], 1)
+        self.assertEqual(
+            candidates[0]["source_order"],
+            self.settings["collection"]["max_candidates_total"],
+        )
+
+    def test_missing_one_history_file_fails_closed(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_history(root)
+            (root / "output" / "iptv.txt").unlink()
+
+            with self.assertRaises(publisher.PublisherError):
+                main._load_historical_candidates(
+                    root,
+                    ["频道一"],
+                    self.settings,
+                )
+
+    def test_mismatched_history_files_fail_closed(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_history(root)
+
+            (root / "output" / "iptv.txt").write_text(
+                "频道一,https://example.test/different.m3u8\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(publisher.PublisherError):
+                main._load_historical_candidates(
+                    root,
+                    ["频道一"],
+                    self.settings,
+                )
+
+    def test_formal_flow_sends_history_to_detection_pipeline(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_history(root)
+
+            history = main._load_historical_candidates(
+                root,
+                ["频道一"],
+                self.settings,
+            )
+
+            detected = [{
+                **history[0],
+                "media_type": "HLS",
+                "checks": {},
+                "stream_quality": {
+                    "status": "INCOMPLETE",
+                    "reason": "测试模拟",
+                },
+                "globalping": {
+                    "status": "INCOMPLETE",
+                    "error": "测试模拟",
+                },
+            }]
+
+            admission = {
+                "accepted_routes": [],
+                "channel_counts": {"频道一": 0},
+                "results": [{
+                    "candidate": history[0],
+                    "status": publisher.REJECTED,
+                    "reason": "测试模拟",
+                }],
+            }
+
+            config = {
+                "settings": self.settings,
+                "channels": ["频道一"],
+                "manual_sources": [],
+                "automatic_sources": [],
+            }
+
+            publish_result = {
+                "channel_count": 0,
+                "route_count": 0,
+                "m3u_path": "output/iptv.m3u",
+                "txt_path": "output/iptv.txt",
+                "first_publish": False,
+            }
+
+            with (
+                patch.object(main, "ROOT", root),
+                patch.object(
+                    main,
+                    "iter_source_contents",
+                    return_value=iter(()),
+                ),
+                patch.object(
+                    main,
+                    "run_source_batch_pipeline",
+                    return_value=(detected, admission, []),
+                ) as pipeline,
+                patch.object(
+                    publisher,
+                    "build_subscriptions",
+                    return_value={
+                        "route_count": 0,
+                        "channel_counts": {"频道一": 0},
+                    },
+                ),
+                patch.object(
+                    publisher,
+                    "publish_subscriptions",
+                    return_value=publish_result,
+                ),
+            ):
+                result = main.run_formal_flow(config)
+
+            self.assertEqual(result, 0)
+
+            submitted = pipeline.call_args.kwargs["candidates"]
+
+            self.assertEqual(len(submitted), 1)
+            self.assertEqual(
+                submitted[0]["normalized_url"],
+                "https://example.test/history.m3u8",
+            )
 
 if __name__ == "__main__":
     unittest.main()
