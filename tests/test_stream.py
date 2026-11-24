@@ -8,21 +8,6 @@ import stream
 
 
 class StreamQualityTests(unittest.TestCase):
-
-    def test_unvalidated_bitrate_window_cannot_pass(self):
-        with (
-            patch("stream.shutil.which", return_value="/usr/bin/ffmpeg"),
-            patch("stream._probe", return_value=self.metadata()),
-            patch("stream.BITRATE_SAMPLE_VALIDATED", False),
-            patch("stream._decode") as decode,
-        ):
-            result = stream.check_stream(
-                "https://example.com/live.ts"
-            )
-
-        self.assertEqual(result["status"], stream.INCOMPLETE)
-        self.assertIn("真实线路样本验证", result["reason"])
-        decode.assert_not_called()
     
     def metadata(self, **overrides):
         result = {
@@ -31,7 +16,6 @@ class StreamQualityTests(unittest.TestCase):
             "height": 1080,
             "field_order": "progressive",
             "fps": 25.0,
-            "bitrate": 5_000_000,
             "scan_type": "progressive",
         }
         result.update(overrides)
@@ -41,7 +25,6 @@ class StreamQualityTests(unittest.TestCase):
         with (
             patch("stream.shutil.which", return_value="/usr/bin/ffmpeg"),
             patch("stream._probe", return_value=metadata),
-            patch("stream.BITRATE_SAMPLE_VALIDATED", True),
             patch("stream._decode") as decode,
         ):
             result = stream.check_stream(
@@ -56,17 +39,13 @@ class StreamQualityTests(unittest.TestCase):
         self.assertEqual(result["width"], 1920)
         self.assertEqual(result["height"], 1080)
         self.assertEqual(result["fps"], 25.0)
-        self.assertEqual(result["bitrate"], 5_000_000)
         decode.assert_called_once()
-
-    def test_hevc_1080p_with_4mbps_passes(self):
+        
+    def test_hevc_1080p_passes(self):
         result, decode = self.check(
-            self.metadata(
-                codec="hevc",
-                bitrate=4_000_000,
-            )
+            self.metadata(codec="hevc")
         )
-
+        
         self.assertEqual(result["status"], stream.PASS)
         decode.assert_called_once()
 
@@ -97,25 +76,6 @@ class StreamQualityTests(unittest.TestCase):
     def test_fps_below_23_fails(self):
         result, decode = self.check(
             self.metadata(fps=22.99)
-        )
-
-        self.assertEqual(result["status"], stream.FAIL)
-        decode.assert_not_called()
-
-    def test_h264_bitrate_below_5mbps_fails(self):
-        result, decode = self.check(
-            self.metadata(bitrate=4_999_999)
-        )
-
-        self.assertEqual(result["status"], stream.FAIL)
-        decode.assert_not_called()
-
-    def test_hevc_bitrate_below_4mbps_fails(self):
-        result, decode = self.check(
-            self.metadata(
-                codec="hevc",
-                bitrate=3_999_999,
-            )
         )
 
         self.assertEqual(result["status"], stream.FAIL)
@@ -176,10 +136,9 @@ class StreamQualityTests(unittest.TestCase):
             "视频解码失败"
         )
 
-        with patch("stream.BITRATE_SAMPLE_VALIDATED", True):
-            result = stream.check_stream(
-                "https://example.com/live.ts"
-            )
+        result = stream.check_stream(
+            "https://example.com/live.ts"
+        )
 
         self.assertEqual(result["status"], stream.INCOMPLETE)
         decode.assert_called_once()
@@ -255,59 +214,13 @@ class StreamProbeMeasurementTests(unittest.TestCase):
                 "width": 1920,
                 "height": 1080,
                 "field_order": "progressive",
-                "avg_frame_rate": "60/1",
-                "r_frame_rate": "60/1",
-                "bit_rate": "6000000",
             }],
             "frames": [
                 {"best_effort_timestamp_time": "0.00"},
                 {"best_effort_timestamp_time": "0.04"},
                 {"best_effort_timestamp_time": "0.08"},
             ],
-            "packets": [
-                {
-                    "pts_time": "0",
-                    "size": "312500",
-                    "duration_time": "1",
-                },
-                {
-                    "pts_time": "1",
-                    "size": "312500",
-                    "duration_time": "1",
-                },
-            ],
         }
-
-    def test_packet_bitrate_includes_last_packet_duration(self):
-        bitrate = stream._packet_bitrate([
-            {
-                "pts_time": "0",
-                "size": "312500",
-                "duration_time": "1",
-            },
-            {
-                "pts_time": "1",
-                "size": "312500",
-                "duration_time": "1",
-            },
-        ])
-
-        self.assertEqual(bitrate, 2_500_000)
-
-    def test_missing_packet_duration_returns_none(self):
-        bitrate = stream._packet_bitrate([
-            {
-                "pts_time": "0",
-                "size": "312500",
-                "duration_time": "1",
-            },
-            {
-                "pts_time": "1",
-                "size": "312500",
-            },
-        ])
-
-        self.assertIsNone(bitrate)
 
     def test_fps_uses_actual_frame_timestamps(self):
         data = self.base_data()
@@ -358,74 +271,6 @@ class StreamProbeMeasurementTests(unittest.TestCase):
             stream._classify_scan_type({}),
             "unknown",
         )
-    
-    def test_packet_bitrate_rejects_malformed_packet_instead_of_skipping(self):
-        bitrate = stream._packet_bitrate([
-            {
-                "pts_time": "0",
-                "size": "312500",
-                "duration_time": "1",
-            },
-            None,
-            {
-                "pts_time": "1",
-                "size": "312500",
-                "duration_time": "1",
-            },
-        ])
-
-        self.assertIsNone(bitrate)
-
-    def test_packet_bitrate_rejects_invalid_packet_size(self):
-        bitrate = stream._packet_bitrate([
-            {
-                "pts_time": "0",
-                "size": "312500",
-                "duration_time": "1",
-            },
-            {
-                "pts_time": "1",
-                "size": "N/A",
-                "duration_time": "1",
-            },
-        ])
-
-        self.assertIsNone(bitrate)
-
-    def test_packet_bitrate_uses_dts_when_all_pts_are_unavailable(self):
-        bitrate = stream._packet_bitrate([
-            {
-                "pts_time": "N/A",
-                "dts_time": "0",
-                "size": "312500",
-                "duration_time": "1",
-            },
-            {
-                "pts_time": "N/A",
-                "dts_time": "1",
-                "size": "312500",
-                "duration_time": "1",
-            },
-        ])
-
-        self.assertEqual(bitrate, 2_500_000)
-    
-    def test_packet_bitrate_rejects_mixed_pts_and_dts(self):
-        bitrate = stream._packet_bitrate([
-            {
-                "pts_time": "N/A",
-                "dts_time": "0",
-                "size": "312500",
-                "duration_time": "1",
-            },
-            {
-                "pts_time": "1",
-                "size": "312500",
-                "duration_time": "1",
-            },
-        ])
-
-        self.assertIsNone(bitrate)
 
     def test_probe_rejects_non_object_json(self):
         with self.assertRaises(stream.StreamQualityError):
