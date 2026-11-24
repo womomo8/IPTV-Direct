@@ -185,6 +185,36 @@ def _candidate_order(
 
     return priority, order
 
+def _quality_order(candidate: dict[str, Any]) -> tuple[float, float, float]:
+    """按分辨率、帧率、码率依次降序排列，异常值按 0 处理。"""
+    quality = candidate.get("stream_quality")
+
+    if not isinstance(quality, dict):
+        quality = {}
+
+    def number(name: str) -> float:
+        value = quality.get(name)
+
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return 0.0
+
+        value = float(value)
+
+        if not math.isfinite(value) or value < 0:
+            return 0.0
+
+        return value
+
+    width = number("width")
+    height = number("height")
+    fps = number("fps")
+    bitrate = number("bitrate")
+
+    return (
+        -(width * height),
+        -fps,
+        -bitrate,
+    )
 
 def _prepare_candidate(
     candidate: dict[str, Any],
