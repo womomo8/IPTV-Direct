@@ -302,7 +302,6 @@ def _split_url(url: str) -> dict[str, Any]:
 def _remaining_budget() -> int:
     return read_limits()["remaining"]
 
-
 def _create_measurement(
     url: str,
     locations: list[dict[str, Any]] | str,
@@ -310,13 +309,20 @@ def _create_measurement(
     extra_headers: dict[str, str] | None = None,
 ) -> str:
     if budget.get("halted"):
-        raise GlobalpingError("本轮 Globalping 测量已停止，不再创建新任务。")
+        raise GlobalpingError(
+            "本轮 Globalping 测量已停止，不再创建新任务。"
+        )
 
     parts = _split_url(url)
+
     if isinstance(locations, list):
-        estimated = sum(int(item.get("limit", 1)) for item in locations)
+        estimated = sum(
+            int(item.get("limit", 1))
+            for item in locations
+        )
     else:
         estimated = int(budget["probe_count"])
+
     if estimated < 1:
         raise GlobalpingError("没有可用探针。")
 
@@ -327,11 +333,16 @@ def _create_measurement(
             budget["halted"] = True
         raise
 
-    budget["remaining"] = min(int(budget["remaining"]), live_remaining)
+    budget["remaining"] = min(
+        int(budget["remaining"]),
+        live_remaining,
+    )
+
     if budget["remaining"] < estimated:
         budget["halted"] = True
         raise GlobalpingError(
-            f"Globalping 剩余额度不足：剩余 {budget['remaining']}，本阶段最多需要 {estimated}。"
+            f"Globalping 剩余额度不足：剩余 {budget['remaining']}，"
+            f"本阶段最多需要 {estimated}。"
         )
 
     request_options: dict[str, Any] = {
@@ -339,6 +350,7 @@ def _create_measurement(
         "path": parts["path"],
         "headers": dict(extra_headers or {}),
     }
+
     if parts["query"]:
         request_options["query"] = parts["query"]
 
@@ -373,10 +385,16 @@ def _create_measurement(
         raise
 
     if status != 202 or not isinstance(data, dict):
-        raise GlobalpingError("Globalping 未返回有效的 202 测量创建响应。")
+        raise GlobalpingError(
+            "Globalping 未返回有效的 202 测量创建响应。"
+        )
+
     measurement_id = data.get("id")
+
     if not isinstance(measurement_id, str) or not measurement_id:
-        raise GlobalpingError("Globalping 创建响应缺少有效测量 ID。")
+        raise GlobalpingError(
+            "Globalping 创建响应缺少有效测量 ID。"
+        )
 
     actual_count = data.get("probesCount")
 
@@ -387,23 +405,27 @@ def _create_measurement(
     ):
         budget["halted"] = True
         raise GlobalpingError(
-            "Globalping 创建响应缺少有效的实际探针数量，停止后续测量。"
+            "Globalping 创建响应缺少有效的实际探针数量，"
+            "额度消耗无法确认，停止本轮后续测量。"
         )
 
     budget["remaining"] = max(
-        0, budget["remaining"] - actual_count
+        0,
+        budget["remaining"] - actual_count,
     )
 
-    if actual_count != 1:
+    if budget["remaining"] <= 0:
         budget["halted"] = True
+
+    if actual_count != 1:
         raise GlobalpingError(
             f"Globalping 本次实际返回 {actual_count} 个探针，"
-            "要求必须恰好一个，停止后续测量。"
+            "要求必须恰好一个；当前线路本阶段不通过。"
         )
 
     budget["probe_count"] = 1
-    return measurement_id
 
+    return measurement_id
 
 def _wait_measurement(measurement_id: str, budget: dict[str, Any]) -> dict[str, Any]:
     """轮询单个测量；每次响应后等待 800 ms，处理 ETag/304。"""
@@ -985,15 +1007,124 @@ def _run_direct_ts(
             "error": str(exc),
         }
 
-def _overall_status(checks: dict[str, dict[str, str]]) -> str:
-    applicable = [item["status"] for item in checks.values() if item["status"] != NA]
+def _overall_status(
+    checks: dict[str, dict[str, str]],
+    stages: dict[str, dict[str, Any]] | None = None,
+) -> str:
+    applicable = [
+        item["status"]
+        for item in checks.values()
+        if item["status"] != NA
+    ]
+
     if FAIL in applicable:
         return FAIL
+
     if INCOMPLETE in applicable:
         return INCOMPLETE
-    if applicable and all(value == PASS for value in applicable):
+
+    if not applicable or not all(value == PASS for value in applicable):
+        return INCOMPLETE
+
+    if stages is None:
         return PASS
-    return INCOMPLETE
+
+    if len(stages) != 3:
+        return INCOMPLETE
+
+    used_asns = set()
+
+    for stage in stages.values():
+        if not isinstance(stage, dict):
+            return INCOMPLETE
+
+        if stage.get("status") == FAIL:
+            return FAIL
+
+        if stage.get("status") != PASS:
+            return INCOMPLETE
+
+        asn = stage.get("asn")
+
+        if (
+            isinstance(asn, bool)
+            or not isinstance(asn, int)
+            or asn <= 0
+            or asn in used_asns
+        ):
+            return INCOMPLETE
+
+        used_asns.add(asn)
+
+    return PASS if len(used_asns) == 3 else INCOMPLETE
+
+
+def _merge_stage_checks(
+    candidate: dict[str, Any],
+    stages: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, str]]:
+    checks = incomplete_result(
+        candidate,
+        "尚未完成三个不同 ASN 的完整检测。",
+    )["globalping"]["checks"]
+
+    for name, current in checks.items():
+        if current["status"] == NA:
+            continue
+
+        stage_items = [
+            stage.get("checks", {}).get(name)
+            for stage in stages.values()
+            if isinstance(stage.get("checks"), dict)
+        ]
+
+        statuses = [
+            item.get("status")
+            for item in stage_items
+            if isinstance(item, dict)
+        ]
+
+        failed = next(
+            (
+                item for item in stage_items
+                if isinstance(item, dict)
+                and item.get("status") == FAIL
+            ),
+            None,
+        )
+
+        incomplete = next(
+            (
+                item for item in stage_items
+                if isinstance(item, dict)
+                and item.get("status") == INCOMPLETE
+            ),
+            None,
+        )
+
+        if failed:
+            checks[name] = _status(
+                FAIL,
+                failed.get("reason", "探针阶段明确失败。"),
+            )
+        elif (
+            len(stages) == 3
+            and len(statuses) == 3
+            and all(value == PASS for value in statuses)
+        ):
+            checks[name] = _status(
+                PASS,
+                "三个不同 ASN 阶段均明确通过。",
+            )
+        else:
+            reason = (
+                incomplete.get("reason")
+                if incomplete
+                else "三个不同 ASN 阶段尚未全部完成并通过。"
+            )
+            checks[name] = _status(INCOMPLETE, reason)
+
+    return checks
 
 
 def incomplete_result(candidate: dict[str, Any], reason: str) -> dict[str, Any]:
@@ -1001,8 +1132,15 @@ def incomplete_result(candidate: dict[str, Any], reason: str) -> dict[str, Any]:
     checks = {
         "ipv4": _status(INCOMPLETE, reason),
         "http": _status(INCOMPLETE, reason),
-        "hls": _status(NA, "直接 TS 不适用 HLS 检测。") if media_type == "DIRECT_TS" else _status(INCOMPLETE, reason),
-        "ts": _status(NA, "TS 内容由本地 checker.py 检测，Globalping 不重复检测。"),       
+        "hls": (
+            _status(NA, "直接 TS 不适用 HLS 检测。")
+            if media_type == "DIRECT_TS"
+            else _status(INCOMPLETE, reason)
+        ),
+        "ts": _status(
+            NA,
+            "TS 内容由本地 checker.py 检测，Globalping 不重复检测。",
+        ),
     }
     return {
         **candidate,
@@ -1022,8 +1160,15 @@ def _failed_candidate(candidate: dict[str, Any], reason: str) -> dict[str, Any]:
     checks = {
         "ipv4": _status(FAIL, reason),
         "http": _status(FAIL, reason),
-        "hls": _status(NA, "直接 TS 不适用 HLS 检测。") if media_type == "DIRECT_TS" else _status(FAIL, reason),
-        "ts": _status(NA, "TS 内容由本地 checker.py 检测，Globalping 不重复检测。"),
+        "hls": (
+            _status(NA, "直接 TS 不适用 HLS 检测。")
+            if media_type == "DIRECT_TS"
+            else _status(FAIL, reason)
+        ),
+        "ts": _status(
+            NA,
+            "TS 内容由本地 checker.py 检测，Globalping 不重复检测。",
+        ),
     }
     result = {
         "status": FAIL,
@@ -1035,12 +1180,64 @@ def _failed_candidate(candidate: dict[str, Any], reason: str) -> dict[str, Any]:
     }
     return {**candidate, "globalping": result}
 
+
 def create_session(settings: dict[str, Any]) -> dict[str, Any]:
-    """为一个来源批次初始化一次探针选择和共享额度预算。"""
+    """初始化来源批次共享额度；不预选或共享探针。"""
     if not isinstance(settings, dict):
         raise TypeError("settings 必须是配置对象。")
 
     max_probes = settings.get("max_probes")
+
+    if (
+        isinstance(max_probes, bool)
+        or not isinstance(max_probes, int)
+        or max_probes < 1
+    ):
+        raise ValueError("globalping.max_probes 必须是正整数。")
+
+    try:
+        limits = read_limits()
+        remaining = limits["remaining"]
+
+        if remaining < 1:
+            raise GlobalpingError(
+                "Globalping 当前没有剩余额度。"
+            )
+
+    except GlobalpingError as exc:
+        return {
+            "budget": {
+                "remaining": 0,
+                "probe_count": 1,
+                "halted": True,
+            },
+            "error": str(exc),
+        }
+
+    return {
+        "budget": {
+            "remaining": remaining,
+            "probe_count": 1,
+            "halted": False,
+        },
+        "error": None,
+    }
+
+
+def check_candidates(
+    candidates: list[dict[str, Any]],
+    settings: dict[str, Any],
+    session: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """每条线路独立执行三个不同 ASN 的顺序探针阶段。"""
+    if not isinstance(candidates, list):
+        raise TypeError("candidates 必须是列表。")
+
+    if not isinstance(settings, dict):
+        raise TypeError("settings 必须是配置对象。")
+
+    max_probes = settings.get("max_probes")
+
     if (
         isinstance(max_probes, bool)
         or not isinstance(max_probes, int)
@@ -1050,107 +1247,67 @@ def create_session(settings: dict[str, Any]) -> dict[str, Any]:
 
     max_probes = min(max_probes, 3)
 
-    try:
-        limits = read_limits()
-        remaining = limits["remaining"]
-
-        if remaining < 1:
-            raise GlobalpingError("Globalping 当前没有剩余额度。")
-
-        locations = choose_probes(min(max_probes, remaining))
-        if not locations:
-            raise GlobalpingError("没有可用的中国大陆探针。")
-
-        probe_count = sum(
-            int(item.get("limit", 1))
-            for item in locations
-        )
-        if probe_count < 1:
-            raise GlobalpingError("Globalping 选择的探针数量无效。")
-
-    except GlobalpingError as exc:
-        return {
-            "locations": [],
-            "budget": {
-                "remaining": 0,
-                "probe_count": 0,
-                "halted": True,
-            },
-            "error": str(exc),
-        }
-
-    return {
-        "locations": locations,
-        "budget": {
-            "remaining": remaining,
-            "probe_count": probe_count,
-            "halted": False,
-        },
-        "error": None,
-    }
-
-def check_candidates(
-    candidates: list[dict[str, Any]],
-    settings: dict[str, Any],
-    session: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
-    """检测候选列表；settings 接收 settings.json 的 globalping 区段。"""
-    if not isinstance(candidates, list):
-        raise TypeError("candidates 必须是列表。")
-    if not isinstance(settings, dict):
-        raise TypeError("settings 必须是配置对象。")
-    max_probes = settings.get("max_probes")
-    if isinstance(max_probes, bool) or not isinstance(max_probes, int) or max_probes < 1:
-        raise ValueError("globalping.max_probes 必须是正整数。")
-    max_probes = min(max_probes, 3)
-
     output: list[dict[str, Any] | None] = [None] * len(candidates)
     eligible: list[tuple[int, dict[str, Any]]] = []
 
-    # 先按本地 checker 已确认的媒体类型筛除不支持项；
-    # 未知类型和无效 URL 不消耗任何 Globalping 额度。
     for index, candidate in enumerate(candidates):
         if not isinstance(candidate, dict):
             raise TypeError("每条候选线路必须是对象。")
+
         media_type = candidate.get("media_type")
+
         if media_type not in ("HLS", "DIRECT_TS"):
             output[index] = _failed_candidate(
-                candidate, "未知或不支持的媒体类型，不允许 Globalping 准入。"
+                candidate,
+                "未知或不支持的媒体类型，不允许 Globalping 准入。",
             )
             continue
+
         url = candidate.get("normalized_url")
+
         if not isinstance(url, str) or not url:
-            output[index] = _failed_candidate(candidate, "缺少规范化 URL。")
+            output[index] = _failed_candidate(
+                candidate,
+                "缺少规范化 URL。",
+            )
             continue
+
         try:
             _split_url(url)
         except GlobalpingError as exc:
             output[index] = _failed_candidate(candidate, str(exc))
             continue
+
         eligible.append((index, candidate))
 
     if not eligible:
         return [item for item in output if item is not None]
 
-    # 同一来源批次复用同一个 Globalping 会话。
+    if max_probes < 3:
+        for index, candidate in eligible:
+            output[index] = incomplete_result(
+                candidate,
+                "配置的探针阶段不足三个，不能满足三个不同 ASN 全部通过的准入要求。",
+            )
+        return [item for item in output if item is not None]
+
     if session is None:
         session = create_session(settings)
 
     if not isinstance(session, dict):
         raise TypeError("Globalping session 必须是对象。")
 
-    locations = session.get("locations")
     budget = session.get("budget")
     error = session.get("error")
 
     if (
-        not isinstance(locations, list)
-        or not isinstance(budget, dict)
+        not isinstance(budget, dict)
         or not isinstance(budget.get("halted"), bool)
         or isinstance(budget.get("remaining"), bool)
         or not isinstance(budget.get("remaining"), int)
         or isinstance(budget.get("probe_count"), bool)
         or not isinstance(budget.get("probe_count"), int)
+        or budget["probe_count"] != 1
         or (error is not None and not isinstance(error, str))
     ):
         raise TypeError("Globalping session 结构无效。")
@@ -1159,27 +1316,207 @@ def check_candidates(
         reason = error or (
             "Globalping 额度不足或触发限流，已停止本轮后续测量创建。"
         )
+
         for index, candidate in eligible:
             output[index] = incomplete_result(candidate, reason)
+
         return [item for item in output if item is not None]
 
-    if not locations:
-        raise TypeError("Globalping session 没有可用探针。")
-
     for index, candidate in eligible:
-        if budget["halted"]:
-            output[index] = incomplete_result(
-                candidate,
-                "Globalping 额度不足或触发限流，已停止本轮后续测量创建。",
-            )
-            continue
+        used_asns: set[int] = set()
+        stages: dict[str, dict[str, Any]] = {}
+        probes: dict[str, Any] = {}
+        measurements: list[str] = []
+        errors: list[str] = []
 
-        if candidate["media_type"] == "HLS":
-            result = _run_hls(candidate, locations, budget)
+        for stage_number in range(1, 4):
+            stage_name = f"probe_{stage_number}"
+            requested_asn = None
+
+            if budget["halted"]:
+                reason = (
+                    "Globalping 额度不足或触发限流，"
+                    "当前线路无法完成剩余探针阶段。"
+                )
+                stage_checks = incomplete_result(
+                    candidate, reason
+                )["globalping"]["checks"]
+
+                stages[stage_name] = {
+                    "asn": None,
+                    "probe": {},
+                    "measurement_id": None,
+                    "measurement_ids": [],
+                    "status": INCOMPLETE,
+                    "reason": reason,
+                    "checks": stage_checks,
+                    "sub_stages": {},
+                }
+                errors.append(reason)
+                break
+
+            try:
+                locations = choose_probes(
+                    1,
+                    excluded_asns=used_asns,
+                )
+
+                if not isinstance(locations, list) or len(locations) != 1:
+                    raise GlobalpingError(
+                        "探针选择结果不是恰好一个探针。"
+                    )
+
+                location = locations[0]
+
+                if not isinstance(location, dict):
+                    raise GlobalpingError("探针请求信息格式无效。")
+
+                requested_asn = location.get("asn")
+                tags = location.get("tags")
+                limit = location.get("limit")
+
+                if (
+                    isinstance(requested_asn, bool)
+                    or not isinstance(requested_asn, int)
+                    or requested_asn <= 0
+                    or requested_asn in used_asns
+                ):
+                    raise GlobalpingError(
+                        "本阶段探针 ASN 无效或与之前阶段重复。"
+                    )
+
+                if (
+                    location.get("country") != "CN"
+                    or not isinstance(tags, list)
+                    or "eyeball-network" not in tags
+                    or isinstance(limit, bool)
+                    or limit != 1
+                ):
+                    raise GlobalpingError(
+                        "本阶段探针不符合中国大陆普通用户网络单探针条件。"
+                    )
+
+                used_asns.add(requested_asn)
+
+                if candidate["media_type"] == "HLS":
+                    stage_result = _run_hls(
+                        candidate,
+                        locations,
+                        budget,
+                    )
+                else:
+                    stage_result = _run_direct_ts(
+                        candidate,
+                        locations,
+                        budget,
+                    )
+
+                stage_status = _overall_status(
+                    stage_result["checks"]
+                )
+
+                probe = next(
+                    iter(stage_result.get("probes", {}).values()),
+                    {},
+                )
+
+                stage_measurements = stage_result.get(
+                    "measurements", []
+                )
+
+                stage_reason = stage_result.get("error")
+
+                if not stage_reason:
+                    stage_reason = (
+                        "本 ASN 阶段所有适用检测明确通过。"
+                        if stage_status == PASS
+                        else "；".join(
+                            item["reason"]
+                            for item in stage_result["checks"].values()
+                            if item["status"] in (FAIL, INCOMPLETE)
+                        )
+                    )
+
+                stages[stage_name] = {
+                    "asn": requested_asn,
+                    "probe": probe,
+                    "measurement_id": (
+                        stage_measurements[0]
+                        if stage_measurements
+                        else None
+                    ),
+                    "measurement_ids": stage_measurements,
+                    "status": stage_status,
+                    "reason": stage_reason,
+                    "checks": stage_result["checks"],
+                    "sub_stages": stage_result.get("stages", {}),
+                }
+
+                if probe:
+                    probes[stage_name] = probe
+
+                measurements.extend(stage_measurements)
+
+                if stage_result.get("error"):
+                    errors.append(stage_result["error"])
+
+                if stage_status != PASS:
+                    break
+
+            except GlobalpingError as exc:
+                if exc.rate_limited:
+                    budget["halted"] = True
+
+                reason = str(exc)
+                stage_checks = incomplete_result(
+                    candidate,
+                    reason,
+                )["globalping"]["checks"]
+
+                if exc.status == FAIL:
+                    for name, item in stage_checks.items():
+                        if item["status"] != NA:
+                            stage_checks[name] = _status(FAIL, reason)
+
+                stages[stage_name] = {
+                    "asn": requested_asn,
+                    "probe": {},
+                    "measurement_id": None,
+                    "measurement_ids": [],
+                    "status": exc.status,
+                    "reason": reason,
+                    "checks": stage_checks,
+                    "sub_stages": {},
+                }
+
+                errors.append(reason)
+                break
+
+        checks = _merge_stage_checks(candidate, stages)
+        overall = _overall_status(checks, stages)
+
+        if errors:
+            error = "；".join(errors)
+        elif overall != PASS:
+            error = "三个不同 ASN 阶段没有全部明确通过。"
         else:
-            result = _run_direct_ts(candidate, locations, budget)
+            error = None
 
-        result["status"] = _overall_status(result["checks"])
-        output[index] = {**candidate, "globalping": result}
+        result = {
+            "status": overall,
+            "checks": checks,
+            "stages": stages,
+            "probes": probes,
+            "measurements": measurements,
+        }
+
+        if error:
+            result["error"] = error
+
+        output[index] = {
+            **candidate,
+            "globalping": result,
+        }
 
     return [item for item in output if item is not None]
+
