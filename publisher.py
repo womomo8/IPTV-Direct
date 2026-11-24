@@ -429,11 +429,6 @@ def next_candidate_for_detection(
 
     return None
 
-    return None
-
-
-
-
 def process_batch(
     candidates: list[dict[str, Any]],
     accepted_routes: list[dict[str, Any]],
@@ -491,7 +486,6 @@ def process_batch(
         if isinstance(item, dict)
         and isinstance(item.get("normalized_url"), str)
     }
-    history_counts = {channel: 0 for channel in channels}
 
     for index, route in enumerate(accepted_routes):
         if not isinstance(route, dict):
@@ -536,11 +530,6 @@ def process_batch(
         # 历史线路缺少完整准入证据时，不得占据正式名额。
         if prepared_route is None:
             continue
-
-        if history_counts[channel] >= MAX_ROUTES_PER_CHANNEL:
-            raise PublisherError(
-                f"历史频道 {channel} 已超过最多 2 条有效线路的限制"
-            )
 
         existing.append(prepared_route)
         history_counts[channel] += 1
