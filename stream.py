@@ -445,11 +445,13 @@ def check_stream(url: str) -> dict[str, Any]:
         )
         return result
 
-    except StreamQualityError as exc:
+    except Exception as exc:
         result["status"] = INCOMPLETE
-        result["reason"] = str(exc)
+        result["reason"] = (
+            f"视频检测发生未预期异常"
+            f"（{type(exc).__name__}）：{exc}"
+        )
         return result
-
 
 def check_candidates(
     candidates: list[dict[str, Any]],
