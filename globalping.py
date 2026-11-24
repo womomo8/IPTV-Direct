@@ -379,21 +379,24 @@ def _create_measurement(
             method="POST",
             payload=payload,
         )
-    except GlobalpingError as exc:
-        if exc.rate_limited:
-            budget["halted"] = True
+    except GlobalpingError:
+        budget["halted"] = True
         raise
 
     if status != 202 or not isinstance(data, dict):
+        budget["halted"] = True
         raise GlobalpingError(
-            "Globalping 未返回有效的 202 测量创建响应。"
+            "Globalping 未返回有效的 202 测量创建响应，"
+            "无法确认测量创建状态，停止本轮后续测量。"
         )
 
     measurement_id = data.get("id")
 
     if not isinstance(measurement_id, str) or not measurement_id:
+        budget["halted"] = True
         raise GlobalpingError(
-            "Globalping 创建响应缺少有效测量 ID。"
+            "Globalping 创建响应缺少有效测量 ID，"
+            "无法追踪已创建任务，停止本轮后续测量。"
         )
 
     actual_count = data.get("probesCount")
