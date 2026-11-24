@@ -767,23 +767,19 @@ def process_admission_batch(
         settings=settings,
     )
 
-
 def _collection_stop_reason(
     valid_sources: int,
     extracted_total: int,
     admission: dict[str, Any],
     limits: dict[str, Any],
 ) -> str | None:
-    """依据正式参数和 publisher 返回的频道统计判断是否停止。"""
+    """只根据采集资源上限判断是否停止，不以当前线路数量停止。"""
 
     if valid_sources >= limits["max_valid_sources"]:
         return f"达到有效来源上限 {limits['max_valid_sources']}"
 
     if extracted_total >= limits["max_candidates_total"]:
         return f"达到全部候选总上限 {limits['max_candidates_total']}"
-
-    if admission.get("all_channels_reached"):
-        return "所有目标频道均已达到每频道 2 条有效线路目标"
 
     return None
 
