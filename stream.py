@@ -22,16 +22,11 @@ DECODE_TIMEOUT = 4
 MIN_WIDTH = 1920
 MIN_HEIGHT = 1080
 MIN_FPS = 23.0
-MIN_BITRATE = {
-    "h264": 5_000_000,
-    "hevc": 4_000_000,
-}
-ALLOWED_CODECS = set(MIN_BITRATE)
-BITRATE_SAMPLE_SECONDS = 5
+MIN_WIDTH = 1920
+MIN_HEIGHT = 1080
+MIN_FPS = 23.0
+ALLOWED_CODECS = {"h264", "hevc"}
 DECODE_FRAMES = 30
-
-# 只有完成真实线路样本验证后，才能改为 True。
-BITRATE_SAMPLE_VALIDATED = False
 
 class StreamQualityError(Exception):
     """视频质量检测错误。"""
@@ -128,131 +123,18 @@ def _classify_scan_type(field_order: Any) -> str:
 
     return "unknown"
 
-def _packet_bitrate(packets: Any) -> int | None:
-    if not isinstance(packets, list) or len(packets) < 2:
-        return None
-
-    packet_records = []
-    total_bytes = 0
-
-    for packet in packets:
-        if not isinstance(packet, dict):
-            return None
-
-        size = packet.get("size")
-
-        if isinstance(size, str):
-            try:
-                size = int(size.strip())
-            except ValueError:
-                return None
-
-        if (
-            isinstance(size, bool)
-            or not isinstance(size, int)
-            or size <= 0
-        ):
-            return None
-
-        packet_timestamps = []
-
-        for key in ("pts_time", "dts_time"):
-            value = packet.get(key)
-
-            if isinstance(value, bool):
-                packet_timestamps.append(None)
-                continue
-
-            try:
-                timestamp = float(value)
-            except (TypeError, ValueError):
-                packet_timestamps.append(None)
-                continue
-
-            if not math.isfinite(timestamp):
-                packet_timestamps.append(None)
-            else:
-                packet_timestamps.append(timestamp)
-
-        duration_value = packet.get("duration_time")
-
-        if isinstance(duration_value, bool):
-            return None
-
-        try:
-            packet_duration = float(duration_value)
-        except (TypeError, ValueError):
-            return None
-
-        if (
-            not math.isfinite(packet_duration)
-            or packet_duration <= 0
-        ):
-            return None
-
-        total_bytes += size
-        packet_records.append(
-            (
-                packet_timestamps[0],
-                packet_timestamps[1],
-                packet_duration,
-            )
-        )
-
-    if total_bytes <= 0 or len(packet_records) < 2:
-        return None
-
-    if all(record[0] is not None for record in packet_records):
-        timestamp_index = 0
-    elif all(record[1] is not None for record in packet_records):
-        timestamp_index = 1
-    else:
-        return None
-
-    timestamps = [
-        (
-            record[timestamp_index],
-            record[timestamp_index] + record[2],
-        )
-        for record in packet_records
-    ]
-
-    if any(
-        not math.isfinite(end)
-        for _, end in timestamps
-    ):
-        return None
-
-    start = min(item[0] for item in timestamps)
-    end = max(item[1] for item in timestamps)
-    duration = end - start
-
-    if not math.isfinite(duration) or duration <= 0:
-        return None
-
-    bitrate = total_bytes * 8 / duration
-
-    if not math.isfinite(bitrate) or bitrate <= 0:
-        return None
-
-    return round(bitrate)
-
-def _probe(url: str) -> dict[str, Any]:
     command = [
         "ffprobe",
         "-v", "error",
         "-rw_timeout", "10000000",
         "-analyzeduration", "5000000",
         "-probesize", "5000000",
-        "-read_intervals", f"%+{BITRATE_SAMPLE_SECONDS}",
         "-select_streams", "v:0",
         "-show_streams",
         "-show_frames",
-        "-show_packets",
         "-show_entries",
         "stream=codec_type,codec_name,width,height,field_order:"
-        "frame=best_effort_timestamp_time:"
-        "packet=pts_time,dts_time,size,duration_time",
+        "frame=best_effort_timestamp_time",
         "-of", "json",
         url,
     ]
@@ -310,11 +192,6 @@ def _probe(url: str) -> dict[str, Any]:
             "无法根据实际视频帧时间戳确认平均帧率"
         )
 
-    bitrate = _packet_bitrate(data.get("packets"))
-
-    if bitrate is None:
-        raise StreamQualityError("无法确认实际视频包码率")
-
     field_order = stream.get("field_order")
 
     return {
@@ -322,7 +199,6 @@ def _probe(url: str) -> dict[str, Any]:
         "width": width,
         "height": height,
         "fps": fps,
-        "bitrate": bitrate,
         "field_order": field_order,
         "scan_type": _classify_scan_type(field_order),
     }
@@ -381,7 +257,6 @@ def check_stream(url: str) -> dict[str, Any]:
         "width": None,
         "height": None,
         "field_order": None,
-        "bitrate": None,
         "codec": None,
         "fps": None,
         "reason": "",
@@ -439,9 +314,8 @@ def check_stream(url: str) -> dict[str, Any]:
 
         _decode(url)
 
-        result["status"] = PASS
         result["reason"] = (
-            "分辨率、编码、帧率、码率和实际解码检测通过"
+            "分辨率、编码、实际帧率和30帧解码检测通过"
         )
         return result
 
