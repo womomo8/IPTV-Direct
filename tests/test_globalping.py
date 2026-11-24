@@ -445,6 +445,10 @@ class StatusAndFlowTests(unittest.TestCase):
             }]
 
         def run_stage(url, locations, budget, headers=None):
+            if not isinstance(locations, list) or len(locations) != 1:
+                raise AssertionError("HLS 子清单必须使用当前阶段指定的单个探针。")
+            if locations[0].get("asn") != active_probe.get("asn"):
+                raise AssertionError("HLS 子清单必须使用与主清单相同的 ASN。")            
             stage_calls.append(url)
             body = (
                 main_result
