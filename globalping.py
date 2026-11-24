@@ -185,8 +185,23 @@ def _is_mobile(probe: dict[str, Any]) -> bool:
     )
 
 
-def choose_probes(max_probes: int = 3) -> list[dict[str, Any]]:
-    """选择中国大陆 eyeball-network 探针，每个 ASN 最多选择一个。"""
+def choose_probes(
+    max_probes: int = 3,
+    excluded_asns: set[int] | None = None,
+) -> list[dict[str, Any]]:
+    """选择未使用过的中国大陆 eyeball-network ASN 探针。"""
+    if excluded_asns is None:
+        excluded_asns = set()
+    if (
+        not isinstance(excluded_asns, set)
+        or any(
+            isinstance(asn, bool)
+            or not isinstance(asn, int)
+            or asn <= 0
+            for asn in excluded_asns
+        )
+    ):
+        raise ValueError("excluded_asns 必须是正整数 ASN 集合。")
     if (
         isinstance(max_probes, bool)
         or not isinstance(max_probes, int)
@@ -219,7 +234,7 @@ def choose_probes(max_probes: int = 3) -> list[dict[str, Any]]:
         except (TypeError, ValueError):
             continue
 
-        if asn <= 0:
+        if asn <= 0 or asn in excluded_asns:
             continue
 
         if asn not in eligible:
