@@ -14,6 +14,7 @@ SETTINGS = {
     }
 }
 
+
 def make_candidate(
     url="https://example.com/live.m3u8",
     channel="CCTV-1",
@@ -26,7 +27,7 @@ def make_candidate(
     height=1080,
     fps=30,
 ):
-    """构造完整的线路检测结果。"""
+    """构造包含三个不同 ASN 阶段证据的线路检测结果。"""
 
     local_hls = (
         "N/A" if media_type == "DIRECT_TS" else local_status
@@ -49,6 +50,28 @@ def make_candidate(
         "ts": {"status": "N/A"},
     }
 
+    stages = {}
+
+    for index, asn in enumerate((10001, 10002, 10003), start=1):
+        stages[f"probe_{index}"] = {
+            "asn": asn,
+            "probe": {
+                "country": "CN",
+                "city": "Test",
+                "network": "Test Eyeball Network",
+                "asn": asn,
+            },
+            "measurement_id": f"test-measurement-{index}",
+            "measurement_ids": [f"test-measurement-{index}"],
+            "status": global_status,
+            "reason": "测试阶段结果",
+            "checks": {
+                name: dict(item)
+                for name, item in remote_checks.items()
+            },
+            "sub_stages": {},
+        }
+
     return {
         "channel": channel,
         "normalized_url": url,
@@ -66,8 +89,10 @@ def make_candidate(
         "globalping": {
             "status": global_status,
             "checks": remote_checks,
+            "stages": stages,
         },
     }
+
 
 class PublisherAdmissionTests(unittest.TestCase):
 
@@ -157,6 +182,41 @@ class PublisherAdmissionTests(unittest.TestCase):
             publisher.REJECTED,
         )
 
+
+    def test_globalping_missing_stages_is_rejected(self):
+        candidate = make_candidate()
+        candidate["globalping"].pop("stages")
+
+        result = self.process([candidate])
+
+        self.assertEqual(len(result["accepted_routes"]), 0)
+        self.assertEqual(
+            result["results"][0]["status"],
+            publisher.REJECTED,
+        )
+        self.assertIn(
+            "三个完整探针阶段",
+            result["results"][0]["reason"],
+        )
+
+    def test_globalping_duplicate_asn_is_rejected(self):
+        candidate = make_candidate()
+        candidate["globalping"]["stages"]["probe_3"]["asn"] = 10001
+        candidate["globalping"]["stages"]["probe_3"]["probe"]["asn"] = 10001
+
+        result = self.process([candidate])
+
+        self.assertEqual(len(result["accepted_routes"]), 0)
+        self.assertEqual(
+            result["results"][0]["status"],
+            publisher.REJECTED,
+        )
+        self.assertIn(
+            "ASN 无效或重复",
+            result["results"][0]["reason"],
+        )
+
+    
     def test_globalping_incomplete_is_rejected(self):
         """Globalping 未完成时，结果不充分，不允许准入。"""
 
