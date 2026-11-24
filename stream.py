@@ -59,8 +59,8 @@ def _run(command: list[str], timeout: int) -> subprocess.CompletedProcess:
             capture_output=True,
             text=True,
             encoding="utf-8",
-            errors="replace",.
-            errors="replace",        timeout=timeout,
+             errors="replace",
+            timeout=timeout,       timeout=timeout,
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
