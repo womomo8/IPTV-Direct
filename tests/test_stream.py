@@ -10,6 +10,68 @@ from unittest.mock import patch
 
 import stream
 
+class StreamTimeoutTests(unittest.TestCase):
+
+    def test_ffprobe_timeout_reason_is_preserved(self):
+        with (
+            patch(
+                "stream.shutil.which",
+                return_value="/usr/bin/ffmpeg",
+            ),
+            patch(
+                "stream.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(
+                    cmd="ffprobe",
+                    timeout=12,
+                ),
+            ),
+        ):
+            result = stream.check_stream(
+                "https://example.com/live.ts"
+            )
+
+        self.assertEqual(result["status"], stream.INCOMPLETE)
+        self.assertIn(
+            "ffprobe执行超时（限制 12 秒）",
+            result["reason"],
+        )
+
+    def test_ffmpeg_timeout_reason_is_preserved(self):
+        metadata = {
+            "codec": "h264",
+            "width": 1920,
+            "height": 1080,
+            "field_order": "progressive",
+            "fps": 25.0,
+            "scan_type": "progressive",
+        }
+
+        with (
+            patch(
+                "stream.shutil.which",
+                return_value="/usr/bin/ffmpeg",
+            ),
+            patch(
+                "stream._probe",
+                return_value=metadata,
+            ),
+            patch(
+                "stream.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(
+                    cmd="ffmpeg",
+                    timeout=4,
+                ),
+            ),
+        ):
+            result = stream.check_stream(
+                "https://example.com/live.ts"
+            )
+
+        self.assertEqual(result["status"], stream.INCOMPLETE)
+        self.assertIn(
+            "ffmpeg执行超时（限制 4 秒）",
+            result["reason"],
+        )
 
 class StreamQualityTests(unittest.TestCase):
     
