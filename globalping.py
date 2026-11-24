@@ -185,95 +185,76 @@ def _is_mobile(probe: dict[str, Any]) -> bool:
     )
 
 
-def _allocate_asns(counts: dict[int, int], slots: int) -> dict[int, int]:
-    """按在线探针数量轮流分配 ASN，避免单个 ASN 独占所有名额。"""
-    allocation: dict[int, int] = {}
-    ordered = sorted(counts, key=lambda asn: (-counts[asn], asn))
-    while slots > 0:
-        progressed = False
-        for asn in ordered:
-            if allocation.get(asn, 0) < counts[asn]:
-                allocation[asn] = allocation.get(asn, 0) + 1
-                slots -= 1
-                progressed = True
-                if slots == 0:
-                    break
-        if not progressed:
-            break
-    return allocation
-
-
 def choose_probes(max_probes: int = 3) -> list[dict[str, Any]]:
-    """选择中国大陆 eyeball-network 探针，移动网络优先，最多三个。"""
-    if isinstance(max_probes, bool) or not isinstance(max_probes, int) or max_probes < 1:
+    """选择中国大陆 eyeball-network 探针，每个 ASN 最多选择一个。"""
+    if (
+        isinstance(max_probes, bool)
+        or not isinstance(max_probes, int)
+        or max_probes < 1
+    ):
         raise ValueError("max_probes 必须是正整数。")
+
     max_probes = min(max_probes, 3)
 
     _, data, _ = _api_request(f"{API_BASE}/probes")
     if not isinstance(data, list):
         raise GlobalpingError("Globalping /probes 未返回探针数组。")
 
-    mobile: dict[int, int] = {}
-    other: dict[int, int] = {}
+    eligible: dict[int, dict[str, Any]] = {}
+
     for probe in data:
         if not isinstance(probe, dict):
             continue
+
         tags = probe.get("tags") or []
         if not isinstance(tags, list) or "eyeball-network" not in tags:
             continue
+
         location = _probe_location(probe)
         if location.get("country") != "CN":
             continue
+
         try:
             asn = int(location.get("asn"))
         except (TypeError, ValueError):
             continue
+
         if asn <= 0:
             continue
-        target = mobile if _is_mobile(probe) else other
-        target[asn] = target.get(asn, 0) + 1
 
-    if not mobile and not other:
-        raise GlobalpingError("没有发现符合要求的中国大陆普通用户网络探针。")
+        if asn not in eligible:
+            eligible[asn] = {
+                "mobile": _is_mobile(probe),
+                "count": 0,
+            }
 
-    # 最多先分配两个移动探针；其余由大陆其他运营商补充。
-    mobile_slots = min(2, max_probes, sum(mobile.values()))
-    allocation = _allocate_asns(mobile, mobile_slots)
-    left = max_probes - sum(allocation.values())
+        eligible[asn]["count"] += 1
 
-    if left:
-        extra = _allocate_asns(other, left)
-        for asn, count in extra.items():
-            allocation[asn] = allocation.get(asn, 0) + count
-        left = max_probes - sum(allocation.values())
+    if not eligible:
+        raise GlobalpingError(
+            "没有发现符合要求的中国大陆普通用户网络探针。"
+        )
 
-    # 其他运营商探针不足时，再由剩余中国移动探针补足。
-    if left:
-        remaining_mobile = {
-            asn: count - allocation.get(asn, 0)
-            for asn, count in mobile.items()
-            if count - allocation.get(asn, 0) > 0
-        }
-        extra = _allocate_asns(remaining_mobile, left)
-        for asn, count in extra.items():
-            allocation[asn] = allocation.get(asn, 0) + count
+    ordered = sorted(
+        eligible.items(),
+        key=lambda item: (
+            not item[1]["mobile"],
+            -item[1]["count"],
+            item[0],
+        ),
+    )
 
-    locations = [
+    selected = ordered[:max_probes]
+
+    return [
         {
             "country": "CN",
             "asn": asn,
             "tags": ["eyeball-network"],
-            "limit": count,
+            "limit": 1,
         }
-        for asn, count in sorted(
-            allocation.items(),
-            key=lambda item: (item[0] not in mobile, item[0]),
-        )
-        if count > 0
+        for asn, _ in selected
     ]
-    if not locations:
-        raise GlobalpingError("没有可用的中国大陆 IPv4 探针名额。")
-    return locations
 
 
 def _split_url(url: str) -> dict[str, Any]:
