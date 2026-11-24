@@ -150,7 +150,7 @@ class StreamQualityTests(unittest.TestCase):
 
         self.assertEqual(result["status"], stream.INCOMPLETE)
 
-     def test_unexpected_probe_exception_returns_incomplete(self):
+    def test_unexpected_probe_exception_returns_incomplete(self):
         with (
             patch("stream.shutil.which", return_value="/usr/bin/ffmpeg"),
             patch(
@@ -163,7 +163,7 @@ class StreamQualityTests(unittest.TestCase):
             )
 
         self.assertEqual(result["status"], stream.INCOMPLETE)
-        self.assertIn("RuntimeError", result["reason"])   
+        self.assertIn("RuntimeError", result["reason"])
     
     @patch("stream.shutil.which", return_value="/usr/bin/ffmpeg")
     @patch("stream._probe")
@@ -392,7 +392,7 @@ class StreamProbeMeasurementTests(unittest.TestCase):
 
         self.assertIsNone(bitrate)
 
-     def test_packet_bitrate_uses_dts_when_all_pts_are_unavailable(self):
+    def test_packet_bitrate_uses_dts_when_all_pts_are_unavailable(self):
         bitrate = stream._packet_bitrate([
             {
                 "pts_time": "N/A",
@@ -408,7 +408,7 @@ class StreamProbeMeasurementTests(unittest.TestCase):
             },
         ])
 
-        self.assertEqual(bitrate, 2_500_000)   
+        self.assertEqual(bitrate, 2_500_000)
     
     def test_packet_bitrate_rejects_mixed_pts_and_dts(self):
         bitrate = stream._packet_bitrate([
