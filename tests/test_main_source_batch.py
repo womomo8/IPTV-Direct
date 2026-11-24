@@ -43,12 +43,29 @@ def make_local(candidate, media_type="HLS"):
     }
 
 def make_remote(candidate, status="PASS", measured=True):
+    media_type = candidate.get("media_type", "HLS")
     checks = {
         name: {
             "status": status,
             "reason": "测试结果",
         }
-        for name in ("ipv4", "http", "hls", "ts")
+        for name in ("ipv4", "http")
+    }
+
+    if media_type == "DIRECT_TS":
+        checks["hls"] = {
+            "status": "N/A",
+            "reason": "直接 TS 不适用 HLS 检测",
+        }
+    else:
+        checks["hls"] = {
+            "status": status,
+            "reason": "测试结果",
+        }
+
+    checks["ts"] = {
+        "status": "N/A",
+        "reason": "TS 内容由本地 checker.py 检测",
     }
 
     return {
@@ -368,7 +385,7 @@ class SourceBatchPipelineTests(unittest.TestCase):
         self.assertEqual(remote_result["status"], "INCOMPLETE")
         self.assertEqual(
             remote_result["checks"]["ts"]["status"],
-            "INCOMPLETE",
+            "N/A",
         )
         remote.assert_called_once()
 
@@ -402,7 +419,7 @@ class SourceBatchPipelineTests(unittest.TestCase):
         )
         self.assertEqual(
             item["globalping"]["checks"]["ts"]["status"],
-            "PASS",
+            "N/A",
         )
         remote.assert_called_once()   
     
@@ -429,7 +446,7 @@ class SourceBatchPipelineTests(unittest.TestCase):
         )
         self.assertEqual(
             result[1]["results"][1]["status"],
-            publisher.ACCEPTED,
+            publisher.REJECTED,
         )
 
     def test_local_failure_does_not_call_globalping(self):
