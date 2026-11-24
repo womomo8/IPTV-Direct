@@ -313,6 +313,7 @@ class PublisherAdmissionTests(unittest.TestCase):
             ],
         )
 
+
     def test_quality_tie_does_not_use_source_priority(self):
         """质量相同时不得按来源优先级决定去留。"""
 
@@ -325,6 +326,18 @@ class PublisherAdmissionTests(unittest.TestCase):
             url="https://example.com/manual.m3u8",
             priority=0,
             source_order=0,
+        )
+
+        automatic.pop("priority", None)
+        automatic.pop("source_order", None)
+        manual.pop("priority", None)
+        manual.pop("source_order", None)
+
+        result = self.process([manual, automatic])
+
+        self.assertEqual(
+            result["accepted_routes"][0]["normalized_url"],
+            "https://example.com/automatic.m3u8",
         )
 
     def test_bitrate_does_not_affect_quality_ranking(self):
@@ -360,18 +373,7 @@ class PublisherAdmissionTests(unittest.TestCase):
                 "https://example.com/b.m3u8",
             ],
         )
-        
-        automatic.pop("priority", None)
-        automatic.pop("source_order", None)
-        manual.pop("priority", None)
-        manual.pop("source_order", None)
 
-        result = self.process([manual, automatic])
-
-        self.assertEqual(
-            result["accepted_routes"][0]["normalized_url"],
-            "https://example.com/automatic.m3u8",
-        )
 
     def test_globalping_preselection_uses_quality_order(self):
         """Globalping 检测前必须按视频质量从高到低选择候选。"""
