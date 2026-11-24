@@ -9,7 +9,6 @@ import json
 import math
 import shutil
 import subprocess
-from fractions import Fraction
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -31,6 +30,8 @@ ALLOWED_CODECS = set(MIN_BITRATE)
 BITRATE_SAMPLE_SECONDS = 5
 DECODE_FRAMES = 30
 
+# 只有完成真实线路样本验证后，才能改为 True。
+BITRATE_SAMPLE_VALIDATED = False
 
 class StreamQualityError(Exception):
     """视频质量检测错误。"""
@@ -69,21 +70,60 @@ def _run(command: list[str], timeout: int) -> subprocess.CompletedProcess:
             f"无法启动检测程序：{exc}"
         ) from exc
 
-
-def _parse_fps(value: Any) -> float | None:
-    if not isinstance(value, str) or not value.strip():
+def _frame_rate_from_timestamps(frames: Any) -> float | None:
+    if not isinstance(frames, list) or len(frames) < 2:
         return None
 
-    try:
-        rate = float(Fraction(value))
-    except (ValueError, ZeroDivisionError, OverflowError):
+    timestamps = []
+
+    for frame in frames:
+        if not isinstance(frame, dict):
+            return None
+
+        try:
+            timestamp = float(
+                frame.get("best_effort_timestamp_time")
+            )
+        except (TypeError, ValueError):
+            return None
+
+        if not math.isfinite(timestamp):
+            return None
+
+        timestamps.append(timestamp)
+
+    timestamps.sort()
+
+    if any(
+        current <= previous
+        for previous, current in zip(
+            timestamps,
+            timestamps[1:],
+        )
+    ):
         return None
 
-    if not math.isfinite(rate) or rate <= 0:
+    duration = timestamps[-1] - timestamps[0]
+
+    if duration <= 0:
         return None
 
-    return rate
+    fps = (len(timestamps) - 1) / duration
 
+    if not math.isfinite(fps) or fps <= 0:
+        return None
+
+    return fps
+
+
+def _classify_scan_type(field_order: Any) -> str:
+    if field_order == "progressive":
+        return "progressive"
+
+    if field_order in {"tt", "bb", "tb", "bt"}:
+        return "interlaced"
+
+    return "unknown"
 
 def _packet_bitrate(packets: Any) -> int | None:
     if not isinstance(packets, list) or not packets:
@@ -135,25 +175,13 @@ def _packet_bitrate(packets: Any) -> int | None:
 
     return round(total_bytes * 8 / duration)
 
-
-def _probe(url: str) -> dict[str, Any]:
-    command = [
-        "ffprobe",
-        "-v", "error",
-        "-rw_timeout", "10000000",
-        "-analyzeduration", "5000000",
-        "-probesize", "5000000",
-        "-read_intervals", f"%+{BITRATE_SAMPLE_SECONDS}",
-        "-select_streams", "v:0",
         "-show_streams",
+        "-show_frames",
         "-show_packets",
         "-show_entries",
-        "stream=codec_type,codec_name,width,height,field_order,"
-        "avg_frame_rate,r_frame_rate,bit_rate:"
+        "stream=codec_type,codec_name,width,height,field_order:"
+        "frame=best_effort_timestamp_time:"
         "packet=pts_time,dts_time,size,duration_time",
-        "-of", "json",
-        url,
-    ]
 
     result = _run(command, PROBE_TIMEOUT)
 
@@ -195,16 +223,19 @@ def _probe(url: str) -> dict[str, Any]:
     ):
         raise StreamQualityError("无法确认真实视频分辨率")
 
-
-    fps = _parse_fps(stream.get("avg_frame_rate"))
+    fps = _frame_rate_from_timestamps(data.get("frames"))
 
     if fps is None:
-        raise StreamQualityError("无法确认实际平均视频帧率")
+        raise StreamQualityError(
+            "无法根据实际视频帧时间戳确认平均帧率"
+        )
 
     bitrate = _packet_bitrate(data.get("packets"))
 
     if bitrate is None:
         raise StreamQualityError("无法确认实际视频包码率")
+
+    field_order = stream.get("field_order")
 
     return {
         "codec": codec,
@@ -212,9 +243,9 @@ def _probe(url: str) -> dict[str, Any]:
         "height": height,
         "fps": fps,
         "bitrate": bitrate,
-        "field_order": stream.get("field_order"),
+        "field_order": field_order,
+        "scan_type": _classify_scan_type(field_order),
     }
-
 
 def _decode(url: str) -> None:
     command = [
@@ -310,6 +341,13 @@ def check_stream(url: str) -> dict[str, Any]:
             )
             return result
 
+        if not BITRATE_SAMPLE_VALIDATED:
+            result["status"] = INCOMPLETE
+            result["reason"] = (
+                "5 秒码率观察窗口尚未通过真实线路样本验证"
+            )
+            return result
+        
         minimum_bitrate = MIN_BITRATE[codec]
         if metadata["bitrate"] < minimum_bitrate:
             result["status"] = FAIL
