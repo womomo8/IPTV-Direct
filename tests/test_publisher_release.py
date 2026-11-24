@@ -198,7 +198,7 @@ class PublisherReleaseTests(unittest.TestCase):
         ):
             self.publish(new)
 
-      def test_both_empty_old_files_are_blocked(self):
+    def test_both_empty_old_files_are_blocked(self):
         """两份旧订阅都存在但内容为空时，必须阻止覆盖。"""
         self.output_dir.mkdir(parents=True)
         (self.output_dir / "iptv.m3u").write_bytes(b"")
