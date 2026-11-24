@@ -161,11 +161,13 @@ class StreamQualityTests(unittest.TestCase):
             "视频解码失败"
         )
 
-        result = stream.check_stream(
-            "https://example.com/live.ts"
-        )
+        with patch("stream.BITRATE_SAMPLE_VALIDATED", True):
+            result = stream.check_stream(
+                "https://example.com/live.ts"
+            )
 
         self.assertEqual(result["status"], stream.INCOMPLETE)
+        decode.assert_called_once()
 
     def test_invalid_url_fails(self):
         result = stream.check_stream("not-a-valid-url")
@@ -330,6 +332,75 @@ class StreamProbeMeasurementTests(unittest.TestCase):
         self.assertEqual(
             stream._classify_scan_type(None),
             "unknown",
+        )
+
+    def test_packet_bitrate_rejects_malformed_packet_instead_of_skipping(self):
+        bitrate = stream._packet_bitrate([
+            {
+                "pts_time": "0",
+                "size": "312500",
+                "duration_time": "1",
+            },
+            None,
+            {
+                "pts_time": "1",
+                "size": "312500",
+                "duration_time": "1",
+            },
+        ])
+
+        self.assertIsNone(bitrate)
+
+    def test_packet_bitrate_rejects_invalid_packet_size(self):
+        bitrate = stream._packet_bitrate([
+            {
+                "pts_time": "0",
+                "size": "312500",
+                "duration_time": "1",
+            },
+            {
+                "pts_time": "1",
+                "size": "N/A",
+                "duration_time": "1",
+            },
+        ])
+
+        self.assertIsNone(bitrate)
+
+    def test_packet_bitrate_falls_back_to_dts_when_pts_is_unavailable(self):
+        bitrate = stream._packet_bitrate([
+            {
+                "pts_time": "N/A",
+                "dts_time": "0",
+                "size": "312500",
+                "duration_time": "1",
+            },
+            {
+                "pts_time": "1",
+                "size": "312500",
+                "duration_time": "1",
+            },
+        ])
+
+        self.assertEqual(bitrate, 2_500_000)
+
+    def test_probe_rejects_non_object_json(self):
+        with self.assertRaises(stream.StreamQualityError):
+            self.probe_with_data([])
+
+    def test_probe_rejects_invalid_stream_record(self):
+        data = self.base_data()
+        data["streams"][0] = None
+
+        with self.assertRaises(stream.StreamQualityError):
+            self.probe_with_data(data)
+
+    def test_boolean_frame_timestamp_is_rejected(self):
+        self.assertIsNone(
+            stream._frame_rate_from_timestamps([
+                {"best_effort_timestamp_time": True},
+                {"best_effort_timestamp_time": "0.04"},
+            ])
         )
 
 class StreamDecodeTests(unittest.TestCase):
