@@ -1,5 +1,5 @@
 
-"""main.py 逐条来源批次调度专项测试。"""
+"""main.py 全局候选批次调度专项测试。"""
 
 import unittest
 from unittest.mock import patch
@@ -118,8 +118,11 @@ class SourceBatchPipelineTests(unittest.TestCase):
             }
         statuses = statuses or ["PASS"] * len(candidates)
 
+        process_batch_mock = None
+        
         def remote_side_effect(items, settings, session=None):
             self.assertEqual(len(items), 1)
+            self.assertEqual(process_batch_mock.call_count, 0)
             candidate = items[0]
             if remote_error is not None:
                 raise RuntimeError(remote_error)
@@ -159,6 +162,11 @@ class SourceBatchPipelineTests(unittest.TestCase):
                 "create_session",
                 return_value=self.session,
             ) as create_session,
+                    patch.object(
+                publisher,
+                "process_batch",
+                wraps=publisher.process_batch,
+            ) as process_batch_mock,
             patch.object(
                 main.globalping,
                 "check_candidates",
@@ -171,6 +179,7 @@ class SourceBatchPipelineTests(unittest.TestCase):
                 SETTINGS,
                 CHANNELS,
             )
+            process_batch_mock.assert_called_once()
 
         return (
             result,
@@ -276,6 +285,36 @@ class SourceBatchPipelineTests(unittest.TestCase):
             1,
         )
 
+    def test_failed_remote_candidates_do_not_consume_channel_slots(self):
+        candidates = [
+            make_candidate("频道一", 1, order=0),
+            make_candidate("频道一", 2, order=1),
+            make_candidate("频道一", 3, order=2),
+            make_candidate("频道一", 4, order=3),
+            make_candidate("频道一", 5, order=4),
+        ]
+
+        result, _, _, _, remote = self.run_batch(
+            candidates,
+            ["FAIL", "INCOMPLETE", "PASS", "PASS", "PASS"],
+        )
+
+        self.assertEqual(remote.call_count, 4)
+        self.assertEqual(len(result[1]["accepted_routes"]), 2)
+        self.assertEqual(
+            [
+                item["globalping"]["status"]
+                for item in result[0]
+            ],
+            [
+                "FAIL",
+                "INCOMPLETE",
+                "PASS",
+                "PASS",
+                "INCOMPLETE",
+            ],
+        )
+    
     def test_manual_source_precedes_automatic_source(self):
         automatic = make_candidate(
             "频道一", 1, priority=1, order=0
