@@ -119,11 +119,11 @@ class MainCollectionFlowTests(unittest.TestCase):
         with (
             patch(
                 "main.iter_source_contents",
+                return_value=source_stream,
+            ),
             patch(
                 "main._load_historical_candidates",
                 return_value=[],
-            ),
-                return_value=source_stream,
             ),
             patch(
                 "main.normalize_source_content",
