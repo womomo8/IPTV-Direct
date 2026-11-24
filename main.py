@@ -196,7 +196,7 @@ def run_source_batch_pipeline(
     settings: dict[str, Any],
     channels: list[str],
 ) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
-    """逐条执行 Globalping，并在每条检测后立即交 publisher。"""
+    """完成整批本地与视频检测、逐条 Globalping，最后统一交 publisher 准入。"""
 
     if not candidates:
         admission = publisher.process_batch(
