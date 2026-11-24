@@ -862,7 +862,7 @@ def _run_hls(
         if parsed["kind"] == "master":
             media_url = parsed["child_url"]
             media_id, media_measurement = _stage(
-                media_url, locations, budget
+                media_url, main_id, budget
             )
             measurements.append(media_id)
 
