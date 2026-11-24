@@ -314,12 +314,13 @@ class MainCollectionFlowTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertEqual(consumed, [0, 1, 2])
-        self.assertEqual(admission_mock.call_count, 3)
+        self.assertEqual(admission_mock.call_count, 1)
         self.assertNotIn("所有目标频道均已达到", output)
         build_mock.assert_called_once()
 
-    def test_next_batch_receives_previous_admitted_routes(self):
+    def test_global_batch_receives_all_candidates_once(self):
         consumed = []
+        received_candidates = []
         received_routes = []
 
         def source_stream():
@@ -328,16 +329,9 @@ class MainCollectionFlowTests(unittest.TestCase):
                 yield make_source_item(index)
 
         def admit(candidates, accepted_routes, channels, settings):
+            received_candidates.extend(candidates)
             received_routes.append(list(accepted_routes))
-
-            new_routes = accepted_routes + [
-                {"batch": len(received_routes)}
-            ]
-
-            return self.make_admission(
-                new_routes,
-                count=len(new_routes),
-            )
+            return self.make_admission(accepted_routes)
 
         result, output, _, admission_mock, build_mock = self.run_flow(
             source_stream(),
@@ -347,19 +341,19 @@ class MainCollectionFlowTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertEqual(consumed, [0, 1])
-        self.assertEqual(admission_mock.call_count, 2)
+        admission_mock.assert_called_once()
 
         self.assertEqual(
-            received_routes,
+            [item["normalized_url"] for item in received_candidates],
             [
-                [],
-                [{"batch": 1}],
+                "https://example.test/source0.m3u",
+                "https://example.test/source1.m3u",
             ],
         )
 
+        self.assertEqual(received_routes, [[]])
         self.assertIn("达到有效来源上限 2", output)
         build_mock.assert_called_once()
-
 
 class ChannelAliasTests(unittest.TestCase):
 
