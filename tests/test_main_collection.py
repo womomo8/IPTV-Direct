@@ -291,7 +291,7 @@ class MainCollectionFlowTests(unittest.TestCase):
         self.assertIn("达到全部候选总上限 1", output)
         build_mock.assert_called_once()
 
-    def test_all_channels_reached_stops_before_next_source(self):
+    def test_all_channels_reached_does_not_stop_next_source(self):
         consumed = []
 
         def source_stream():
@@ -313,9 +313,9 @@ class MainCollectionFlowTests(unittest.TestCase):
         )
 
         self.assertEqual(result, 0)
-        self.assertEqual(consumed, [0])
-        self.assertEqual(admission_mock.call_count, 1)
-        self.assertIn("所有目标频道均已达到", output)
+        self.assertEqual(consumed, [0, 1, 2])
+        self.assertEqual(admission_mock.call_count, 3)
+        self.assertNotIn("所有目标频道均已达到", output)
         build_mock.assert_called_once()
 
     def test_next_batch_receives_previous_admitted_routes(self):
@@ -431,7 +431,7 @@ class CollectionStopReasonTests(unittest.TestCase):
 
         self.assertEqual(reason, "达到全部候选总上限 1000")
 
-    def test_channel_target_limit(self):
+    def test_channel_target_does_not_stop_collection(self):
         self.admission["all_channels_reached"] = True
 
         reason = main._collection_stop_reason(
@@ -441,10 +441,7 @@ class CollectionStopReasonTests(unittest.TestCase):
             self.limits,
         )
 
-        self.assertEqual(
-            reason,
-            "所有目标频道均已达到每频道 2 条有效线路目标",
-        )
+        self.assertIsNone(reason)
 
     def test_no_limit_reached(self):
         reason = main._collection_stop_reason(
