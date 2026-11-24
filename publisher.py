@@ -257,7 +257,7 @@ def _channel_counts(
 
     return counts
 
- def next_candidate_for_detection(
+def next_candidate_for_detection(
     candidates: list[dict[str, Any]],
     accepted_routes: list[dict[str, Any]],
     channels: list[str],
@@ -349,10 +349,6 @@ def _channel_counts(
         return candidate
 
     return None      
-
-        return candidate
-
-    return None
 
 def process_batch(
     candidates: list[dict[str, Any]],
