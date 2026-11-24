@@ -1,5 +1,7 @@
 
 import json
+import http.server
+import threading
 import shutil
 import tempfile
 import subprocess
@@ -419,6 +421,140 @@ class StreamFFmpegIntegrationTests(unittest.TestCase):
 
     def test_real_ffmpeg_decodes_30_frames(self):
         stream._decode(self.video_path)
+
+
+class StreamHTTPHLSIntegrationTests(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+            raise unittest.SkipTest("环境没有安装 FFmpeg 或 FFprobe")
+
+        cls.temp_dir = tempfile.TemporaryDirectory()
+        cls.media_path = f"{cls.temp_dir.name}/media.m3u8"
+        cls.master_path = f"{cls.temp_dir.name}/master.m3u8"
+
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel", "error",
+                "-f", "lavfi",
+                "-i", "testsrc2=size=1920x1080:rate=25",
+                "-t", "5",
+                "-an",
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-pix_fmt", "yuv420p",
+                "-g", "25",
+                "-sc_threshold", "0",
+                "-hls_time", "1",
+                "-hls_list_size", "0",
+                "-hls_segment_filename",
+                f"{cls.temp_dir.name}/seg%03d.ts",
+                "-f", "hls",
+                cls.media_path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+
+        if result.returncode != 0:
+            cls.temp_dir.cleanup()
+            raise RuntimeError(
+                f"无法生成 H.264 HLS 测试视频：{result.stderr}"
+            )
+
+        with open(cls.master_path, "w", encoding="utf-8") as file:
+            file.write(
+                "#EXTM3U\n"
+                "#EXT-X-STREAM-INF:BANDWIDTH=3000000,"
+                "RESOLUTION=1920x1080\n"
+                "media.m3u8\n"
+            )
+
+        class RecordingHandler(http.server.SimpleHTTPRequestHandler):
+
+            requests = []
+
+            def __init__(self, *args, **kwargs):
+                super().__init__(
+                    *args,
+                    directory=cls.temp_dir.name,
+                    **kwargs,
+                )
+
+            def log_message(self, fmt, *args):
+                self.requests.append(fmt % args)
+
+        cls.handler = RecordingHandler
+        cls.server = http.server.ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            RecordingHandler,
+        )
+        cls.server.daemon_threads = True
+
+        cls.server_thread = threading.Thread(
+            target=cls.server.serve_forever,
+            daemon=True,
+        )
+        cls.server_thread.start()
+
+        cls.url = (
+            f"http://127.0.0.1:{cls.server.server_address[1]}"
+            "/master.m3u8"
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        if hasattr(cls, "server"):
+            cls.server.shutdown()
+            cls.server.server_close()
+            cls.server_thread.join(timeout=5)
+
+        cls.temp_dir.cleanup()
+
+    def test_real_ffprobe_reads_http_hls_timestamps(self):
+        self.handler.requests.clear()
+
+        result = stream._probe(self.url)
+
+        self.assertEqual(result["codec"], "h264")
+        self.assertEqual(result["width"], 1920)
+        self.assertEqual(result["height"], 1080)
+        self.assertAlmostEqual(result["fps"], 25.0, places=1)
+
+        requests = self.handler.requests
+
+        self.assertTrue(
+            any("GET /master.m3u8" in item for item in requests)
+        )
+        self.assertTrue(
+            any("GET /media.m3u8" in item for item in requests)
+        )
+        self.assertTrue(
+            any(".ts" in item for item in requests)
+        )
+
+    def test_real_ffmpeg_decodes_30_http_hls_frames(self):
+        self.handler.requests.clear()
+
+        stream._decode(self.url)
+
+        requests = self.handler.requests
+
+        self.assertTrue(
+            any("GET /master.m3u8" in item for item in requests)
+        )
+        self.assertTrue(
+            any("GET /media.m3u8" in item for item in requests)
+        )
+        self.assertTrue(
+            any(".ts" in item for item in requests)
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
