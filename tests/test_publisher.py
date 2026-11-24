@@ -281,7 +281,7 @@ class PublisherAdmissionTests(unittest.TestCase):
             "https://example.com/manual.m3u8",
         )
 
-     def test_globalping_preselection_uses_quality_order(self):
+    def test_globalping_preselection_uses_quality_order(self):
         """Globalping 检测前必须按视频质量从高到低选择候选。"""
 
         low = make_candidate(
