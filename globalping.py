@@ -447,27 +447,123 @@ def _probe_key(probe: dict[str, Any]) -> tuple[Any, ...]:
         tuple(probe.get("resolvers") or []),
     )
 
-
-def _result_map(measurement: dict[str, Any]) -> dict[tuple[Any, ...], dict[str, Any]]:
+def _result_map(
+    measurement: dict[str, Any],
+    expected_locations: list[dict[str, Any]] | None = None,
+    expected_probe_key: tuple[Any, ...] | None = None,
+) -> dict[tuple[Any, ...], dict[str, Any]]:
     results = measurement.get("results")
     if not isinstance(results, list):
         raise GlobalpingError("测量结果缺少 results 数组。")
+
+    expected_asns: set[int] | None = None
+    expected_count: int | None = None
+
+    if expected_locations is not None:
+        if not isinstance(expected_locations, list) or not expected_locations:
+            raise GlobalpingError("请求探针列表为空或格式无效。")
+
+        expected_asns = set()
+        expected_count = 0
+
+        for location in expected_locations:
+            if not isinstance(location, dict):
+                raise GlobalpingError("请求探针信息格式无效。")
+
+            asn = location.get("asn")
+            limit = location.get("limit", 1)
+
+            if (
+                isinstance(asn, bool)
+                or not isinstance(asn, int)
+                or asn <= 0
+                or asn in expected_asns
+            ):
+                raise GlobalpingError("请求探针 ASN 无效或重复。")
+
+            if (
+                isinstance(limit, bool)
+                or not isinstance(limit, int)
+                or limit != 1
+            ):
+                raise GlobalpingError("每个 ASN 阶段只能请求一个探针。")
+
+            if (
+                location.get("country") != "CN"
+                or "eyeball-network" not in location.get("tags", [])
+            ):
+                raise GlobalpingError("请求探针不符合中国大陆普通用户网络条件。")
+
+            expected_asns.add(asn)
+            expected_count += limit
+
+    if expected_probe_key is not None:
+        expected_count = 1
+
+    if expected_count is not None and len(results) != expected_count:
+        raise GlobalpingError(
+            f"测量实际返回 {len(results)} 个结果，"
+            f"要求必须恰好返回 {expected_count} 个。"
+        )
+
     mapped: dict[tuple[Any, ...], dict[str, Any]] = {}
+    returned_asns: set[int] = set()
+
     for item in results:
         if not isinstance(item, dict):
-            continue
+            raise GlobalpingError("测量结果包含无效项目。")
+
         probe = item.get("probe")
         result = item.get("result")
+
         if not isinstance(probe, dict) or not isinstance(result, dict):
-            continue
+            raise GlobalpingError("测量结果缺少有效探针信息或检测结果。")
+
+        location = _probe_location(probe)
+
+        country = location.get("country")
+        asn = location.get("asn")
+        tags = probe.get("tags")
+
+        if country != "CN":
+            raise GlobalpingError("实际返回探针不属于中国大陆。")
+
+        if (
+            isinstance(asn, bool)
+            or not isinstance(asn, int)
+            or asn <= 0
+        ):
+            raise GlobalpingError("实际返回探针 ASN 无效。")
+
+        if not isinstance(tags, list) or "eyeball-network" not in tags:
+            raise GlobalpingError("实际返回探针缺少 eyeball-network 标签。")
+
+        if expected_asns is not None and asn not in expected_asns:
+            raise GlobalpingError(
+                f"实际返回 ASN {asn} 与请求指定的 ASN 不一致。"
+            )
+
+        if asn in returned_asns:
+            raise GlobalpingError("实际返回结果包含重复 ASN。")
+
+        returned_asns.add(asn)
+
         key = _probe_key(probe)
         if key in mapped:
             raise GlobalpingError("测量结果出现无法唯一对应的重复探针信息。")
+
         mapped[key] = item
+
     if not mapped:
         raise GlobalpingError("测量已结束，但没有返回有效探针结果。")
-    return mapped
 
+    if expected_asns is not None and returned_asns != expected_asns:
+        raise GlobalpingError("实际返回 ASN 集合与请求指定的 ASN 集合不一致。")
+
+    if expected_probe_key is not None and expected_probe_key not in mapped:
+        raise GlobalpingError("测量没有返回本阶段指定的同一个探针。")
+
+    return mapped
 
 def _http_ok(result: dict[str, Any]) -> bool:
     if result.get("status") != "finished":
@@ -699,7 +795,7 @@ def _run_hls(
     try:
         main_id, main_measurement = _stage(url, locations, budget)
         measurements.append(main_id)
-        main_results = _result_map(main_measurement)
+        main_results = _result_map(main_measurement, locations)
         checks["ipv4"] = _aggregate_ipv4(main_results)
         checks["http"] = _aggregate_http(main_results)
 
@@ -744,8 +840,8 @@ def _run_hls(
             )
             measurements.append(media_id)
 
-            media_results = _result_map(media_measurement)
-            media_item = media_results.get(selected_key)
+            media_results = _result_map(media_measurement, expected_probe_key=selected_key)
+            
 
             if media_item is None:
                 raise GlobalpingError(
@@ -851,7 +947,7 @@ def _run_direct_ts(
         )
         measurements.append(measurement_id)
 
-        results = _result_map(measurement)
+        results = _result_map(measurement, locations)
         checks["ipv4"] = _aggregate_ipv4(results)
         checks["http"] = _aggregate_http(results)
 
