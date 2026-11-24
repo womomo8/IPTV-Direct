@@ -162,29 +162,6 @@ def _globalping_admission_reason(
 
     return None
 
-def _candidate_order(
-    candidate: dict[str, Any],
-) -> tuple[int, int]:
-    """读取来源优先级和来源内原始顺序。"""
-    priority = candidate.get("priority")
-    order = candidate.get("source_order")
-
-    if (
-        isinstance(priority, bool)
-        or not isinstance(priority, int)
-        or priority < 0
-    ):
-        raise PublisherError("候选线路缺少有效来源优先级")
-
-    if (
-        isinstance(order, bool)
-        or not isinstance(order, int)
-        or order < 0
-    ):
-        raise PublisherError("候选线路缺少有效来源顺序")
-
-    return priority, order
-
 def _quality_order(candidate: dict[str, Any]) -> tuple[float, float, float]:
     """按分辨率、帧率、码率依次降序排列，异常值按 0 处理。"""
     quality = candidate.get("stream_quality")
@@ -234,11 +211,6 @@ def _prepare_candidate(
     if not _valid_url(url):
         return None, "缺少有效的规范化播放 URL"
 
-    try:
-        _candidate_order(candidate)
-    except PublisherError as exc:
-        return None, str(exc)
-
     reason = _local_admission_reason(candidate)
 
     if reason:
@@ -285,14 +257,13 @@ def _channel_counts(
 
     return counts
 
-
-def next_candidate_for_detection(
+ def next_candidate_for_detection(
     candidates: list[dict[str, Any]],
     accepted_routes: list[dict[str, Any]],
     channels: list[str],
     settings: dict[str, Any],
 ) -> dict[str, Any] | None:
-    """按正式准入规则选择下一条值得执行 Globalping 的候选。"""
+    """按质量顺序选择下一条候选，但不因现有线路名额跳过检测。"""
     if not isinstance(candidates, list):
         raise PublisherError("candidates 必须是列表")
 
@@ -317,6 +288,7 @@ def next_candidate_for_detection(
             "每个频道最多保留线路数必须符合 MASTER_PLAN.md：2"
         )
 
+    # 本批需要重新检测的历史线路，不得沿用旧结果占位。
     pending_urls = {
         item.get("normalized_url")
         for item in candidates
@@ -324,7 +296,6 @@ def next_candidate_for_detection(
         and isinstance(item.get("normalized_url"), str)
     }
 
-    eligible_existing = []
     seen_urls = set()
 
     for route in accepted_routes:
@@ -338,63 +309,31 @@ def next_candidate_for_detection(
 
         url = prepared["normalized_url"]
 
-        # 本批需要重新检测的线路，不使用历史结果占位。
-        if url in pending_urls:
-            continue
+        if url not in pending_urls:
+            seen_urls.add(url)
 
-        eligible_existing.append(prepared)
-        seen_urls.add(url)
+    # 只按质量排序；质量完全相同时使用 URL 稳定排序。
+    indexed = [
+        (index, candidate)
+        for index, candidate in enumerate(candidates)
+        if isinstance(candidate, dict)
+    ]
 
-    incumbents_by_channel = {}
-
-    for channel in channels:
-        incumbents = [
-            route
-            for route in eligible_existing
-            if route["channel"] == channel
-        ]
-
-        incumbents.sort(
-            key=lambda route: (
-                *_quality_order(route),
-                *_candidate_order(route),
-            )
+    indexed.sort(
+        key=lambda item: (
+            *_quality_order(item[1]),
+            (
+                item[1].get("normalized_url")
+                if isinstance(item[1].get("normalized_url"), str)
+                else ""
+            ),
         )
-
-        incumbents_by_channel[channel] = incumbents[
-            :MAX_ROUTES_PER_CHANNEL
-        ]
-
-    indexed = list(enumerate(candidates))
-
-    def sort_key(item):
-        index, candidate = item
-
-        if not isinstance(candidate, dict):
-            return (
-                float("inf"), float("inf"), float("inf"),
-                999999, 999999, index,
-            )
-
-        try:
-            priority, order = _candidate_order(candidate)
-        except PublisherError:
-            return (
-                float("inf"), float("inf"), float("inf"),
-                999999, 999999, index,
-            )
-
-        return (*_quality_order(candidate), priority, order, index)
-
-    indexed.sort(key=sort_key)
+    )
 
     for _, candidate in indexed:
-        if not isinstance(candidate, dict):
-            continue
-
         channel = candidate.get("channel")
 
-        if channel not in incumbents_by_channel:
+        if channel not in channels:
             continue
 
         url = candidate.get("normalized_url")
@@ -405,25 +344,11 @@ def next_candidate_for_detection(
         if _local_admission_reason(candidate):
             continue
 
-        try:
-            candidate_key = (
-                *_quality_order(candidate),
-                *_candidate_order(candidate),
-            )
-        except PublisherError:
-            continue
+        # 不检查当前频道已有几条线路。
+        # 每条符合前置条件的候选都必须完成后续检测。
+        return candidate
 
-        incumbents = incumbents_by_channel[channel]
-
-        if len(incumbents) >= MAX_ROUTES_PER_CHANNEL:
-            weakest = incumbents[-1]
-            weakest_key = (
-                *_quality_order(weakest),
-                *_candidate_order(weakest),
-            )
-
-            if candidate_key >= weakest_key:
-                continue
+    return None      
 
         return candidate
 
@@ -514,13 +439,6 @@ def process_batch(
 
         historical_urls.add(url)
 
-        try:
-            _candidate_order(route)
-        except PublisherError as exc:
-            raise PublisherError(
-                f"历史第 {index + 1} 条线路来源信息无效：{exc}"
-            ) from exc
-
         # 本批重新检测的线路以本批结果为准，不沿用旧检测结果。
         if url in current_urls:
             continue
@@ -554,14 +472,13 @@ def process_batch(
     for index, route in enumerate(existing):
         pool.append((route, "history", index))
 
-    # 历史线路与本批线路统一按质量排序。
-    # 质量相同时，才比较来源优先级和来源内顺序。
+    # 历史线路与本批线路使用完全相同的质量标准。
+    # 质量相同时只使用规范化 URL 保证排序稳定，
+    # 不得使用来源优先级、来源顺序或历史身份决定去留。
     pool.sort(
         key=lambda item: (
             *_quality_order(item[0]),
-            *_candidate_order(item[0]),
-            0 if item[1] == "current" else 1,
-            item[2],
+            item[0]["normalized_url"],
         )
     )
 
@@ -684,7 +601,7 @@ def build_subscriptions(
         key=lambda route: (
             channel_index[route["channel"]],
             *_quality_order(route),
-            *_candidate_order(route),
+            route["normalized_url"],
         )
     )
 
