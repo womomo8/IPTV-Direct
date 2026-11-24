@@ -30,8 +30,6 @@ REQUEST_TIMEOUT = 30
 POLL_INTERVAL = 0.8  # 官方要求每次结果响应后至少等待 500 ms
 MAX_POLL_SECONDS = 120
 MAX_BODY_BYTES = 10 * 1024  # Globalping HTTP rawBody 最多返回前 10 KB
-RANGE_HEADER = {"Range": "bytes=0-1023"}
-
 # 与项目现有 Globalping 诊断工具的移动网络识别口径保持一致，
 # 同时保留常见中国移动 ASN；最终优先级仍结合探针 network 字段判断。
 MOBILE_ASNS = {
@@ -540,18 +538,6 @@ def _raw_body_bytes(result: dict[str, Any]) -> bytes | None:
         return None
     return data
 
-
-def _ts_sync_ok(data: bytes | None) -> bool:
-    """检查任意合法包起始偏移处连续五个 188 字节同步点。"""
-    if data is None or len(data) < 4 * 188 + 1:
-        return False
-    last_offset = min(187, len(data) - (4 * 188 + 1))
-    return any(
-        all(data[offset + 188 * index] == 0x47 for index in range(5))
-        for offset in range(last_offset + 1)
-    )
-
-
 def _parse_playlist(body: bytes | None, base_url: str) -> dict[str, Any]:
     """按实际 HLS 标签识别清单；仅有 #EXTM3U/#EXTINF 的频道 M3U 不算 HLS。"""
     if body is None:
@@ -684,64 +670,6 @@ def _select_hls_response(
         return None, None, None, last_error
     return None, None, None, GlobalpingError("没有探针取得可用的 IPv4 HTTP HLS 响应。")
 
-
-def _range_ts_status(result: dict[str, Any]) -> dict[str, str]:
-    if result.get("status") != "finished":
-        return _status(_failure_status(result), "TS Range 测量未正常完成。")
-    if not _ipv4_ok(result):
-        return _status(INCOMPLETE, "TS Range 结果未确认 IPv4 目标地址。")
-    if not _http_ok(result):
-        try:
-            code = int(result.get("statusCode"))
-        except (TypeError, ValueError):
-            code = 0
-        return _status(FAIL if code else INCOMPLETE, f"TS Range HTTP 响应异常：{code or '无状态码'}。")
-
-    body = _raw_body_bytes(result)
-    if body is None:
-        return _status(INCOMPLETE, "TS 正文被截断或无法无损还原。")
-
-    try:
-        code = int(result.get("statusCode"))
-    except (TypeError, ValueError):
-        return _status(INCOMPLETE, "TS Range 缺少有效 HTTP 状态码。")
-
-    response_headers = _headers_lower(result.get("headers") or {})
-    if code == 206:
-        match = re.fullmatch(
-            r"bytes\s+0-(\d+)/(\d+|\*)",
-            response_headers.get("content-range", ""),
-            re.IGNORECASE,
-        )
-        if not match:
-            return _status(FAIL, "HTTP 206 缺少有效的 bytes 0-... Content-Range。")
-        end = int(match.group(1))
-        if end > 1023:
-            return _status(FAIL, "HTTP 206 返回范围超过本次 bytes=0-1023 请求范围。")
-        if end < 752 or len(body) < 753:
-            return _status(INCOMPLETE, "HTTP 206 返回的 TS 数据不足以检查五个同步位置。")
-        if len(body) != end + 1:
-            return _status(INCOMPLETE, "HTTP 206 的正文长度与 Content-Range 不一致。")
-    elif code == 200:
-        # 允许服务器忽略 Range，但必须返回未截断且从字节 0 开始的完整响应。
-        if result.get("truncated") or len(body) < 753:
-            return _status(INCOMPLETE, "服务器忽略 Range，且未取得足够完整的起始媒体数据。")
-        content_length = response_headers.get("content-length")
-        if content_length is not None:
-            try:
-                expected_length = int(content_length)
-            except ValueError:
-                return _status(FAIL, "HTTP 200 的 Content-Length 无效。")
-            if expected_length != len(body):
-                return _status(INCOMPLETE, "HTTP 200 正文未完整取得。")
-    else:
-        return _status(FAIL, f"TS Range 不支持 HTTP {code}。")
-
-    if not _ts_sync_ok(body):
-        return _status(FAIL, "TS 数据未通过连续五个 188 字节同步位置检查。")
-    return _status(PASS, "实际 TS Range 数据通过五个 188 字节同步位置检查。")
-
-
 def _run_hls(
     candidate: dict[str, Any],
     locations: list[dict[str, Any]],
@@ -752,7 +680,7 @@ def _run_hls(
         "ipv4": _status(INCOMPLETE, "尚未检测"),
         "http": _status(INCOMPLETE, "尚未检测"),
         "hls": _status(INCOMPLETE, "尚未检测"),
-        "ts": _status(INCOMPLETE, "尚未检测"),
+        "ts": _status(NA, "TS 内容由本地 checker.py 检测，Globalping 不重复检测。"),
     }
     stages: dict[str, Any] = {}
     probes: dict[str, Any] = {}
@@ -764,73 +692,132 @@ def _run_hls(
         main_results = _result_map(main_measurement)
         checks["ipv4"] = _aggregate_ipv4(main_results)
         checks["http"] = _aggregate_http(main_results)
+
         for key, item in main_results.items():
             probes[str(key)] = _probe_summary(item["probe"])
 
-        selected_key, selected_result, parsed, parse_error = _select_hls_response(main_results, url)
+        selected_key, selected_result, parsed, parse_error = _select_hls_response(
+            main_results, url
+        )
+
         if selected_key is None or selected_result is None or parsed is None:
             error = parse_error or GlobalpingError("主 M3U8 未能完成验证。")
             checks["hls"] = _status(error.status, str(error))
-            checks["ts"] = _status(INCOMPLETE, "主/媒体播放清单未完成验证，无法检查 TS 分片。")
-            stages["main_playlist"] = _stage_record(main_id, checks["hls"]["status"], checks["hls"]["reason"])
-            return {"checks": checks, "stages": stages, "probes": probes, "measurements": measurements, "error": str(error)}
+            stages["main_playlist"] = _stage_record(
+                main_id,
+                checks["hls"]["status"],
+                checks["hls"]["reason"],
+            )
+            return {
+                "checks": checks,
+                "stages": stages,
+                "probes": probes,
+                "measurements": measurements,
+                "error": str(error),
+            }
 
-        stages["main_playlist"] = _stage_record(main_id, PASS, "主 M3U8 已读取并按 HLS 结构解析。", _probe_summary(main_results[selected_key]["probe"]))
+        stages["main_playlist"] = _stage_record(
+            main_id,
+            PASS,
+            "主 M3U8 已读取并按 HLS 结构解析。",
+            _probe_summary(main_results[selected_key]["probe"]),
+        )
+
         media_id = main_id
         media_url = url
         media_parsed = parsed
 
         if parsed["kind"] == "master":
             media_url = parsed["child_url"]
-            media_id, media_measurement = _stage(media_url, main_id, budget)
+            media_id, media_measurement = _stage(
+                media_url, main_id, budget
+            )
             measurements.append(media_id)
+
             media_results = _result_map(media_measurement)
             media_item = media_results.get(selected_key)
+
             if media_item is None:
-                raise GlobalpingError("媒体子清单测量没有返回与主清单相同的探针。")
+                raise GlobalpingError(
+                    "媒体子清单测量没有返回与主清单相同的探针。"
+                )
+
             media_result = media_item["result"]
+
             if not _ipv4_ok(media_result) or not _http_ok(media_result):
                 try:
                     media_code = int(media_result.get("statusCode"))
                 except (TypeError, ValueError):
                     media_code = 0
+
                 if media_code and not 200 <= media_code < 300:
                     raise GlobalpingError(
-                        f"媒体子清单返回 HTTP {media_code}。", FAIL
+                        f"媒体子清单返回 HTTP {media_code}。",
+                        FAIL,
                     )
-                raise GlobalpingError("同一探针未能完成媒体子清单的 IPv4 HTTP 检测。")
+
+                raise GlobalpingError(
+                    "同一探针未能完成媒体子清单的 IPv4 HTTP 检测。"
+                )
+
             media_body = _raw_body_bytes(media_result)
             media_parsed = _parse_playlist(media_body, media_url)
+
             if media_parsed["kind"] != "media":
-                raise GlobalpingError("媒体子清单仍然是 Master 清单，未取得媒体分片列表。", FAIL)
-            stages["media_playlist"] = _stage_record(media_id, PASS, "媒体子 M3U8 已在同一探针读取并解析。", _probe_summary(media_item["probe"]))
-        else:
-            stages["media_playlist"] = _stage_record(main_id, PASS, "目标 M3U8 本身是有效媒体播放清单。", _probe_summary(main_results[selected_key]["probe"]))
+                raise GlobalpingError(
+                    "媒体子清单仍然是 Master 清单，未取得媒体分片列表。",
+                    FAIL,
+                )
 
-        checks["hls"] = _status(PASS, "主清单及适用的媒体子清单均已完整读取并解析。")
-        segment_url = media_parsed["segments"][0]
-        range_id, range_measurement = _stage(segment_url, media_id, budget, headers=RANGE_HEADER)
-        measurements.append(range_id)
-        range_results = _result_map(range_measurement)
-        range_item = range_results.get(selected_key)
-        if range_item is None:
-            checks["ts"] = _status(INCOMPLETE, "TS Range 结果没有返回对应探针数据。")
-            stages["ts_range"] = _stage_record(range_id, INCOMPLETE, checks["ts"]["reason"])
+            stages["media_playlist"] = _stage_record(
+                media_id,
+                PASS,
+                "媒体子 M3U8 已在同一探针读取并解析。",
+                _probe_summary(media_item["probe"]),
+            )
         else:
-            checks["ts"] = _range_ts_status(range_item["result"])
-            stages["ts_range"] = _stage_record(range_id, checks["ts"]["status"], checks["ts"]["reason"], _probe_summary(range_item["probe"]))
+            stages["media_playlist"] = _stage_record(
+                main_id,
+                PASS,
+                "目标 M3U8 本身是有效媒体播放清单。",
+                _probe_summary(main_results[selected_key]["probe"]),
+            )
 
-        return {"checks": checks, "stages": stages, "probes": probes, "measurements": measurements}
+        checks["hls"] = _status(
+            PASS,
+            "主清单及适用的媒体子清单均已完整读取并解析。",
+        )
+
+        return {
+            "checks": checks,
+            "stages": stages,
+            "probes": probes,
+            "measurements": measurements,
+        }
 
     except GlobalpingError as exc:
         if exc.rate_limited:
             budget["halted"] = True
-        for name in ("ipv4", "http", "hls", "ts"):
-            if checks[name]["status"] == INCOMPLETE and checks[name]["reason"] == "尚未检测":
-                checks[name] = _status(exc.status, str(exc))
-        stages.setdefault("interrupted", _stage_record(None, exc.status, str(exc)))
-        return {"checks": checks, "stages": stages, "probes": probes, "measurements": measurements, "error": str(exc)}
 
+        for name in ("ipv4", "http", "hls"):
+            if (
+                checks[name]["status"] == INCOMPLETE
+                and checks[name]["reason"] == "尚未检测"
+            ):
+                checks[name] = _status(exc.status, str(exc))
+
+        stages.setdefault(
+            "interrupted",
+            _stage_record(None, exc.status, str(exc)),
+        )
+
+        return {
+            "checks": checks,
+            "stages": stages,
+            "probes": probes,
+            "measurements": measurements,
+            "error": str(exc),
+        }
 
 def _run_direct_ts(
     candidate: dict[str, Any],
@@ -841,50 +828,56 @@ def _run_direct_ts(
     checks = {
         "ipv4": _status(INCOMPLETE, "尚未检测"),
         "http": _status(INCOMPLETE, "尚未检测"),
-        "hls": _status(NA, "已由本地检测识别为直接 TS，HLS 不适用。"),
-        "ts": _status(INCOMPLETE, "尚未检测"),
+        "hls": _status(NA, "直接 TS 不适用 HLS 检测。"),
+        "ts": _status(NA, "TS 内容由本地 checker.py 检测，Globalping 不重复检测。"),
     }
     stages: dict[str, Any] = {}
     probes: dict[str, Any] = {}
     measurements: list[str] = []
 
     try:
-        measurement_id, measurement = _stage(url, locations, budget, headers=RANGE_HEADER)
+        measurement_id, measurement = _stage(
+            url, locations, budget
+        )
         measurements.append(measurement_id)
+
         results = _result_map(measurement)
         checks["ipv4"] = _aggregate_ipv4(results)
         checks["http"] = _aggregate_http(results)
+
         for key, item in results.items():
             probes[str(key)] = _probe_summary(item["probe"])
 
-        selected = None
-        for key, item in results.items():
-            result = item["result"]
-            if _ipv4_ok(result) and _http_ok(result):
-                selected = (key, item)
-                break
-        if selected is None:
-            checks["ts"] = _status(INCOMPLETE, "没有取得可检查的 IPv4 HTTP 媒体数据。")
-        else:
-            key, item = selected
-            checks["ts"] = _range_ts_status(item["result"])
-            stages["direct_ts_range"] = _stage_record(
-                measurement_id,
-                checks["ts"]["status"],
-                checks["ts"]["reason"],
-                _probe_summary(item["probe"]),
-            )
-        return {"checks": checks, "stages": stages, "probes": probes, "measurements": measurements}
+        return {
+            "checks": checks,
+            "stages": stages,
+            "probes": probes,
+            "measurements": measurements,
+        }
 
     except GlobalpingError as exc:
         if exc.rate_limited:
             budget["halted"] = True
-        for name in ("ipv4", "http", "ts"):
-            if checks[name]["status"] == INCOMPLETE and checks[name]["reason"] == "尚未检测":
-                checks[name] = _status(exc.status, str(exc))
-        stages.setdefault("interrupted", _stage_record(None, exc.status, str(exc)))
-        return {"checks": checks, "stages": stages, "probes": probes, "measurements": measurements, "error": str(exc)}
 
+        for name in ("ipv4", "http"):
+            if (
+                checks[name]["status"] == INCOMPLETE
+                and checks[name]["reason"] == "尚未检测"
+            ):
+                checks[name] = _status(exc.status, str(exc))
+
+        stages.setdefault(
+            "interrupted",
+            _stage_record(None, exc.status, str(exc)),
+        )
+
+        return {
+            "checks": checks,
+            "stages": stages,
+            "probes": probes,
+            "measurements": measurements,
+            "error": str(exc),
+        }
 
 def _overall_status(checks: dict[str, dict[str, str]]) -> str:
     applicable = [item["status"] for item in checks.values() if item["status"] != NA]
@@ -903,7 +896,7 @@ def incomplete_result(candidate: dict[str, Any], reason: str) -> dict[str, Any]:
         "ipv4": _status(INCOMPLETE, reason),
         "http": _status(INCOMPLETE, reason),
         "hls": _status(NA, "直接 TS 不适用 HLS 检测。") if media_type == "DIRECT_TS" else _status(INCOMPLETE, reason),
-        "ts": _status(INCOMPLETE, reason),
+        "ts": _status(NA, "TS 内容由本地 checker.py 检测，Globalping 不重复检测。"),       
     }
     return {
         **candidate,
@@ -924,7 +917,7 @@ def _failed_candidate(candidate: dict[str, Any], reason: str) -> dict[str, Any]:
         "ipv4": _status(FAIL, reason),
         "http": _status(FAIL, reason),
         "hls": _status(NA, "直接 TS 不适用 HLS 检测。") if media_type == "DIRECT_TS" else _status(FAIL, reason),
-        "ts": _status(FAIL, reason),
+        "ts": _status(NA, "TS 内容由本地 checker.py 检测，Globalping 不重复检测。"),
     }
     result = {
         "status": FAIL,
