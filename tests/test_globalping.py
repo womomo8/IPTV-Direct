@@ -507,6 +507,103 @@ class StatusAndFlowTests(unittest.TestCase):
                 gp.PASS,
             )
 
+
+    def test_fail_or_incomplete_stops_later_probe_stages(self):
+        candidate = {
+            "id": "c1",
+            "media_type": "DIRECT_TS",
+            "normalized_url": "http://example.test/live.ts",
+        }
+
+        for failure_stage in (1, 2):
+            for failure_status in (gp.FAIL, gp.INCOMPLETE):
+                with self.subTest(
+                    failure_stage=failure_stage,
+                    failure_status=failure_status,
+                ):
+                    probe_asns = iter([9808, 4134, 4837])
+                    stage_calls = []
+
+                    def choose_one(*args, **kwargs):
+                        asn = next(probe_asns)
+                        return [{
+                            "country": "CN",
+                            "asn": asn,
+                            "tags": ["eyeball-network"],
+                            "limit": 1,
+                        }]
+
+                    def run_stage(url, locations, budget, headers=None):
+                        stage_calls.append(locations[0]["asn"])
+
+                        if len(stage_calls) == failure_stage:
+                            raise gp.GlobalpingError(
+                                "模拟阶段未通过",
+                                status=failure_status,
+                            )
+
+                        probe = {
+                            **PROBE,
+                            "asn": locations[0]["asn"],
+                        }
+                        return (
+                            f"m-{probe['asn']}",
+                            measurement(
+                                result_item(
+                                    finished_http("", 200),
+                                    probe=probe,
+                                )
+                            ),
+                        )
+
+                    with patch.object(
+                        gp,
+                        "read_limits",
+                        return_value={
+                            "limit": 50,
+                            "remaining": 20,
+                            "reset": 1,
+                        },
+                    ), patch.object(
+                        gp,
+                        "choose_probes",
+                        side_effect=choose_one,
+                    ) as probes, patch.object(
+                        gp,
+                        "_stage",
+                        side_effect=run_stage,
+                    ) as stage:
+                        output = gp.check_candidates(
+                            [candidate],
+                            {"max_probes": 3},
+                        )
+
+                    result = output[0]["globalping"]
+
+                    self.assertEqual(
+                        stage.call_count,
+                        failure_stage,
+                    )
+                    self.assertEqual(
+                        probes.call_count,
+                        failure_stage,
+                    )
+                    self.assertEqual(
+                        len(result["stages"]),
+                        failure_stage,
+                    )
+                    self.assertEqual(
+                        result["stages"][
+                            f"probe_{failure_stage}"
+                        ]["status"],
+                        failure_status,
+                    )
+                    self.assertEqual(
+                        result["status"],
+                        failure_status,
+                    )
+
+    
     def test_rate_limit_stops_later_candidate_measurements(self):
         calls = []
         def rate_limited(*args, **kwargs):
