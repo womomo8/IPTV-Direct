@@ -25,7 +25,6 @@ def make_candidate(
     width=1920,
     height=1080,
     fps=30,
-    bitrate=4000000,
 ):
     """构造完整的线路检测结果。"""
 
@@ -62,7 +61,6 @@ def make_candidate(
             "width": width,
             "height": height,
             "fps": fps,
-            "bitrate": bitrate,
         },
         "checks": local_checks,
         "globalping": {
@@ -218,7 +216,6 @@ class PublisherAdmissionTests(unittest.TestCase):
                 width=1280,
                 height=720,
                 fps=30,
-                bitrate=2000000,
             ),
             make_candidate(
                 url="https://example.com/high.m3u8",
@@ -227,7 +224,6 @@ class PublisherAdmissionTests(unittest.TestCase):
                 width=1920,
                 height=1080,
                 fps=30,
-                bitrate=4000000,
             ),
             make_candidate(
                 url="https://example.com/mid.m3u8",
@@ -236,7 +232,6 @@ class PublisherAdmissionTests(unittest.TestCase):
                 width=1920,
                 height=1080,
                 fps=25,
-                bitrate=3000000,
             ),
         ]
 
