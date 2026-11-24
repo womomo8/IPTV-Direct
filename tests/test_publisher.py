@@ -472,6 +472,51 @@ class PublisherAdmissionTests(unittest.TestCase):
             )
         )
 
+    def test_subscription_output_uses_quality_order(self):
+        """最终订阅必须按视频质量排序，不受输入线路顺序影响。"""
+
+        low = make_candidate(
+            url="https://example.com/low.m3u8",
+            width=1280,
+            height=720,
+        )
+        high = make_candidate(
+            url="https://example.com/high.m3u8",
+            width=3840,
+            height=2160,
+        )
+
+        result = self.process([low, high])
+
+        output = publisher.build_subscriptions(
+            list(reversed(result["accepted_routes"])),
+            CHANNELS,
+        )
+
+        txt_entries = output["txt"].splitlines()
+
+        self.assertEqual(
+            txt_entries,
+            [
+                "CCTV-1,https://example.com/high.m3u8",
+                "CCTV-1,https://example.com/low.m3u8",
+            ],
+        )
+
+        m3u_entries = [
+            output["m3u"].splitlines()[index + 1]
+            for index, line in enumerate(output["m3u"].splitlines())
+            if line.startswith("#EXTINF:")
+        ]
+
+        self.assertEqual(
+            m3u_entries,
+            [
+                "https://example.com/high.m3u8",
+                "https://example.com/low.m3u8",
+            ],
+        )
+    
     def test_subscription_rejects_mismatched_content(self):
         """M3U 与 TXT 内容不一致时必须报错。"""
 
