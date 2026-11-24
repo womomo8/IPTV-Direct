@@ -656,20 +656,12 @@ def _print_detection_summary(
             else "无法确认"
         )
 
-        bitrate = quality.get("bitrate")
-        bitrate_text = (
-            f"{bitrate} bps"
-            if isinstance(bitrate, int) and not isinstance(bitrate, bool)
-            else "未知"
-        )
-
         print(
             f"视频质量明细 {index}/{len(results)}："
             f"频道 {item.get('channel', '未知频道')}；"
             f"结果 {status}；"
             f"分辨率 {resolution}；"
             f"扫描方式 {quality.get('field_order') or '未知'}；"
-            f"码率 {bitrate_text}；"
             f"编码 {quality.get('codec') or '未知'}；"
             f"原因：{_safe_diagnostic_text(quality.get('reason') or '未提供')}"
         )
