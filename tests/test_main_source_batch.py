@@ -162,7 +162,7 @@ class SourceBatchPipelineTests(unittest.TestCase):
                 "create_session",
                 return_value=self.session,
             ) as create_session,
-                    patch.object(
+            patch.object(
                 publisher,
                 "process_batch",
                 wraps=publisher.process_batch,
