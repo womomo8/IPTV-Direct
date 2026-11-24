@@ -258,27 +258,30 @@ class PublisherAdmissionTests(unittest.TestCase):
             ],
         )
 
-    def test_quality_tie_uses_manual_source_priority(self):
-        """质量完全相同时，才按来源优先级排序。"""
+    def test_quality_tie_does_not_use_source_priority(self):
+        """质量相同时不得按来源优先级决定去留。"""
 
-        candidates = [
-            make_candidate(
-                url="https://example.com/automatic.m3u8",
-                priority=1,
-                source_order=0,
-            ),
-            make_candidate(
-                url="https://example.com/manual.m3u8",
-                priority=0,
-                source_order=0,
-            ),
-        ]
+        automatic = make_candidate(
+            url="https://example.com/automatic.m3u8",
+            priority=1,
+            source_order=0,
+        )
+        manual = make_candidate(
+            url="https://example.com/manual.m3u8",
+            priority=0,
+            source_order=0,
+        )
 
-        result = self.process(candidates)
+        automatic.pop("priority", None)
+        automatic.pop("source_order", None)
+        manual.pop("priority", None)
+        manual.pop("source_order", None)
+
+        result = self.process([manual, automatic])
 
         self.assertEqual(
             result["accepted_routes"][0]["normalized_url"],
-            "https://example.com/manual.m3u8",
+            "https://example.com/automatic.m3u8",
         )
 
     def test_globalping_preselection_uses_quality_order(self):
@@ -312,8 +315,8 @@ class PublisherAdmissionTests(unittest.TestCase):
             high["normalized_url"],
         )
 
-    def test_globalping_preselection_skips_weaker_full_channel(self):
-        """已有两条较高质量线路时，低质量候选不应继续占用检测资源。"""
+    def test_globalping_preselection_does_not_skip_weaker_full_channel(self):
+        """即使频道已有两条线路，较弱候选仍必须完成检测。"""
 
         accepted = [
             make_candidate(
@@ -354,11 +357,11 @@ class PublisherAdmissionTests(unittest.TestCase):
 
         self.assertEqual(
             selected["normalized_url"],
-            other_channel["normalized_url"],
+            weaker_full_channel["normalized_url"],
         )
 
-    def test_globalping_preselection_allows_higher_quality_challenge(self):
-        """新候选质量高于历史线路时允许检测，低于现有前两名时停止。"""
+    def test_globalping_preselection_continues_after_higher_quality_pass(self):
+        """高质量候选通过后，较弱候选仍必须继续检测。"""
 
         historical = [
             make_candidate(
@@ -402,6 +405,11 @@ class PublisherAdmissionTests(unittest.TestCase):
             historical + [higher],
             CHANNELS,
             SETTINGS,
+        )
+
+        self.assertEqual(
+            selected_after_pass["normalized_url"],
+            lower["normalized_url"],
         )
 
         self.assertIsNone(selected_after_pass)
