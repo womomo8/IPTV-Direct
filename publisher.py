@@ -495,7 +495,7 @@ def process_batch(
 
         channel = route.get("channel")
 
-        if not isinstance(channel, str) or channel not in history_counts:
+        if not isinstance(channel, str) or channel not in channels:
             raise PublisherError(
                 f"历史第 {index + 1} 条线路频道无效"
             )
@@ -532,7 +532,6 @@ def process_batch(
             continue
 
         existing.append(prepared_route)
-        history_counts[channel] += 1
 
     prepared_by_index = {}
     rejected_by_index = {}
@@ -628,19 +627,6 @@ def process_batch(
         "channel_counts": counts,
         "all_channels_reached": all_reached,
     }
-
-    all_reached = bool(channels) and all(
-        counts[channel] >= MAX_ROUTES_PER_CHANNEL
-        for channel in channels
-    )
-
-    return {
-        "results": results,
-        "accepted_routes": retained,
-        "channel_counts": counts,
-        "all_channels_reached": all_reached,
-    }
-
 
 def _safe_m3u_attribute(value: Any) -> str:
     """清理 M3U 属性值，避免破坏格式。"""
