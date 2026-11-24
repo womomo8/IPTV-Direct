@@ -1,5 +1,7 @@
 
 import json
+import shutil
+import tempfile
 import subprocess
 import unittest
 from unittest.mock import patch
@@ -230,6 +232,24 @@ class StreamProbeMeasurementTests(unittest.TestCase):
         self.assertEqual(result["fps"], 25.0)
         self.assertEqual(result["scan_type"], "progressive")
 
+    @patch("stream._run")
+    def test_probe_limits_frame_read_to_three_seconds(self, run):
+        run.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps(self.base_data()),
+            stderr="",
+        )
+
+        stream._probe("https://example.com/live.ts")
+
+        command = run.call_args.args[0]
+
+        self.assertEqual(
+            command[command.index("-read_intervals") + 1],
+            "%+3",
+        )
+    
     def test_missing_frame_timestamps_does_not_fallback_to_avg_fps(self):
         data = self.base_data()
         data["frames"] = []
@@ -348,6 +368,57 @@ class StreamDecodeTests(unittest.TestCase):
         with self.assertRaises(stream.StreamQualityError):
             stream._decode("https://example.com/live.ts")
 
+class StreamFFmpegIntegrationTests(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+            raise unittest.SkipTest("环境没有安装 FFmpeg 或 FFprobe")
+
+        cls.temp_dir = tempfile.TemporaryDirectory()
+        cls.video_path = (
+            f"{cls.temp_dir.name}/stream-test.mp4"
+        )
+
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel", "error",
+                "-f", "lavfi",
+                "-i", "color=c=black:s=1920x1080:r=25",
+                "-t", "2",
+                "-c:v", "mpeg4",
+                "-pix_fmt", "yuv420p",
+                "-an",
+                "-y",
+                cls.video_path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+        if result.returncode != 0:
+            cls.temp_dir.cleanup()
+            raise RuntimeError(
+                f"无法生成真实测试视频：{result.stderr}"
+            )
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temp_dir.cleanup()
+
+    def test_real_ffprobe_reads_video_timestamps(self):
+        result = stream._probe(self.video_path)
+
+        self.assertEqual(result["width"], 1920)
+        self.assertEqual(result["height"], 1080)
+        self.assertAlmostEqual(result["fps"], 25.0, places=1)
+
+    def test_real_ffmpeg_decodes_30_frames(self):
+        stream._decode(self.video_path)
 
 if __name__ == "__main__":
     unittest.main()
