@@ -7,6 +7,7 @@
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -130,8 +131,8 @@ class CheckerConcurrencyTests(unittest.TestCase):
         with State.lock:
             return State.maximum
 
-    def test_global_concurrency_never_exceeds_limit(self):
-        """不同主机的请求总并发不得超过 local_concurrency。"""
+     def test_global_concurrency_never_exceeds_limit(self):
+        """直接统计候选检测任务并发，不依赖 HTTP 服务端线程清理时间。"""
         with State.lock:
             State.routes = {
                 f"/global-{index}.ts": 0.35
@@ -152,16 +153,39 @@ class CheckerConcurrencyTests(unittest.TestCase):
                 )
             )
 
-        results = self.run_candidates(
-            candidates,
-            local_concurrency=2,
-            per_host_concurrency=2,
-            queue_limit=10,
-        )
+        counter_lock = threading.Lock()
+        counter = {"active": 0, "maximum": 0}
+        original_check_one = Detector.check_one
+
+        def tracked_check_one(detector, candidate, submitted_at):
+            with counter_lock:
+                counter["active"] += 1
+                counter["maximum"] = max(
+                    counter["maximum"],
+                    counter["active"],
+                )
+
+            try:
+                return original_check_one(
+                    detector,
+                    candidate,
+                    submitted_at,
+                )
+            finally:
+                with counter_lock:
+                    counter["active"] -= 1
+
+        with patch.object(Detector, "check_one", tracked_check_one):
+            results = self.run_candidates(
+                candidates,
+                local_concurrency=2,
+                per_host_concurrency=2,
+                queue_limit=10,
+            )
 
         self.assertEqual(len(results), 8)
-        self.assertLessEqual(self.maximum_active(), 2)
-        self.assertGreaterEqual(self.maximum_active(), 2)
+        self.assertEqual(counter["maximum"], 2)
+        self.assertEqual(counter["active"], 0)
 
         for result in results:
             self.assertEqual(
