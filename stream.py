@@ -92,8 +92,6 @@ def _frame_rate_from_timestamps(frames: Any) -> float | None:
 
         timestamps.append(timestamp)
 
-    timestamps.sort()
-
     if any(
         current <= previous
         for previous, current in zip(
