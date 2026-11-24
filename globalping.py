@@ -599,8 +599,10 @@ def _http_ok(result: dict[str, Any]) -> bool:
         return False
     return 200 <= code < 300
 
-
 def _ipv4_ok(result: dict[str, Any]) -> bool:
+    if result.get("status") != "finished":
+        return False
+
     address = result.get("resolvedAddress")
     if not isinstance(address, str) or not address:
         return False
@@ -608,7 +610,6 @@ def _ipv4_ok(result: dict[str, Any]) -> bool:
         return ipaddress.ip_address(address).version == 4
     except ValueError:
         return False
-
 
 def _failure_status(result: dict[str, Any]) -> str:
     """只有明确的目标端失败才记 FAIL；探针离线/内部/解析异常记 INCOMPLETE。"""
