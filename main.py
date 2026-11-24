@@ -322,7 +322,7 @@ def run_source_batch_pipeline(
     while pending:
         selected = publisher.next_candidate_for_detection(
             [item for _, item in pending],
-            provisional_routes,,
+            provisional_routes,
             channels,
             settings,
         )
@@ -506,13 +506,6 @@ def run_source_batch_pipeline(
         admission,
         submitted_candidates,
     )
-
-    return (
-        [item for item in output if item is not None],
-        admission,
-        submitted_candidates,
-    )
-
 
 def _print_detection_summary(
     results: list[dict[str, Any]],
@@ -800,7 +793,6 @@ def run_formal_flow(config: dict[str, Any]) -> int:
     seen_urls: set[str] = set()
     errors: list[str] = []
     detected: list[dict[str, Any]] = []
-    detected: list[dict[str, Any]] = []
     all_candidates: list[dict[str, Any]] = []
     source_records: list[dict[str, Any]] = []
 
@@ -932,14 +924,6 @@ def run_formal_flow(config: dict[str, Any]) -> int:
             f"提取候选 {normalized['extracted_candidates']}；"
             f"本批去重 {normalized['duplicate_candidates']}；"
             f"进入全局候选池 {len(candidates)}。"
-        )
-
-        print(
-            f"来源处理：{label}；"
-            f"识别格式 {normalized['format']}；"
-            f"提取候选 {normalized['extracted_candidates']}；"
-            f"本批去重 {normalized['duplicate_candidates']}；"
-            f"进入检测 {len(candidates)}。"
         )
 
         stop_reason = _collection_stop_reason(
