@@ -334,44 +334,60 @@ class SourceBatchPipelineTests(unittest.TestCase):
             ],
         )
     
-    def test_manual_source_precedes_automatic_source(self):
-        automatic = make_candidate(
-            "频道一", 1, priority=1, order=0
+    def test_globalping_dispatch_round_robins_sources(self):
+        manual_first = make_candidate(
+            "频道一", 1, priority=0, order=0
         )
-        manual = make_candidate(
-            "频道二", 2, priority=0, order=0
+        manual_second = make_candidate(
+            "频道一", 2, priority=0, order=0
         )
-        third = make_candidate(
-            "频道一", 3, priority=1, order=1
+        automatic_first = make_candidate(
+            "频道二", 3, priority=1, order=0
         )
+        automatic_second = make_candidate(
+            "频道二", 4, priority=1, order=0
+        )
+
+        for candidate in (manual_first, manual_second):
+            candidate["source_type"] = "manual"
+            candidate["source_url"] = "manual-source"
+
+        for candidate in (automatic_first, automatic_second):
+            candidate["source_type"] = "automatic"
+            candidate["source_url"] = "automatic-source"
+
+        candidates = [
+            manual_first,
+            manual_second,
+            automatic_first,
+            automatic_second,
+        ]
 
         result, _, _, _, remote = self.run_batch(
-            [automatic, manual, third],
-            ["PASS", "FAIL", "INCOMPLETE"],
+            candidates,
+            ["PASS", "PASS", "PASS", "PASS"],
         )
 
-        first_remote_candidate = remote.call_args_list[0].args[0][0]
+        dispatched = [
+            call.args[0][0]["normalized_url"]
+            for call in remote.call_args_list
+        ]
 
         self.assertEqual(
-            first_remote_candidate["normalized_url"],
-            manual["normalized_url"],
+            dispatched,
+            [
+                manual_first["normalized_url"],
+                automatic_first["normalized_url"],
+                manual_second["normalized_url"],
+                automatic_second["normalized_url"],
+            ],
         )
+
         self.assertEqual(
             [item["normalized_url"] for item in result[0]],
-            [
-                automatic["normalized_url"],
-                manual["normalized_url"],
-                third["normalized_url"],
-            ],
+            [item["normalized_url"] for item in candidates],
         )
-        self.assertEqual(
-            [
-                item["globalping"]["status"]
-                for item in result[0]
-            ],
-            ["PASS", "FAIL", "INCOMPLETE"],
-        )
-        self.assertEqual(remote.call_count, 3)
+        self.assertEqual(remote.call_count, 4)
 
     def test_hls_pass_is_preserved(self):
         candidate = make_candidate("频道一", 1)
