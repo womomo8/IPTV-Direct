@@ -191,6 +191,32 @@ class ProbeResultValidationTests(unittest.TestCase):
         ]
         self.result = finished_http("", 200)
 
+    def test_ipv4_requires_finished_measurement(self):
+        self.assertTrue(
+            gp._ipv4_ok(finished_http("", 200))
+        )
+        self.assertFalse(
+            gp._ipv4_ok({
+                "status": "failed",
+                "resolvedAddress": "1.2.3.4",
+            })
+        )
+        self.assertFalse(
+            gp._ipv4_ok({
+                "status": "offline",
+                "resolvedAddress": "1.2.3.4",
+            })
+        )
+
+    def test_ipv4_aggregation_rejects_unfinished_measurement(self):
+        result = gp._aggregate_ipv4({
+            ("probe",): result_item({
+                "status": "failed",
+                "resolvedAddress": "1.2.3.4",
+            })
+        })
+        self.assertEqual(result["status"], gp.INCOMPLETE)
+    
     def test_accepts_exact_requested_probe(self):
         result = gp._result_map(
             measurement(result_item(self.result)),
