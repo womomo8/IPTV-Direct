@@ -312,27 +312,31 @@ class PublisherAdmissionTests(unittest.TestCase):
             high["normalized_url"],
         )
 
-    def test_globalping_preselection_skips_full_channel(self):
-        """一个频道已有两条 PASS，不得阻挡其他频道继续检测。"""
+    def test_globalping_preselection_skips_weaker_full_channel(self):
+        """已有两条较高质量线路时，低质量候选不应继续占用检测资源。"""
 
         accepted = [
             make_candidate(
                 url="https://example.com/cctv1-1.m3u8",
                 channel="CCTV-1",
                 source_order=0,
+                width=1920,
+                height=1080,
             ),
             make_candidate(
                 url="https://example.com/cctv1-2.m3u8",
                 channel="CCTV-1",
                 source_order=1,
+                width=1920,
+                height=1080,
             ),
         ]
 
-        full_channel = make_candidate(
-            url="https://example.com/cctv1-best.m3u8",
+        weaker_full_channel = make_candidate(
+            url="https://example.com/cctv1-weaker.m3u8",
             channel="CCTV-1",
-            width=3840,
-            height=2160,
+            width=1280,
+            height=720,
         )
         other_channel = make_candidate(
             url="https://example.com/cctv5.m3u8",
@@ -342,7 +346,7 @@ class PublisherAdmissionTests(unittest.TestCase):
         )
 
         selected = publisher.next_candidate_for_detection(
-            [full_channel, other_channel],
+            [weaker_full_channel, other_channel],
             accepted,
             CHANNELS,
             SETTINGS,
@@ -351,10 +355,59 @@ class PublisherAdmissionTests(unittest.TestCase):
         self.assertEqual(
             selected["normalized_url"],
             other_channel["normalized_url"],
-        )   
+        )
+
+    def test_globalping_preselection_allows_higher_quality_challenge(self):
+        """新候选质量高于历史线路时允许检测，低于现有前两名时停止。"""
+
+        historical = [
+            make_candidate(
+                url="https://example.com/history-1.m3u8",
+                width=1280,
+                height=720,
+            ),
+            make_candidate(
+                url="https://example.com/history-2.m3u8",
+                width=1920,
+                height=1080,
+                source_order=1,
+            ),
+        ]
+
+        higher = make_candidate(
+            url="https://example.com/new-higher.m3u8",
+            width=3840,
+            height=2160,
+        )
+        lower = make_candidate(
+            url="https://example.com/new-lower.m3u8",
+            width=640,
+            height=480,
+        )
+
+        selected = publisher.next_candidate_for_detection(
+            [lower, higher],
+            historical,
+            CHANNELS,
+            SETTINGS,
+        )
+
+        self.assertEqual(
+            selected["normalized_url"],
+            higher["normalized_url"],
+        )
+
+        selected_after_pass = publisher.next_candidate_for_detection(
+            [lower],
+            historical + [higher],
+            CHANNELS,
+            SETTINGS,
+        )
+
+        self.assertIsNone(selected_after_pass)
     
-    def test_historical_routes_are_never_replaced(self):
-        """新线路质量更高，也不能挤掉历史准入线路。"""
+    def test_higher_quality_candidate_replaces_weaker_historical_route(self):
+        """质量更高且检测合格的新线路可以替换较弱历史线路。"""
 
         historical = [
             make_candidate(
@@ -385,6 +438,51 @@ class PublisherAdmissionTests(unittest.TestCase):
             settings=SETTINGS,
         )
 
+        urls = {
+            item["normalized_url"]
+            for item in result["accepted_routes"]
+        }
+
+        self.assertEqual(len(result["accepted_routes"]), 2)
+        self.assertIn(
+            "https://example.com/new-best.m3u8",
+            urls,
+        )
+        self.assertEqual(
+            result["results"][0]["status"],
+            publisher.ACCEPTED,
+        )
+
+    def test_historical_routes_compete_by_quality_and_keep_only_two(self):
+        """超过两条的有效历史线路也必须统一排名，只保留质量最高两条。"""
+
+        historical = [
+            make_candidate(
+                url="https://example.com/history-low.m3u8",
+                width=1280,
+                height=720,
+            ),
+            make_candidate(
+                url="https://example.com/history-high.m3u8",
+                width=3840,
+                height=2160,
+                source_order=1,
+            ),
+            make_candidate(
+                url="https://example.com/history-mid.m3u8",
+                width=1920,
+                height=1080,
+                source_order=2,
+            ),
+        ]
+
+        result = publisher.process_batch(
+            candidates=[],
+            accepted_routes=historical,
+            channels=CHANNELS,
+            settings=SETTINGS,
+        )
+
         urls = [
             item["normalized_url"]
             for item in result["accepted_routes"]
@@ -393,17 +491,15 @@ class PublisherAdmissionTests(unittest.TestCase):
         self.assertEqual(
             urls,
             [
-                "https://example.com/old-1.m3u8",
-                "https://example.com/old-2.m3u8",
+                "https://example.com/history-high.m3u8",
+                "https://example.com/history-mid.m3u8",
             ],
         )
-        self.assertEqual(
-            result["results"][0]["status"],
-            publisher.REJECTED,
-        )
+        self.assertEqual(result["channel_counts"]["CCTV-1"], 2)
+        self.assertEqual(result["results"], [])
 
     def test_invalid_historical_routes_raise_error(self):
-        """历史线路无效、重复或超限时必须明确报错。"""
+        """历史线路对象、频道、URL 或重复数据无效时必须报错。"""
 
         valid = make_candidate()
 
@@ -412,11 +508,6 @@ class PublisherAdmissionTests(unittest.TestCase):
             [{**valid, "channel": "UNKNOWN"}],
             [{**valid, "normalized_url": "invalid-url"}],
             [valid, dict(valid)],
-            [
-                make_candidate(url="https://example.com/1.m3u8"),
-                make_candidate(url="https://example.com/2.m3u8", source_order=1),
-                make_candidate(url="https://example.com/3.m3u8", source_order=2),
-            ],
         ]
 
         for historical in invalid_cases:
