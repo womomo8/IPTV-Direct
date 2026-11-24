@@ -551,7 +551,7 @@ class StatusAndFlowTests(unittest.TestCase):
 
             self.assertEqual(main_call[0], "main")
             self.assertEqual(media_call[0], "media")
-            self.assertEqual(media_call[2], main_call[0] if False else f"main-{main_call[2][0]['asn']}")
+            self.assertEqual(media_call[2],f"main-{main_call[2][0]['asn']}",)
 
     def test_fail_or_incomplete_stops_later_probe_stages(self):
         candidate = {
