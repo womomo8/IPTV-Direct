@@ -150,6 +150,21 @@ class StreamQualityTests(unittest.TestCase):
 
         self.assertEqual(result["status"], stream.INCOMPLETE)
 
+     def test_unexpected_probe_exception_returns_incomplete(self):
+        with (
+            patch("stream.shutil.which", return_value="/usr/bin/ffmpeg"),
+            patch(
+                "stream._probe",
+                side_effect=RuntimeError("unexpected probe error"),
+            ),
+        ):
+            result = stream.check_stream(
+                "https://example.com/live.ts"
+            )
+
+        self.assertEqual(result["status"], stream.INCOMPLETE)
+        self.assertIn("RuntimeError", result["reason"])   
+    
     @patch("stream.shutil.which", return_value="/usr/bin/ffmpeg")
     @patch("stream._probe")
     @patch("stream._decode")
@@ -334,6 +349,16 @@ class StreamProbeMeasurementTests(unittest.TestCase):
             "unknown",
         )
 
+    def test_invalid_field_order_type_is_unknown(self):
+        self.assertEqual(
+            stream._classify_scan_type([]),
+            "unknown",
+        )
+        self.assertEqual(
+            stream._classify_scan_type({}),
+            "unknown",
+        )
+    
     def test_packet_bitrate_rejects_malformed_packet_instead_of_skipping(self):
         bitrate = stream._packet_bitrate([
             {
@@ -367,7 +392,25 @@ class StreamProbeMeasurementTests(unittest.TestCase):
 
         self.assertIsNone(bitrate)
 
-    def test_packet_bitrate_falls_back_to_dts_when_pts_is_unavailable(self):
+     def test_packet_bitrate_uses_dts_when_all_pts_are_unavailable(self):
+        bitrate = stream._packet_bitrate([
+            {
+                "pts_time": "N/A",
+                "dts_time": "0",
+                "size": "312500",
+                "duration_time": "1",
+            },
+            {
+                "pts_time": "N/A",
+                "dts_time": "1",
+                "size": "312500",
+                "duration_time": "1",
+            },
+        ])
+
+        self.assertEqual(bitrate, 2_500_000)   
+    
+    def test_packet_bitrate_rejects_mixed_pts_and_dts(self):
         bitrate = stream._packet_bitrate([
             {
                 "pts_time": "N/A",
@@ -382,7 +425,7 @@ class StreamProbeMeasurementTests(unittest.TestCase):
             },
         ])
 
-        self.assertEqual(bitrate, 2_500_000)
+        self.assertIsNone(bitrate)
 
     def test_probe_rejects_non_object_json(self):
         with self.assertRaises(stream.StreamQualityError):
