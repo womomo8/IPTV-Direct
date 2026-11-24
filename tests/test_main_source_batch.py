@@ -266,7 +266,7 @@ class SourceBatchPipelineTests(unittest.TestCase):
         self.assertEqual(len(result[0]), 2)
         self.assertEqual(len(result[1]["accepted_routes"]), 2)
 
-    def test_channel_stops_after_two_accepted_routes(self):
+    def test_all_candidates_enter_globalping_before_final_selection(self):
         candidates = [
             make_candidate("频道一", 1, order=0),
             make_candidate("频道一", 2, order=1),
@@ -275,15 +275,9 @@ class SourceBatchPipelineTests(unittest.TestCase):
 
         result, _, _, _, remote = self.run_batch(candidates)
 
-        self.assertEqual(remote.call_count, 2)
+        self.assertEqual(remote.call_count, 3)
+        self.assertEqual(len(result[0]), 3)
         self.assertEqual(len(result[1]["accepted_routes"]), 2)
-        self.assertEqual(
-            sum(
-                item["status"] == publisher.REJECTED
-                for item in result[1]["results"]
-            ),
-            1,
-        )
 
     def test_failed_remote_candidates_do_not_consume_channel_slots(self):
         candidates = [
@@ -299,7 +293,7 @@ class SourceBatchPipelineTests(unittest.TestCase):
             ["FAIL", "INCOMPLETE", "PASS", "PASS", "PASS"],
         )
 
-        self.assertEqual(remote.call_count, 4)
+        self.assertEqual(remote.call_count, 5)
         self.assertEqual(len(result[1]["accepted_routes"]), 2)
         self.assertEqual(
             [
