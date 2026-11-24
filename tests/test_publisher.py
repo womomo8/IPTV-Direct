@@ -411,8 +411,6 @@ class PublisherAdmissionTests(unittest.TestCase):
             selected_after_pass["normalized_url"],
             lower["normalized_url"],
         )
-
-        self.assertIsNone(selected_after_pass)
     
     def test_higher_quality_candidate_replaces_weaker_historical_route(self):
         """质量更高且检测合格的新线路可以替换较弱历史线路。"""
