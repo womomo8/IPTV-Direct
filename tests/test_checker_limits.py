@@ -131,7 +131,7 @@ class CheckerConcurrencyTests(unittest.TestCase):
         with State.lock:
             return State.maximum
 
-     def test_global_concurrency_never_exceeds_limit(self):
+    def test_global_concurrency_never_exceeds_limit(self):
         """直接统计候选检测任务并发，不依赖 HTTP 服务端线程清理时间。"""
         with State.lock:
             State.routes = {
