@@ -331,13 +331,18 @@ def next_candidate_for_detection(
 
     def sort_key(item):
         index, candidate = item
+
         if not isinstance(candidate, dict):
-            return (999999, 999999, index)
+            return (float("inf"), float("inf"), float("inf"),
+                    999999, 999999, index)
+
         try:
             priority, order = _candidate_order(candidate)
-            return (priority, order, index)
         except PublisherError:
-            return (999999, 999999, index)
+            return (float("inf"), float("inf"), float("inf"),
+                    999999, 999999, index)
+
+        return (*_quality_order(candidate), priority, order, index)
 
     indexed.sort(key=sort_key)
 
