@@ -363,12 +363,30 @@ def _create_measurement(
     if not isinstance(measurement_id, str) or not measurement_id:
         raise GlobalpingError("Globalping 创建响应缺少有效测量 ID。")
 
-    try:
-        actual_count = int(data.get("probesCount", estimated))
-    except (TypeError, ValueError):
-        actual_count = estimated
-    if actual_count < 1 or actual_count > 3:
-        raise GlobalpingError(f"Globalping 实际探针数量异常：{actual_count}。")
+    actual_count = data.get("probesCount")
+
+    if (
+        isinstance(actual_count, bool)
+        or not isinstance(actual_count, int)
+        or actual_count < 1
+    ):
+        budget["halted"] = True
+        raise GlobalpingError(
+            "Globalping 创建响应缺少有效的实际探针数量，停止后续测量。"
+        )
+
+    budget["remaining"] = max(
+        0, budget["remaining"] - actual_count
+    )
+
+    if actual_count != 1:
+        budget["halted"] = True
+        raise GlobalpingError(
+            f"Globalping 本次实际返回 {actual_count} 个探针，"
+            "要求必须恰好一个，停止后续测量。"
+        )
+
+    budget["probe_count"] = 1
 
     budget["remaining"] = max(0, budget["remaining"] - actual_count)
     if isinstance(locations, list):
