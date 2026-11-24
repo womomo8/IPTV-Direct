@@ -387,10 +387,6 @@ def _create_measurement(
         )
 
     budget["probe_count"] = 1
-
-    budget["remaining"] = max(0, budget["remaining"] - actual_count)
-    if isinstance(locations, list):
-        budget["probe_count"] = actual_count
     return measurement_id
 
 
