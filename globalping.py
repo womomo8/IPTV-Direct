@@ -841,7 +841,7 @@ def _run_hls(
             measurements.append(media_id)
 
             media_results = _result_map(media_measurement, expected_probe_key=selected_key)
-            
+            media_item = media_results.get(selected_key)           
 
             if media_item is None:
                 raise GlobalpingError(
