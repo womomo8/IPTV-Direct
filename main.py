@@ -190,6 +190,100 @@ def load_configuration(
 def _identity(item: dict[str, Any]) -> tuple[Any, Any]:
     return item.get("channel"), item.get("normalized_url")
 
+def _load_historical_candidates(
+    root: Path,
+    channels: list[str],
+    settings: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """读取并归一化上一期订阅，将历史线路作为普通候选重新检测。"""
+
+    output_dir = Path(root) / "output"
+    m3u_path = output_dir / "iptv.m3u"
+    txt_path = output_dir / "iptv.txt"
+
+    has_m3u = m3u_path.is_file()
+    has_txt = txt_path.is_file()
+
+    # 首次发布：两份历史文件都不存在。
+    if not has_m3u and not has_txt:
+        return []
+
+    # 只存在一份文件时，不能静默忽略历史线路。
+    if has_m3u != has_txt:
+        raise publisher.PublisherError(
+            "历史订阅 M3U 和 TXT 文件不完整，无法确认历史线路"
+        )
+
+    try:
+        m3u_text = m3u_path.read_text(encoding="utf-8-sig")
+        txt_text = txt_path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise publisher.PublisherError(
+            f"历史订阅读取失败：{exc}"
+        ) from exc
+
+    # 先确认旧订阅两份文件一致、频道有效、URL 有效。
+    try:
+        publisher.validate_subscriptions(
+            m3u_text,
+            txt_text,
+            channels,
+        )
+    except publisher.PublisherError as exc:
+        raise publisher.PublisherError(
+            f"历史订阅校验失败：{exc}"
+        ) from exc
+
+    route_count = sum(
+        line.startswith("#EXTINF:")
+        for line in m3u_text.splitlines()
+    )
+
+    limits = settings["collection"]
+
+    source = {
+        "name": "历史订阅",
+        "url": "history://output/iptv.m3u",
+        "source_type": "history",
+        "priority": 1,
+        # 同质量时不让历史身份获得排名优势。
+        "order": limits["max_candidates_total"],
+    }
+
+    try:
+        normalized = normalize_source_content(
+            content=m3u_text,
+            source=source,
+            channels=channels,
+            max_candidates_per_source=limits["max_candidates_total"],
+            seen_urls=set(),
+            content_type="application/vnd.apple.mpegurl",
+            max_hls_manifest_bytes=(
+                settings["detection"]["max_hls_manifest_bytes"]
+            ),
+            aliases=settings.get("aliases", {}),
+            max_candidates_remaining=limits["max_candidates_total"],
+            channels_path=str(Path(root) / "channels.txt"),
+        )
+    except Exception as exc:
+        raise publisher.PublisherError(
+            f"历史线路解析失败：{exc}"
+        ) from exc
+
+    candidates = normalized.get("candidates", [])
+
+    # 必须确保旧订阅中的每一条线路都成功进入候选池。
+    if (
+        not normalized.get("recognized")
+        or normalized.get("limit_reached")
+        or len(candidates) != route_count
+    ):
+        raise publisher.PublisherError(
+            "历史订阅线路解析数量不完整，不能跳过未解析线路"
+        )
+
+    return candidates
+
 def run_source_batch_pipeline(
     candidates: list[dict[str, Any]],
     accepted_routes: list[dict[str, Any]],
@@ -764,6 +858,20 @@ def run_formal_flow(config: dict[str, Any]) -> int:
     limits = settings["collection"]
     channels = config["channels"]
 
+     try:
+        history_candidates = _load_historical_candidates(
+            ROOT,
+            channels,
+            settings,
+        )
+    except publisher.PublisherError as exc:
+        print(
+            f"历史订阅读取或校验失败，停止本轮处理：{exc}",
+            file=sys.stderr,
+        )
+        print("正式订阅未修改。", file=sys.stderr)
+        return 1   
+    
     seen_urls: set[str] = set()
     errors: list[str] = []
     detected: list[dict[str, Any]] = []
@@ -778,7 +886,7 @@ def run_formal_flow(config: dict[str, Any]) -> int:
     }
 
     valid_sources = 0
-    extracted_total = 0
+    extracted_total = len(history_candidates)
     duplicate_total = 0
     stopped = "所有配置来源均已处理"
     system_error = False
@@ -911,6 +1019,28 @@ def run_formal_flow(config: dict[str, Any]) -> int:
             stopped = stop_reason
             break
 
+     # 历史线路必须重新检测，不能直接作为已准入线路。
+    history_added = 0
+
+    for candidate in history_candidates:
+        url = candidate["normalized_url"]
+
+        # 同一 URL 只保留一个候选。
+        # 如果新来源已经提供该线路，以新来源候选为准。
+        if url in seen_urls:
+            duplicate_total += 1
+            continue
+
+        seen_urls.add(url)
+        all_candidates.append(candidate)
+        history_added += 1
+
+    if history_candidates:
+        print(
+            f"历史订阅重新加入本轮检测：{history_added} 条；"
+            f"与新来源重复 {len(history_candidates) - history_added} 条。"
+        )   
+    
     if all_candidates:
         try:
             (
