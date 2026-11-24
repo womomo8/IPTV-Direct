@@ -419,41 +419,80 @@ def process_batch(
             "每个频道最多保留线路数必须符合 MASTER_PLAN.md：2"
         )
 
-    # 先保留此前批次已经准入的线路。
+    # 严格验证历史准入线路，历史线路不得被新线路替换。
     existing = []
+    counts = {channel: 0 for channel in channels}
+    seen_urls = set()
 
-    for route in accepted_routes:
+    for index, route in enumerate(accepted_routes):
         if not isinstance(route, dict):
-            raise PublisherError("累计准入数据中存在无效线路")
+            raise PublisherError(
+                f"历史第 {index + 1} 条线路不是有效对象"
+            )
+
+        channel = route.get("channel")
+
+        if not isinstance(channel, str) or channel not in counts:
+            raise PublisherError(
+                f"历史第 {index + 1} 条线路频道无效"
+            )
+
+        url = route.get("normalized_url")
+
+        if not _valid_url(url):
+            raise PublisherError(
+                f"历史第 {index + 1} 条线路 URL 无效"
+            )
+
+        if url in seen_urls:
+            raise PublisherError(
+                f"历史第 {index + 1} 条线路 URL 重复"
+            )
+
+        try:
+            _candidate_order(route)
+        except PublisherError as exc:
+            raise PublisherError(
+                f"历史第 {index + 1} 条线路来源信息无效：{exc}"
+            ) from exc
+
+        if counts[channel] >= MAX_ROUTES_PER_CHANNEL:
+            raise PublisherError(
+                f"历史频道 {channel} 已超过最多 2 条线路的限制"
+            )
 
         existing.append(dict(route))
-
-    seen_urls = {
-        route.get("normalized_url")
-        for route in existing
-        if isinstance(route.get("normalized_url"), str)
-    }
+        seen_urls.add(url)
+        counts[channel] += 1
 
     prepared = []
     results = []
 
-    # 本批按人工优先级、来源原始顺序处理。
+    # 本批先按视频质量排序，质量相同时再按来源优先级和来源顺序。
     indexed = list(enumerate(candidates))
 
     def sort_key(item):
         index, candidate = item
 
         if not isinstance(candidate, dict):
-            return (999999, 999999, index)
+            return (
+                float("inf"), float("inf"), float("inf"),
+                999999, 999999, index,
+            )
 
         try:
             priority, order = _candidate_order(candidate)
-            return (priority, order, index)
         except PublisherError:
-            return (999999, 999999, index)
+            return (
+                float("inf"), float("inf"), float("inf"),
+                999999, 999999, index,
+            )
+
+        return (*_quality_order(candidate), priority, order, index)
 
     indexed.sort(key=sort_key)
 
+    # 历史线路已经占据的位置不参与本批竞争。
     for _, candidate in indexed:
         route, reason = _prepare_candidate(candidate, channels)
 
@@ -466,6 +505,7 @@ def process_batch(
             continue
 
         url = route["normalized_url"]
+        channel = route["channel"]
 
         if url in seen_urls:
             results.append({
@@ -475,69 +515,26 @@ def process_batch(
             })
             continue
 
-        seen_urls.add(url)
-        prepared.append(route)
-
-    # 合并历史累计线路和本批候选，再按正式优先级整理。
-    combined = existing + prepared
-
-    channel_index = {
-        channel: index
-        for index, channel in enumerate(channels)
-    }
-
-    combined.sort(
-        key=lambda route: (
-            channel_index.get(route.get("channel"), len(channels)),
-            *_candidate_order(route),
-        )
-    )
-
-    retained = []
-    counts = {channel: 0 for channel in channels}
-    retained_urls = set()
-
-    for route in combined:
-        channel = route.get("channel")
-        url = route.get("normalized_url")
-
-        if channel not in counts:
-            continue
-
-        if url in retained_urls:
-            continue
-
         if counts[channel] >= MAX_ROUTES_PER_CHANNEL:
-            continue
-
-        retained.append(route)
-        retained_urls.add(url)
-        counts[channel] += 1
-
-    retained_new_urls = {
-        route["normalized_url"]
-        for route in retained
-        if route["normalized_url"] not in {
-            old.get("normalized_url") for old in existing
-        }
-    }
-
-    # 为本批每条候选生成明确结果。
-    for item in prepared:
-        url = item["normalized_url"]
-
-        if url in retained_new_urls:
             results.append({
-                "candidate": item,
-                "status": ACCEPTED,
-                "reason": item["selection"]["reason"],
-            })
-        else:
-            results.append({
-                "candidate": item,
+                "candidate": candidate,
                 "status": REJECTED,
                 "reason": "该频道已达到最多保留 2 条线路的上限",
             })
+            continue
+
+        seen_urls.add(url)
+        prepared.append(route)
+        counts[channel] += 1
+
+        results.append({
+            "candidate": route,
+            "status": ACCEPTED,
+            "reason": route["selection"]["reason"],
+        })
+
+    # 历史线路保持原有顺序，新线路追加到历史线路之后。
+    retained = existing + prepared
 
     all_reached = bool(channels) and all(
         counts[channel] >= MAX_ROUTES_PER_CHANNEL
