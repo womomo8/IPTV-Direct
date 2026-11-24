@@ -317,15 +317,53 @@ def next_candidate_for_detection(
             "每个频道最多保留线路数必须符合 MASTER_PLAN.md：2"
         )
 
-    counts = _channel_counts(accepted_routes, channels)
+    pending_urls = {
+        item.get("normalized_url")
+        for item in candidates
+        if isinstance(item, dict)
+        and isinstance(item.get("normalized_url"), str)
+    }
 
+    eligible_existing = []
     seen_urls = set()
+
     for route in accepted_routes:
         if not isinstance(route, dict):
             raise PublisherError("累计准入数据中存在无效线路")
-        url = route.get("normalized_url")
-        if isinstance(url, str):
-            seen_urls.add(url)
+
+        prepared, _ = _prepare_candidate(route, channels)
+
+        if prepared is None:
+            continue
+
+        url = prepared["normalized_url"]
+
+        # 本批需要重新检测的线路，不使用历史结果占位。
+        if url in pending_urls:
+            continue
+
+        eligible_existing.append(prepared)
+        seen_urls.add(url)
+
+    incumbents_by_channel = {}
+
+    for channel in channels:
+        incumbents = [
+            route
+            for route in eligible_existing
+            if route["channel"] == channel
+        ]
+
+        incumbents.sort(
+            key=lambda route: (
+                *_quality_order(route),
+                *_candidate_order(route),
+            )
+        )
+
+        incumbents_by_channel[channel] = incumbents[
+            :MAX_ROUTES_PER_CHANNEL
+        ]
 
     indexed = list(enumerate(candidates))
 
@@ -333,14 +371,18 @@ def next_candidate_for_detection(
         index, candidate = item
 
         if not isinstance(candidate, dict):
-            return (float("inf"), float("inf"), float("inf"),
-                    999999, 999999, index)
+            return (
+                float("inf"), float("inf"), float("inf"),
+                999999, 999999, index,
+            )
 
         try:
             priority, order = _candidate_order(candidate)
         except PublisherError:
-            return (float("inf"), float("inf"), float("inf"),
-                    999999, 999999, index)
+            return (
+                float("inf"), float("inf"), float("inf"),
+                999999, 999999, index,
+            )
 
         return (*_quality_order(candidate), priority, order, index)
 
@@ -351,20 +393,41 @@ def next_candidate_for_detection(
             continue
 
         channel = candidate.get("channel")
-        if channel not in counts:
-            continue
 
-        if counts[channel] >= MAX_ROUTES_PER_CHANNEL:
+        if channel not in incumbents_by_channel:
             continue
 
         url = candidate.get("normalized_url")
+
         if not _valid_url(url) or url in seen_urls:
             continue
 
         if _local_admission_reason(candidate):
             continue
 
+        try:
+            candidate_key = (
+                *_quality_order(candidate),
+                *_candidate_order(candidate),
+            )
+        except PublisherError:
+            continue
+
+        incumbents = incumbents_by_channel[channel]
+
+        if len(incumbents) >= MAX_ROUTES_PER_CHANNEL:
+            weakest = incumbents[-1]
+            weakest_key = (
+                *_quality_order(weakest),
+                *_candidate_order(weakest),
+            )
+
+            if candidate_key >= weakest_key:
+                continue
+
         return candidate
+
+    return None
 
     return None
 
@@ -419,10 +482,16 @@ def process_batch(
             "每个频道最多保留线路数必须符合 MASTER_PLAN.md：2"
         )
 
-    # 严格验证历史准入线路，历史线路不得被新线路替换。
+    # 历史线路必须具备完整检测证据，且与本批候选共同参与质量竞争。
     existing = []
-    counts = {channel: 0 for channel in channels}
-    seen_urls = set()
+    historical_urls = set()
+    current_urls = {
+        item.get("normalized_url")
+        for item in candidates
+        if isinstance(item, dict)
+        and isinstance(item.get("normalized_url"), str)
+    }
+    history_counts = {channel: 0 for channel in channels}
 
     for index, route in enumerate(accepted_routes):
         if not isinstance(route, dict):
@@ -432,7 +501,7 @@ def process_batch(
 
         channel = route.get("channel")
 
-        if not isinstance(channel, str) or channel not in counts:
+        if not isinstance(channel, str) or channel not in history_counts:
             raise PublisherError(
                 f"历史第 {index + 1} 条线路频道无效"
             )
@@ -444,10 +513,12 @@ def process_batch(
                 f"历史第 {index + 1} 条线路 URL 无效"
             )
 
-        if url in seen_urls:
+        if url in historical_urls:
             raise PublisherError(
                 f"历史第 {index + 1} 条线路 URL 重复"
             )
+
+        historical_urls.add(url)
 
         try:
             _candidate_order(route)
@@ -456,85 +527,118 @@ def process_batch(
                 f"历史第 {index + 1} 条线路来源信息无效：{exc}"
             ) from exc
 
-        if counts[channel] >= MAX_ROUTES_PER_CHANNEL:
+        # 本批重新检测的线路以本批结果为准，不沿用旧检测结果。
+        if url in current_urls:
+            continue
+
+        prepared_route, _ = _prepare_candidate(route, channels)
+
+        # 历史线路缺少完整准入证据时，不得占据正式名额。
+        if prepared_route is None:
+            continue
+
+        if history_counts[channel] >= MAX_ROUTES_PER_CHANNEL:
             raise PublisherError(
-                f"历史频道 {channel} 已超过最多 2 条线路的限制"
+                f"历史频道 {channel} 已超过最多 2 条有效线路的限制"
             )
 
-        existing.append(dict(route))
-        seen_urls.add(url)
-        counts[channel] += 1
+        existing.append(prepared_route)
+        history_counts[channel] += 1
 
-    prepared = []
-    results = []
+    prepared_by_index = {}
+    rejected_by_index = {}
+    pool = []
 
-    # 本批先按视频质量排序，质量相同时再按来源优先级和来源顺序。
-    indexed = list(enumerate(candidates))
-
-    def sort_key(item):
-        index, candidate = item
-
-        if not isinstance(candidate, dict):
-            return (
-                float("inf"), float("inf"), float("inf"),
-                999999, 999999, index,
-            )
-
-        try:
-            priority, order = _candidate_order(candidate)
-        except PublisherError:
-            return (
-                float("inf"), float("inf"), float("inf"),
-                999999, 999999, index,
-            )
-
-        return (*_quality_order(candidate), priority, order, index)
-
-    indexed.sort(key=sort_key)
-
-    # 历史线路已经占据的位置不参与本批竞争。
-    for _, candidate in indexed:
+    for index, candidate in enumerate(candidates):
         route, reason = _prepare_candidate(candidate, channels)
 
         if route is None:
-            results.append({
+            rejected_by_index[index] = {
                 "candidate": candidate,
                 "status": REJECTED,
                 "reason": reason,
-            })
+            }
             continue
 
+        prepared_by_index[index] = route
+        pool.append((route, "current", index))
+
+    for index, route in enumerate(existing):
+        pool.append((route, "history", index))
+
+    # 历史线路与本批线路统一按质量排序。
+    # 质量相同时，才比较来源优先级和来源内顺序。
+    pool.sort(
+        key=lambda item: (
+            *_quality_order(item[0]),
+            *_candidate_order(item[0]),
+            0 if item[1] == "current" else 1,
+            item[2],
+        )
+    )
+
+    retained = []
+    counts = {channel: 0 for channel in channels}
+    seen_urls = set()
+    accepted_current = set()
+    rejected_reasons = {}
+
+    for route, origin, index in pool:
         url = route["normalized_url"]
         channel = route["channel"]
 
         if url in seen_urls:
-            results.append({
-                "candidate": candidate,
-                "status": REJECTED,
-                "reason": "线路 URL 已存在，不重复准入",
-            })
+            if origin == "current":
+                rejected_reasons[index] = "线路 URL 已存在，不重复准入"
             continue
 
         if counts[channel] >= MAX_ROUTES_PER_CHANNEL:
-            results.append({
-                "candidate": candidate,
-                "status": REJECTED,
-                "reason": "该频道已达到最多保留 2 条线路的上限",
-            })
+            if origin == "current":
+                rejected_reasons[index] = (
+                    "该频道质量排名未进入最终两条线路"
+                )
             continue
 
         seen_urls.add(url)
-        prepared.append(route)
+        retained.append(route)
         counts[channel] += 1
 
-        results.append({
-            "candidate": route,
-            "status": ACCEPTED,
-            "reason": route["selection"]["reason"],
-        })
+        if origin == "current":
+            accepted_current.add(index)
 
-    # 历史线路保持原有顺序，新线路追加到历史线路之后。
-    retained = existing + prepared
+    results = []
+
+    for index, candidate in enumerate(candidates):
+        if index in rejected_by_index:
+            results.append(rejected_by_index[index])
+        elif index in accepted_current:
+            route = prepared_by_index[index]
+            results.append({
+                "candidate": route,
+                "status": ACCEPTED,
+                "reason": route["selection"]["reason"],
+            })
+        else:
+            results.append({
+                "candidate": candidate,
+                "status": REJECTED,
+                "reason": rejected_reasons.get(
+                    index,
+                    "该频道质量排名未进入最终两条线路",
+                ),
+            })
+
+    all_reached = bool(channels) and all(
+        counts[channel] >= MAX_ROUTES_PER_CHANNEL
+        for channel in channels
+    )
+
+    return {
+        "results": results,
+        "accepted_routes": retained,
+        "channel_counts": counts,
+        "all_channels_reached": all_reached,
+    }
 
     all_reached = bool(channels) and all(
         counts[channel] >= MAX_ROUTES_PER_CHANNEL
