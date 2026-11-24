@@ -175,6 +175,15 @@ def _packet_bitrate(packets: Any) -> int | None:
 
     return round(total_bytes * 8 / duration)
 
+def _probe(url: str) -> dict[str, Any]:
+    command = [
+        "ffprobe",
+        "-v", "error",
+        "-rw_timeout", "10000000",
+        "-analyzeduration", "5000000",
+        "-probesize", "5000000",
+        "-read_intervals", f"%+{BITRATE_SAMPLE_SECONDS}",
+        "-select_streams", "v:0",
         "-show_streams",
         "-show_frames",
         "-show_packets",
@@ -182,6 +191,9 @@ def _packet_bitrate(packets: Any) -> int | None:
         "stream=codec_type,codec_name,width,height,field_order:"
         "frame=best_effort_timestamp_time:"
         "packet=pts_time,dts_time,size,duration_time",
+        "-of", "json",
+        url,
+    ]
 
     result = _run(command, PROBE_TIMEOUT)
 
