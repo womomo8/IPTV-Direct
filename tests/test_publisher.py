@@ -281,6 +281,78 @@ class PublisherAdmissionTests(unittest.TestCase):
             "https://example.com/manual.m3u8",
         )
 
+     def test_globalping_preselection_uses_quality_order(self):
+        """Globalping 检测前必须按视频质量从高到低选择候选。"""
+
+        low = make_candidate(
+            url="https://example.com/low.m3u8",
+            width=1280,
+            height=720,
+        )
+        high = make_candidate(
+            url="https://example.com/high.m3u8",
+            width=3840,
+            height=2160,
+        )
+        mid = make_candidate(
+            url="https://example.com/mid.m3u8",
+            width=1920,
+            height=1080,
+        )
+
+        selected = publisher.next_candidate_for_detection(
+            [low, high, mid],
+            [],
+            CHANNELS,
+            SETTINGS,
+        )
+
+        self.assertEqual(
+            selected["normalized_url"],
+            high["normalized_url"],
+        )
+
+    def test_globalping_preselection_skips_full_channel(self):
+        """一个频道已有两条 PASS，不得阻挡其他频道继续检测。"""
+
+        accepted = [
+            make_candidate(
+                url="https://example.com/cctv1-1.m3u8",
+                channel="CCTV-1",
+                source_order=0,
+            ),
+            make_candidate(
+                url="https://example.com/cctv1-2.m3u8",
+                channel="CCTV-1",
+                source_order=1,
+            ),
+        ]
+
+        full_channel = make_candidate(
+            url="https://example.com/cctv1-best.m3u8",
+            channel="CCTV-1",
+            width=3840,
+            height=2160,
+        )
+        other_channel = make_candidate(
+            url="https://example.com/cctv5.m3u8",
+            channel="CCTV-5",
+            width=1280,
+            height=720,
+        )
+
+        selected = publisher.next_candidate_for_detection(
+            [full_channel, other_channel],
+            accepted,
+            CHANNELS,
+            SETTINGS,
+        )
+
+        self.assertEqual(
+            selected["normalized_url"],
+            other_channel["normalized_url"],
+        )   
+    
     def test_historical_routes_are_never_replaced(self):
         """新线路质量更高，也不能挤掉历史准入线路。"""
 
