@@ -130,6 +130,37 @@ class ProbeSelectionTests(unittest.TestCase):
         self.assertTrue(all(item["country"] == "CN" for item in locations))
         self.assertTrue(all(item["tags"] == ["eyeball-network"] for item in locations))
 
+    def test_excludes_asns_already_used_by_same_candidate(self):
+        probes = [
+            {
+                "tags": ["eyeball-network"],
+                "location": {
+                    "country": "CN",
+                    "asn": 9808,
+                    "network": "China Mobile",
+                },
+            },
+            {
+                "tags": ["eyeball-network"],
+                "location": {
+                    "country": "CN",
+                    "asn": 4134,
+                    "network": "China Telecom",
+                },
+            },
+        ]
+
+        with patch.object(
+            gp, "_api_request", return_value=(200, probes, {})
+        ):
+            locations = gp.choose_probes(
+                1,
+                excluded_asns={9808},
+            )
+
+        self.assertEqual(len(locations), 1)
+        self.assertEqual(locations[0]["asn"], 4134)
+    
     def test_rejects_invalid_probe_limit(self):
         for value in (0, -1, True, "3"):
             with self.subTest(value=value):
