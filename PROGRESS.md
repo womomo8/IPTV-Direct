@@ -358,35 +358,40 @@ publisher.py 不应在所有来源检测尚未完成时，提前锁定最终两�
 
 `main.py` 当前通过 `iter_source_contents()` 接收来源。
 
-每个来源解析完成后，会立即进入该来源的批次检测流程。
+所有来源按既定顺序完成采集和解析，标准化后的候选线路统一汇总到全局候选池。
 
-目前没有先把所有来源的候选线路汇总成一个完整候选池。
+来源处理阶段只负责采集、解析、标准化和去重，不提前执行最终准入，也不提前占据频道线路名额。
 
 ### 2. 本地检测和视频检测
 
 当前 `main.py` 的 `run_source_batch_pipeline()`：
 
-1. 将当前来源的候选交给 checker.py。
-2. 本地检测通过的候选进入 stream.py。
-3. 视频质量明确 PASS 的候选才进入 Globalping 候选队列。
-4. 不合格或无法确认的线路保留相应检测状态。
+1. 接收所有来源汇总后的完整候选线路池。
+2. 将候选统一交给 checker.py 执行本地基础检测。
+3. 本地适用检测全部明确 PASS 的候选进入 stream.py。
+4. 视频质量明确 PASS 的候选才允许进入 Globalping 候选队列。
+5. FAIL 和 INCOMPLETE 保留各自真实检测状态，不进入后续不适用的检测环节。
 
-同一个来源批次内，进入 stream.py 的线路没有每频道两条的入口限制。
+所有来源的候选使用同一套检测标准，不因来源先后而区别对待。
 
 ### 3. Globalping 和 publisher 的当前关系
 
-当前流程不是全部来源完成 Globalping 后再统一选线路。
+当前流程已经改为所有来源候选汇总后统一检测和竞争。
 
-实际情况是：
+实际流程是：
 
-1. main.py 调用 publisher.next_candidate_for_detection()。
-2. publisher 根据当前累计准入线路、频道数量和候选质量，选择下一条 Globalping 候选。
-3. main.py 对选中的单条候选执行 Globalping。
-4. 每条检测完成后，立即调用 publisher.process_batch()。
-5. publisher 返回新的累计准入结果。
-6. main.py 更新累计线路后继续处理当前来源。
+1. main.py 将全部来源的候选统一交给 `run_source_batch_pipeline()`。
+2. 本地检测和视频质量检测完成后，形成允许进入 Globalping 的候选队列。
+3. main.py 调用 `publisher.next_candidate_for_detection()`，按照视频质量预排名选择下一条候选。
+4. 每次只对选中的一条候选执行 Globalping。
+5. Globalping 明确 PASS 的候选才计入该频道的临时通过数量；FAIL 和 INCOMPLETE 不占用名额。
+6. 同一频道已有两条 Globalping 明确 PASS 后，停止该频道后续候选的 Globalping 检测，不影响其他频道。
+7. 所有候选检测结果汇总完成后，main.py 统一调用一次 `publisher.process_batch()`。
+8. publisher.py 根据完整检测结果执行最终准入、频道数量控制和质量排名，再生成订阅。
 
-因此，早期来源可能先占据频道名额，后续来源即使存在质量更好的线路，也可能无法参与最终竞争。
+publisher.py 不会在各来源采集或检测过程中提前锁定最终准入名额。
+
+当前全局候选池流程消除了来源先后顺序对最终线路竞争的影响，使所有来源的合格候选能够按照统一质量规则参与竞争。
 
 ### 4. 当前历史线路处理
 
