@@ -44,6 +44,7 @@ def make_local(candidate, media_type="HLS"):
         "checks": checks,
     }
 
+
 def make_remote(candidate, status="PASS", measured=True):
     media_type = candidate.get("media_type", "HLS")
     checks = {
@@ -70,13 +71,35 @@ def make_remote(candidate, status="PASS", measured=True):
         "reason": "TS 内容由本地 checker.py 检测",
     }
 
+    stages = {}
+    probes = {}
+
+    for index, asn in enumerate((10001, 10002, 10003), start=1):
+        probe = {
+            "country": "CN",
+            "city": "Test",
+            "network": "Test Eyeball Network",
+            "asn": asn,
+        }
+        probes[f"probe_{index}"] = probe
+        stages[f"probe_{index}"] = {
+            "asn": asn,
+            "probe": probe,
+            "measurement_id": f"mock-measurement-{index}",
+            "status": status,
+            "checks": {
+                name: dict(item)
+                for name, item in checks.items()
+            },
+        }
+
     return {
         **make_local(candidate),
         "globalping": {
             "status": status,
             "checks": checks,
-            "stages": {},
-            "probes": {},
+            "stages": stages,
+            "probes": probes,
             "measurements": (
                 ["mock-measurement"] if measured else []
             ),
