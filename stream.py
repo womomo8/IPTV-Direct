@@ -134,6 +134,7 @@ def _probe(url: str) -> dict[str, Any]:
         "-select_streams", "v:0",
         "-show_streams",
         "-show_frames",
+        "-read_intervals", "%+3",
         "-show_entries",
         "stream=codec_type,codec_name,width,height,field_order:"
         "frame=best_effort_timestamp_time",
