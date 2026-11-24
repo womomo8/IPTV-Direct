@@ -621,6 +621,71 @@ class StatusAndFlowTests(unittest.TestCase):
         self.assertEqual(output[1]["globalping"]["status"], gp.INCOMPLETE)
         self.assertIn("停止", output[1]["globalping"]["error"])
 
+    def test_uncertain_measurement_creation_stops_later_candidates(self):
+        settings = {"max_probes": 3}
+        candidates = [
+            {
+                "id": "c1",
+                "media_type": "DIRECT_TS",
+                "normalized_url": "http://example.test/a.ts",
+            },
+            {
+                "id": "c2",
+                "media_type": "DIRECT_TS",
+                "normalized_url": "http://example.test/b.ts",
+            },
+        ]
+
+        with patch.object(
+            gp,
+            "read_limits",
+            return_value={"limit": 50, "remaining": 20, "reset": 1},
+        ), patch.object(
+            gp,
+            "_remaining_budget",
+            return_value=20,
+        ), patch.object(
+            gp,
+            "choose_probes",
+            return_value=[
+                {
+                    "country": "CN",
+                    "asn": 9808,
+                    "tags": ["eyeball-network"],
+                    "limit": 1,
+                }
+            ],
+        ) as probes, patch.object(
+            gp,
+            "_api_request",
+            side_effect=gp.GlobalpingError(
+                "模拟网络中断，测量创建结果未知"
+            ),
+        ) as request:
+            session = gp.create_session(settings)
+
+            output = gp.check_candidates(
+                candidates,
+                settings,
+                session=session,
+            )
+
+        self.assertTrue(session["budget"]["halted"])
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual(probes.call_count, 1)
+        self.assertEqual(
+            output[0]["globalping"]["status"],
+            gp.INCOMPLETE,
+        )
+        self.assertEqual(
+            output[1]["globalping"]["status"],
+            gp.INCOMPLETE,
+        )
+        self.assertIn(
+            "停止",
+            output[1]["globalping"]["error"],
+        )
+    
     def test_halted_budget_prevents_new_measurement(self):
         with patch.object(gp, "_api_request") as request:
             with self.assertRaises(gp.GlobalpingError):
