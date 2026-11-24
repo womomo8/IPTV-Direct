@@ -313,7 +313,13 @@ class StreamProbeMeasurementTests(unittest.TestCase):
 
         with self.assertRaises(stream.StreamQualityError):
             self.probe_with_data(data)
+    def test_out_of_order_frame_timestamps_are_rejected(self):
+        data = self.base_data()
+        data["frames"][2]["best_effort_timestamp_time"] = "0.02"
 
+        with self.assertRaises(stream.StreamQualityError):
+            self.probe_with_data(data)
+    
     def test_interlaced_field_order_is_identified(self):
         self.assertEqual(
             stream._classify_scan_type("tt"),
