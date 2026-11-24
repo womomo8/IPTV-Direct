@@ -310,40 +310,16 @@ def run_source_batch_pipeline(
         else:
             pending.append((index, item))
 
-    # 临时记录只用于控制每频道最多检测到两条 Globalping PASS。
-    # 最终准入统一在全部候选检测结束后执行。
-    provisional_routes = list(accepted_routes)
+    # 所有通过本地检测和视频质量检测的候选，
+    # 都必须逐条完成 Globalping 检测。
+    # 不得根据频道当前已有 PASS 数量提前停止。
     submitted_candidates: list[dict[str, Any]] = []
 
     session = None
     session_error = None
     session_created = False
 
-    while pending:
-        selected = publisher.next_candidate_for_detection(
-            [item for _, item in pending],
-            provisional_routes,
-            channels,
-            settings,
-        )
-
-        if selected is None:
-            break
-
-        pending_position = next(
-            (
-                position
-                for position, (_, item) in enumerate(pending)
-                if item is selected
-            ),
-            None,
-        )
-        if pending_position is None:
-            raise publisher.PublisherError(
-                "publisher 返回了不属于当前来源批次的候选"
-            )
-
-        original_index, candidate = pending.pop(pending_position)
+    for original_index, candidate in pending:
 
         if not session_created:
             session_created = True
@@ -370,7 +346,9 @@ def run_source_batch_pipeline(
                     not isinstance(remote_results, list)
                     or len(remote_results) != 1
                 ):
-                    raise ValueError("Globalping 返回数量与单条候选不一致")
+                    raise ValueError(
+                        "Globalping 返回数量与单条候选不一致"
+                    )
 
                 result = remote_results[0]
 
@@ -378,7 +356,9 @@ def run_source_batch_pipeline(
                     not isinstance(result, dict)
                     or _identity(result) != _identity(candidate)
                 ):
-                    raise ValueError("Globalping 返回候选身份不匹配")
+                    raise ValueError(
+                        "Globalping 返回候选身份不匹配"
+                    )
 
                 remote = result.get("globalping")
                 if (
@@ -387,7 +367,9 @@ def run_source_batch_pipeline(
                         PASS, FAIL, INCOMPLETE
                     )
                 ):
-                    raise ValueError("Globalping 缺少有效总体状态")
+                    raise ValueError(
+                        "Globalping 缺少有效总体状态"
+                    )
 
             except Exception as exc:
                 result = globalping.incomplete_result(
@@ -408,23 +390,21 @@ def run_source_batch_pipeline(
             if isinstance(remote, dict)
             else {}
         )
+
         has_measurement = (
-            isinstance(measurements, list) and bool(measurements)
+            isinstance(measurements, list)
+            and bool(measurements)
         ) or (
             isinstance(stages, dict)
             and any(
-                isinstance(stage, dict) and stage.get("measurement_id")
+                isinstance(stage, dict)
+                and stage.get("measurement_id")
                 for stage in stages.values()
             )
         )
+
         if has_measurement:
             submitted_candidates.append(result)
-
-        # Globalping 明确 PASS 才计入临时停止计数。
-        # 这里只用于决定该频道是否还需要继续检测，
-        # 不执行 publisher 最终准入。
-        if remote.get("status") == PASS:
-            provisional_routes.append(result)
 
     for index, candidate in pending:
         output[index] = globalping.incomplete_result(
