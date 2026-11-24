@@ -22,9 +22,6 @@ DECODE_TIMEOUT = 4
 MIN_WIDTH = 1920
 MIN_HEIGHT = 1080
 MIN_FPS = 23.0
-MIN_WIDTH = 1920
-MIN_HEIGHT = 1080
-MIN_FPS = 23.0
 ALLOWED_CODECS = {"h264", "hevc"}
 DECODE_FRAMES = 30
 
@@ -111,17 +108,8 @@ def _frame_rate_from_timestamps(frames: Any) -> float | None:
 
     return fps
 
-def _classify_scan_type(field_order: Any) -> str:
-    if not isinstance(field_order, str):
-        return "unknown"
-
-    if field_order == "progressive":
-        return "progressive"
-
-    if field_order in {"tt", "bb", "tb", "bt"}:
-        return "interlaced"
-
-    return "unknown"
+def _probe(url: str) -> dict[str, Any]:
+    """读取视频流元数据和实际帧时间戳。"""
 
     command = [
         "ffprobe",
@@ -311,8 +299,6 @@ def check_stream(url: str) -> dict[str, Any]:
                 f"{minimum_bitrate / 1_000_000:g} Mbps"
             )
             return result
-
-        _decode(url)
 
         result["reason"] = (
             "分辨率、编码、实际帧率和30帧解码检测通过"
