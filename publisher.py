@@ -119,10 +119,11 @@ def _globalping_required_checks(
     return None
 
 
+
 def _globalping_admission_reason(
     candidate: dict[str, Any],
 ) -> str | None:
-    """Globalping 总体必须 PASS，所有适用项目必须 PASS。"""
+    """核验 Globalping 总体、分项及三个不同 ASN 阶段的完整证据。"""
     remote = candidate.get("globalping")
 
     if not isinstance(remote, dict):
@@ -160,7 +161,76 @@ def _globalping_admission_reason(
                 f"{state or '缺少结果'}"
             )
 
+    stages = remote.get("stages")
+
+    expected_names = ("probe_1", "probe_2", "probe_3")
+
+    if not isinstance(stages, dict) or set(stages) != set(expected_names):
+        return "Globalping 缺少三个完整探针阶段记录"
+
+    used_asns = set()
+
+    for stage_name in expected_names:
+        stage = stages.get(stage_name)
+
+        if not isinstance(stage, dict):
+            return f"Globalping {stage_name} 阶段记录无效"
+
+        if stage.get("status") != PASS:
+            return f"Globalping {stage_name} 阶段没有明确 PASS"
+
+        asn = stage.get("asn")
+
+        if (
+            isinstance(asn, bool)
+            or not isinstance(asn, int)
+            or asn <= 0
+            or asn in used_asns
+        ):
+            return f"Globalping {stage_name} 阶段 ASN 无效或重复"
+
+        used_asns.add(asn)
+
+        probe = stage.get("probe")
+
+        if (
+            not isinstance(probe, dict)
+            or probe.get("country") != "CN"
+            or probe.get("asn") != asn
+            or not isinstance(probe.get("network"), str)
+            or not probe["network"].strip()
+        ):
+            return f"Globalping {stage_name} 探针身份信息不完整"
+
+        measurement_id = stage.get("measurement_id")
+
+        if not isinstance(measurement_id, str) or not measurement_id:
+            return f"Globalping {stage_name} 缺少测量 ID"
+
+        stage_checks = stage.get("checks")
+
+        if not isinstance(stage_checks, dict):
+            return f"Globalping {stage_name} 缺少分项检测结果"
+
+        if _status(stage_checks, "ts") != NA:
+            return f"Globalping {stage_name} TS 状态必须为 N/A"
+
+        if media_type == "DIRECT_TS":
+            if _status(stage_checks, "hls") != NA:
+                return f"Globalping {stage_name} HLS 状态必须为 N/A"
+
+        for name in required:
+            if _status(stage_checks, name) != PASS:
+                return (
+                    f"Globalping {stage_name} 的 {name.upper()} "
+                    "检测没有明确 PASS"
+                )
+
+    if len(used_asns) != 3:
+        return "Globalping 必须使用三个不同 ASN"
+
     return None
+
 
 def _quality_order(candidate: dict[str, Any]) -> tuple[float, float]:
     """按分辨率像素总量、实际帧率降序排列，异常值按 0 处理。"""
