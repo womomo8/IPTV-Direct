@@ -105,11 +105,23 @@ def _local_admission_reason(candidate: dict[str, Any]) -> str | None:
 
     return None
 
+def _globalping_required_checks(
+    media_type: str,
+) -> tuple[str, ...] | None:
+    """返回 Globalping 按媒体类型必须通过的检测项目。"""
+    if media_type == "HLS":
+        return ("ipv4", "http", "hls")
+
+    if media_type == "DIRECT_TS":
+        return ("ipv4", "http")
+
+    return None
+
 
 def _globalping_admission_reason(
     candidate: dict[str, Any],
 ) -> str | None:
-    """检查 Globalping 状态，允许符合规则的 INCOMPLETE 降级。"""
+    """Globalping 总体必须 PASS，所有适用项目必须 PASS。"""
     remote = candidate.get("globalping")
 
     if not isinstance(remote, dict):
@@ -117,14 +129,11 @@ def _globalping_admission_reason(
 
     overall = remote.get("status")
 
-    if overall == FAIL:
-        return "Globalping 检测明确失败"
-
-    if overall not in (PASS, INCOMPLETE):
-        return f"Globalping 总体状态无效：{overall}"
+    if overall != PASS:
+        return f"Globalping 总体状态不是 PASS：{overall}"
 
     media_type = candidate.get("media_type")
-    required = _required_checks(media_type)
+    required = _globalping_required_checks(media_type)
 
     if required is None:
         return "未知或不支持的媒体类型，不允许准入"
@@ -134,28 +143,23 @@ def _globalping_admission_reason(
     if not isinstance(checks, dict):
         return "缺少 Globalping 分项检测结果"
 
+    if _status(checks, "ts") != NA:
+        return "Globalping TS 状态必须为 N/A，由本地检测负责"
+
     if media_type == "DIRECT_TS":
         if _status(checks, "hls") != NA:
             return "Globalping 直接 TS 的 HLS 状态必须为 N/A"
 
-    states = [_status(checks, name) for name in required]
+    for name in required:
+        state = _status(checks, name)
 
-    if any(state is None for state in states):
-        return "Globalping 缺少适用检测项目的状态"
-
-    if FAIL in states:
-        return "Globalping 存在明确失败的检测项目"
-
-    if overall == PASS and any(state != PASS for state in states):
-        return "Globalping 总体 PASS 与分项检测结果不一致"
-
-    if overall == INCOMPLETE and any(
-        state not in (PASS, INCOMPLETE) for state in states
-    ):
-        return "Globalping INCOMPLETE 状态与分项检测结果不一致"
+        if state != PASS:
+            return (
+                f"Globalping {name.upper()} 检测未通过："
+                f"{state or '缺少结果'}"
+            )
 
     return None
-
 
 def _candidate_order(
     candidate: dict[str, Any],
