@@ -198,6 +198,37 @@ class PublisherReleaseTests(unittest.TestCase):
         ):
             self.publish(new)
 
+      def test_both_empty_old_files_are_blocked(self):
+        """两份旧订阅都存在但内容为空时，必须阻止覆盖。"""
+        self.output_dir.mkdir(parents=True)
+        (self.output_dir / "iptv.m3u").write_bytes(b"")
+        (self.output_dir / "iptv.txt").write_bytes(b"")
+
+        new = make_subscriptions([
+            ("CCTV-1", "https://example.com/new1.m3u8"),
+        ])
+
+        with self.assertRaisesRegex(
+            publisher.PublisherError,
+            "旧订阅损坏",
+        ):
+            self.publish(new)
+
+    def test_single_empty_old_file_is_blocked(self):
+        """只有一份空的旧订阅文件时，必须阻止覆盖。"""
+        self.output_dir.mkdir(parents=True)
+        (self.output_dir / "iptv.m3u").write_bytes(b"")
+
+        new = make_subscriptions([
+            ("CCTV-1", "https://example.com/new1.m3u8"),
+        ])
+
+        with self.assertRaisesRegex(
+            publisher.PublisherError,
+            "只有一份存在有效内容",
+        ):
+            self.publish(new)  
+    
     def test_corrupted_old_subscription_is_blocked(self):
         """旧订阅损坏时，必须阻止覆盖。"""
         self.output_dir.mkdir(parents=True)
