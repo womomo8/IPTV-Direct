@@ -91,6 +91,7 @@ class MainCollectionFlowTests(unittest.TestCase):
         settings,
         admission_side_effect,
         normalize_callback=None,
+        history_candidates=None,
     ):
         config = {
             "settings": settings,
@@ -123,7 +124,7 @@ class MainCollectionFlowTests(unittest.TestCase):
             ),
             patch(
                 "main._load_historical_candidates",
-                return_value=[],
+                return_value=history_candidates or [],
             ),
             patch(
                 "main.normalize_source_content",
@@ -271,6 +272,75 @@ class MainCollectionFlowTests(unittest.TestCase):
         self.assertEqual(admission_mock.call_count, 1)
         self.assertIn("达到有效来源上限 1", output)
         build_mock.assert_called_once()
+
+    def test_historical_duplicate_does_not_consume_candidate_limit(self):
+        consumed = []
+        received_candidates = []
+
+        history_url = "https://example.test/source0.m3u"
+
+        history = [{
+            "channel": CHANNEL,
+            "normalized_url": history_url,
+            "media_type": "HLS",
+            "source_type": "history",
+            "source_url": "history://output/iptv.m3u",
+        }]
+
+        def source_stream():
+            for index in range(3):
+                consumed.append(index)
+                yield make_source_item(index)
+
+        def normalize_callback(**kwargs):
+            source = kwargs["source"]
+            url = source["final_url"]
+            seen_urls = kwargs["seen_urls"]
+
+            if url in seen_urls:
+                return {
+                    "recognized": True,
+                    "format": "m3u",
+                    "extracted_candidates": 0,
+                    "duplicate_candidates": 1,
+                    "matched_target_candidates": 1,
+                    "candidates": [],
+                }
+
+            seen_urls.add(url)
+            return make_normalized(source)
+
+        def admit(candidates, accepted_routes, channels, settings):
+            received_candidates.extend(candidates)
+            return self.make_admission(accepted_routes)
+
+        result, _, _, admission_mock, _ = self.run_flow(
+            source_stream(),
+            make_settings(max_candidates_total=2),
+            admit,
+            normalize_callback=normalize_callback,
+            history_candidates=history,
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(consumed, [0, 1])
+        self.assertEqual(admission_mock.call_count, 1)
+
+        self.assertEqual(
+            [item["normalized_url"] for item in received_candidates],
+            [
+                history_url,
+                "https://example.test/source1.m3u",
+            ],
+        )
+
+        self.assertEqual(
+            len({
+                item["normalized_url"]
+                for item in received_candidates
+            }),
+            2,
+        )
     
     def test_candidate_total_limit_stops_before_next_source(self):
         consumed = []
