@@ -736,7 +736,6 @@ def _print_detection_summary(
                 f"{_safe_diagnostic_text(remote['error'])}"
             )
 
-
 def _safe_host_from_url(value: Any) -> str:
     """从 URL 提取主机名，不输出路径、查询参数或凭据。"""
     try:
@@ -744,11 +743,9 @@ def _safe_host_from_url(value: Any) -> str:
     except ValueError:
         return "无法识别"
 
-
 def _safe_host(candidate: dict[str, Any]) -> str:
     """只显示主机名，避免日志泄露 URL 参数或凭据。"""
     return _safe_host_from_url(candidate.get("normalized_url", ""))
-
 
 def _safe_diagnostic_text(value: Any) -> str:
     """保留错误原因，同时将其中的完整 URL 替换为主机名。"""
@@ -765,20 +762,17 @@ def _safe_diagnostic_text(value: Any) -> str:
 
     return pattern.sub(hide_url, text)
 
-
 def _print_manual_source_details(
     source: dict[str, Any],
     normalized: dict[str, Any],
     detected: list[dict[str, Any]],
     admission_results: list[dict[str, Any]],
 ) -> None:
-    """仅输出 manual.txt 来源的逐条采集、检测和准入结果。"""
-    if source.get("source_type") != "manual":
-        return
-
+    """输出各类来源的逐条采集、检测和准入结果。""
     candidates = normalized.get("candidates", [])
     print(
-        f"人工来源诊断：{source.get('name', '未命名来源')}；"
+        f"来源诊断（{source.get('source_type', '未知类型')}）："
+        f"{source.get('name', '未命名来源')}；"
         f"格式 {normalized.get('format', '未知')}；"
         f"提取 {normalized.get('extracted_candidates', 0)} 条；"
         f"匹配目标频道 {normalized.get('matched_target_candidates', 0)} 条；"
