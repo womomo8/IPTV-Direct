@@ -272,7 +272,7 @@ class StreamQualityTests(unittest.TestCase):
         max_decode = 0
 
         def fake_check(url, probe_semaphore, decode_semaphore):
-            nonlocal active_probe, active_decode
+            nonlocal active_probe, active_decode, max_probe, max_decode
             with lock:
                 calls[url] = calls.get(url, 0) + 1
 
