@@ -368,7 +368,6 @@ def run_source_batch_pipeline(
         )
         stream_started = time.perf_counter()
         try:
-        try:
             stream_results = stream.check_candidates(
                 stream_candidates,
                 settings["detection"],
@@ -572,7 +571,7 @@ def run_source_batch_pipeline(
         if has_measurement:
             submitted_candidates.append(result)
 
-         remote_status = (
+        remote_status = (
             result.get("globalping", {}).get("status", "未知")
             if isinstance(result.get("globalping"), dict)
             else "未知"
