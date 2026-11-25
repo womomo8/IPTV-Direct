@@ -118,7 +118,7 @@ class PublisherReleaseTests(unittest.TestCase):
         self.assertEqual(result["route_count"], 2)
 
     def test_more_than_fifty_percent_route_drop_is_blocked(self):
-        """线路数量下降超过50%，必须阻止发布。"""
+        """线路下降保护必须输出新旧数量、比例和未修改状态。"""
         old = four_routes_two_channels()
         new = make_subscriptions([
             ("CCTV-1", "https://example.com/new1.m3u8"),
@@ -128,11 +128,15 @@ class PublisherReleaseTests(unittest.TestCase):
         old_m3u = (self.output_dir / "iptv.m3u").read_bytes()
         old_txt = (self.output_dir / "iptv.txt").read_bytes()
 
-        with self.assertRaisesRegex(
-            publisher.PublisherError,
-            "线路数量下降超过50%",
-        ):
+        with self.assertRaises(publisher.PublisherError) as context:
             self.publish(new)
+
+        error = context.exception
+        self.assertIn("线路数量下降超过50%", str(error))
+        self.assertIn("旧线路 4 条", str(error))
+        self.assertIn("新线路 1 条", str(error))
+        self.assertIn("下降 75.0%", str(error))
+        self.assertEqual(error.subscription_state, "UNMODIFIED")
 
         self.assertEqual(
             (self.output_dir / "iptv.m3u").read_bytes(),
@@ -144,7 +148,7 @@ class PublisherReleaseTests(unittest.TestCase):
         )
 
     def test_more_than_fifty_percent_channel_drop_is_blocked(self):
-        """频道数量下降超过50%，必须阻止发布。"""
+        """频道下降保护必须输出新旧数量、比例和未修改状态。"""
         old = make_subscriptions([
             ("CCTV-1", "https://example.com/a1.m3u8"),
             ("CCTV-5", "https://example.com/a5.m3u8"),
@@ -158,11 +162,15 @@ class PublisherReleaseTests(unittest.TestCase):
 
         self.publish(old)
 
-        with self.assertRaisesRegex(
-            publisher.PublisherError,
-            "频道数量下降超过50%",
-        ):
+        with self.assertRaises(publisher.PublisherError) as context:
             self.publish(new)
+
+        error = context.exception
+        self.assertIn("频道数量下降超过50%", str(error))
+        self.assertIn("旧频道 4 个", str(error))
+        self.assertIn("新频道 1 个", str(error))
+        self.assertIn("下降 75.0%", str(error))
+        self.assertEqual(error.subscription_state, "UNMODIFIED")
 
     def test_exactly_fifty_percent_channel_drop_is_allowed(self):
         """频道数量恰好下降50%，允许发布。"""
