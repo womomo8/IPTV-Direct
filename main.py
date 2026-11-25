@@ -83,14 +83,6 @@ def _check_settings(settings: dict[str, Any]) -> None:
             "max_redirects",
         ),
         "globalping": ("max_probes",),
-        "stream": (
-            "probe_timeout_seconds",
-            "decode_timeout_seconds",
-            "decode_frames",
-            "probe_concurrency",
-            "decode_concurrency",
-            "ffmpeg_threads",
-        ),
         "selection": ("max_routes_per_channel",),
         "schedule": ("timezone", "daily_time"),
     }
@@ -358,10 +350,7 @@ def run_source_batch_pipeline(
 
     if stream_candidates:
         try:
-            stream_results = stream.check_candidates(
-                stream_candidates,
-                settings["stream"],
-            )
+            stream_results = stream.check_candidates(stream_candidates)
 
             if (
                 not isinstance(stream_results, list)
