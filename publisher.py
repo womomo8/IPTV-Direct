@@ -24,7 +24,15 @@ MAX_ROUTES_PER_CHANNEL = 2
 
 
 class PublisherError(ValueError):
-    """线路准入或订阅内容生成错误。"""
+    """线路准入或订阅内容生成错误，并记录正式订阅状态。"""
+
+    def __init__(
+        self,
+        message: str,
+        subscription_state: str = "UNKNOWN",
+    ):
+        super().__init__(message)
+        self.subscription_state = subscription_state
 
 
 def _status(checks: Any, name: str) -> str | None:
@@ -991,20 +999,51 @@ def publish_subscriptions(
                 f"旧订阅损坏，阻止覆盖：{exc}"
             ) from exc
 
+        old_channel_count = old_snapshot["channel_count"]
+        new_channel_count = new_snapshot["channel_count"]
+        old_route_count = old_snapshot["route_count"]
+        new_route_count = new_snapshot["route_count"]
+
+        channel_drop = (
+            (old_channel_count - new_channel_count)
+            / old_channel_count * 100
+            if old_channel_count
+            else 0
+        )
+
+        route_drop = (
+            (old_route_count - new_route_count)
+            / old_route_count * 100
+            if old_route_count
+            else 0
+        )
+
         if (
-            new_snapshot["channel_count"] * 2
-            < old_snapshot["channel_count"]
+            new_channel_count * 2
+            < old_channel_count
         ):
             raise PublisherError(
-                "频道数量下降超过50%，阻止发布"
+                f"频道数量下降超过50%，阻止发布；"
+                f"旧频道 {old_channel_count} 个；"
+                f"新频道 {new_channel_count} 个；"
+                f"下降 {channel_drop:.1f}%；"
+                f"旧线路 {old_route_count} 条；"
+                f"新线路 {new_route_count} 条。",
+                subscription_state="UNMODIFIED",
             )
 
         if (
-            new_snapshot["route_count"] * 2
-            < old_snapshot["route_count"]
+            new_route_count * 2
+            < old_route_count
         ):
             raise PublisherError(
-                "线路数量下降超过50%，阻止发布"
+                f"线路数量下降超过50%，阻止发布；"
+                f"旧线路 {old_route_count} 条；"
+                f"新线路 {new_route_count} 条；"
+                f"下降 {route_drop:.1f}%；"
+                f"旧频道 {old_channel_count} 个；"
+                f"新频道 {new_channel_count} 个。",
+                subscription_state="UNMODIFIED",
             )
 
     new_data = [
@@ -1070,11 +1109,13 @@ def publish_subscriptions(
             if rollback_errors:
                 raise PublisherError(
                     f"发布失败：{publish_error}；"
-                    f"回滚失败：{'；'.join(rollback_errors)}"
+                    f"回滚失败：{'；'.join(rollback_errors)}",
+                    subscription_state="ROLLBACK_FAILED",
                 ) from publish_error
 
             raise PublisherError(
-                f"发布失败，旧文件已恢复：{publish_error}"
+                f"发布失败，旧文件已恢复：{publish_error}",
+                subscription_state="RESTORED",
             ) from publish_error
 
     finally:
