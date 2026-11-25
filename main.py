@@ -529,7 +529,7 @@ def run_source_batch_pipeline(
                     asn_text = f"；ASN {asn}" if asn else ""
 
                     if event_type == "stage_started":
-                        message = f"探针阶段开始{asn_text}。"
+                        message = "探针阶段开始。"
                     elif event_type == "measurement_stage_started":
                         message = "测量子阶段开始。"
                     elif event_type == "measurement_created":
