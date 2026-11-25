@@ -768,7 +768,7 @@ def _print_manual_source_details(
     detected: list[dict[str, Any]],
     admission_results: list[dict[str, Any]],
 ) -> None:
-    """输出各类来源的逐条采集、检测和准入结果。""
+"""输出各类来源的逐条采集、检测和准入结果。"""
     candidates = normalized.get("candidates", [])
     print(
         f"来源诊断（{source.get('source_type', '未知类型')}）："
