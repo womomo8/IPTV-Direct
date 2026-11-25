@@ -345,8 +345,7 @@ def run_source_batch_pipeline(
         f"[本地检测] 完成：返回 {len(local_results)} 条；"
         f"耗时 {time.perf_counter() - local_started:.2f} 秒。",
         flush=True,
-    )
-    
+    )    
     stream_indices = [
         index
         for index, item in enumerate(local_results)
@@ -403,8 +402,7 @@ def run_source_batch_pipeline(
             f"[视频检测] 完成：处理 {len(stream_candidates)} 条；"
             f"耗时 {time.perf_counter() - stream_started:.2f} 秒。",
             flush=True,
-        )
-    
+        )   
     output: list[dict[str, Any] | None] = [None] * len(candidates)
     pending: list[tuple[int, dict[str, Any]]] = []
 
@@ -581,8 +579,7 @@ def run_source_batch_pipeline(
             f"状态 {remote_status}；"
             f"耗时 {time.perf_counter() - globalping_started:.2f} 秒。",
             flush=True,
-        )  
-    
+        )    
     completed_results = []
 
     for index, result in enumerate(output):
@@ -756,8 +753,7 @@ def _print_detection_summary(
         f"FAIL {stream_counts[FAIL]} 条；"
         f"INCOMPLETE {stream_counts[INCOMPLETE]} 条；"
         f"未进入视频检测 {len(results) - stream_checked} 条。"
-    )    
-    
+    )        
     for index, item in enumerate(submitted_items, 1):
         remote = item.get("globalping", {})
         if not isinstance(remote, dict):
@@ -958,8 +954,7 @@ def run_formal_flow(config: dict[str, Any]) -> int:
             file=sys.stderr,
         )
         print("正式订阅未修改。", file=sys.stderr)
-        return 1   
-    
+        return 1    
     # 历史线路作为普通候选重新检测。
     # 先加入统一候选池，避免新来源重复线路再次占用总额度。
     seen_urls: set[str] = {
@@ -1110,8 +1105,7 @@ def run_formal_flow(config: dict[str, Any]) -> int:
 
         if stop_reason:
             stopped = stop_reason
-            break
-    
+            break    
     if all_candidates:
         try:
             (
@@ -1189,8 +1183,7 @@ def run_formal_flow(config: dict[str, Any]) -> int:
                     f"{channel} {count}/2"
                     for channel, count in admission["channel_counts"].items()
                 )
-            )    
-    
+            )        
     print(
         f"来源汇总：有效来源 {valid_sources}；"
         f"累计提取候选 {extracted_total}；"
