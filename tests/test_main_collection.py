@@ -529,6 +529,55 @@ class GlobalpingSummaryTests(unittest.TestCase):
 
         self.assertNotIn("token=secret", report)
 
+class SourceDiagnosticTests(unittest.TestCase):
+
+    def test_manual_and_automatic_sources_both_print_details(self):
+        for source_type in ("manual", "automatic"):
+            with self.subTest(source_type=source_type):
+                source = {
+                    "name": "模拟来源",
+                    "source_type": source_type,
+                }
+                candidate = {
+                    "channel": CHANNEL,
+                    "normalized_url": "https://example.test/live.m3u8",
+                }
+                normalized = {
+                    "format": "m3u",
+                    "extracted_candidates": 1,
+                    "matched_target_candidates": 1,
+                    "duplicate_candidates": 0,
+                    "candidates": [candidate],
+                }
+                detected = [{
+                    **candidate,
+                    "checks": {
+                        "ipv4": {
+                            "status": "FAIL",
+                            "reason": "模拟 IPv4 检测失败",
+                        },
+                    },
+                    "globalping": {
+                        "status": "INCOMPLETE",
+                        "error": "未进入远程检测",
+                    },
+                }]
+
+                output = io.StringIO()
+
+                with contextlib.redirect_stdout(output):
+                    main._print_manual_source_details(
+                        source,
+                        normalized,
+                        detected,
+                        [],
+                    )
+
+                report = output.getvalue()
+
+                self.assertIn(source_type, report)
+                self.assertIn("模拟 IPv4 检测失败", report)
+                self.assertIn("未进入远程检测", report)
 
 if __name__ == "__main__":
     unittest.main()
