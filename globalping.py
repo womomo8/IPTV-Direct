@@ -981,7 +981,7 @@ def _run_hls(
         media_url = url
         media_parsed = parsed
 
-         if parsed["kind"] == "master":
+        if parsed["kind"] == "master":
             media_url = parsed["child_url"]
             if progress_callback is None:
                 media_id, media_measurement = _stage(
