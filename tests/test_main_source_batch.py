@@ -244,6 +244,36 @@ class SourceBatchPipelineTests(unittest.TestCase):
             "[本地检测] 进度：已完成 1/1 条。",
             flush=True,
         )
+
+    def test_globalping_progress_callback_logs_probe_stage(self):
+        candidates = [
+            make_candidate("频道一", 1),
+        ]
+
+        (
+            _,
+            _,
+            _,
+            _,
+            remote,
+        ) = self.run_batch(candidates)
+
+        callback = remote.call_args.kwargs.get(
+            "progress_callback"
+        )
+        self.assertTrue(callable(callback))
+
+        with patch("builtins.print") as print_mock:
+            callback({
+                "event": "stage_started",
+                "stage": "probe_1",
+                "asn": 12345,
+            })
+
+        print_mock.assert_called_once_with(
+            "[Globalping] 频道一；主机 example.test；第一 ASN 探针阶段；ASN 12345；探针阶段开始。",
+            flush=True,
+        )
     
     def test_only_stream_pass_can_enter_globalping(self):
         """FAIL、INCOMPLETE 和无效状态均不得进入 Globalping。"""
