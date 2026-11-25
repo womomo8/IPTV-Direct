@@ -9,6 +9,7 @@ import argparse
 import json
 import re
 import sys
+import time
 import unittest
 from pathlib import Path
 from typing import Any
@@ -307,6 +308,11 @@ def run_source_batch_pipeline(
     target_channels = {channel.casefold() for channel in channels}
     originals = [_identity(item) for item in candidates]
 
+    print(
+        f"[本地检测] 开始：待检测 {len(candidates)} 条。",
+        flush=True,
+    )
+    local_started = time.perf_counter()
     try:
         local_results = checker.check_candidates(
             candidates, settings["detection"]
@@ -334,6 +340,13 @@ def run_source_batch_pipeline(
             }
             for item in candidates
         ]
+
+    print(
+        f"[本地检测] 完成：返回 {len(local_results)} 条；"
+        f"耗时 {time.perf_counter() - local_started:.2f} 秒。",
+        flush=True,
+    )
+    
     stream_indices = [
         index
         for index, item in enumerate(local_results)
@@ -349,6 +362,12 @@ def run_source_batch_pipeline(
     ]
 
     if stream_candidates:
+        print(
+            f"[视频检测] 开始：待检测 {len(stream_candidates)} 条。",
+            flush=True,
+        )
+        stream_started = time.perf_counter()
+        try:
         try:
             stream_results = stream.check_candidates(
                 stream_candidates,
@@ -380,6 +399,13 @@ def run_source_batch_pipeline(
                         "reason": reason,
                     },
                 }
+
+        print(
+            f"[视频检测] 完成：处理 {len(stream_candidates)} 条；"
+            f"耗时 {time.perf_counter() - stream_started:.2f} 秒。",
+            flush=True,
+        )
+    
     output: list[dict[str, Any] | None] = [None] * len(candidates)
     pending: list[tuple[int, dict[str, Any]]] = []
 
@@ -452,7 +478,14 @@ def run_source_batch_pipeline(
     session_error = None
     session_created = False
 
-    for original_index, candidate in pending:
+    for progress_index, (original_index, candidate) in enumerate(pending, 1):
+        globalping_started = time.perf_counter()
+        print(
+            f"[Globalping] 进度 {progress_index}/{len(pending)}："
+            f"{candidate.get('channel', '未知频道')}；"
+            f"目标主机 {_safe_host(candidate)}。",
+            flush=True,
+        )
 
         if not session_created:
             session_created = True
@@ -539,6 +572,18 @@ def run_source_batch_pipeline(
         if has_measurement:
             submitted_candidates.append(result)
 
+         remote_status = (
+            result.get("globalping", {}).get("status", "未知")
+            if isinstance(result.get("globalping"), dict)
+            else "未知"
+        )
+        print(
+            f"[Globalping] 完成 {progress_index}/{len(pending)}："
+            f"状态 {remote_status}；"
+            f"耗时 {time.perf_counter() - globalping_started:.2f} 秒。",
+            flush=True,
+        )  
+    
     completed_results = []
 
     for index, result in enumerate(output):
@@ -550,11 +595,22 @@ def run_source_batch_pipeline(
 
     # 所有候选完成本地、视频和适用的 Globalping 检测后，
     # 才统一交给 publisher 执行最终准入。
+    print(
+        f"[准入] 开始：待处理候选 {len(completed_results)} 条。",
+        flush=True,
+    )
+    admission_started = time.perf_counter()
+
     admission = publisher.process_batch(
         completed_results,
         accepted_routes,
         channels,
         settings,
+    )
+
+    print(
+        f"[准入] 完成：耗时 {time.perf_counter() - admission_started:.2f} 秒。",
+        flush=True,
     )
 
     returned = admission.get("results")
