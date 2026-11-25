@@ -452,12 +452,5 @@ publisher.py 不应在所有来源检测尚未完成时，提前锁定最终两�
 
 ### 8.5 后续工作
 
-- [ ] main.py 同时显示 ASN 外层阶段和清单内层阶段；区分尝试检测、实际创建测量、未进入检测；不能漏掉测量创建前的异常
-- [ ] publisher.py 最终准入增加 eyeball-network 标签核验
-- [ ] tests/test_globalping.py 验证回调全链路、阶段名称、轮询和旧调用兼容
-- [ ] tests/test_main_source_batch.py 验证双层阶段日志
-- [ ] tests/test_main_collection.py 验证测量创建前异常也能进入汇总
-- [ ] tests/test_publisher.py 验证缺失探
-
 
 **最终目标：所有来源的线路公平参与完整检测和统一质量竞争，每个频道只发布质量最好的两条线路。**
