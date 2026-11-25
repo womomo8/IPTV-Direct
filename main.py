@@ -466,9 +466,6 @@ def run_source_batch_pipeline(
     # 所有通过本地检测和视频质量检测的候选，
     # 都必须逐条完成 Globalping 检测。
     # 不得根据频道当前已有 PASS 数量提前停止。
-    # 所有通过本地检测和视频质量检测的候选，
-    # 都必须逐条完成 Globalping 检测。
-    # 不得根据频道当前已有 PASS 数量提前停止。
     submitted_candidates: list[dict[str, Any]] = []
 
     session = None
@@ -896,21 +893,6 @@ def _print_manual_source_details(
 # ----------------------------------------------------------------------
 # publisher 交接与停止条件
 # ----------------------------------------------------------------------
-
-def process_admission_batch(
-    candidates: list[dict[str, Any]],
-    accepted_routes: list[dict[str, Any]],
-    channels: list[str],
-    settings: dict[str, Any],
-) -> dict[str, Any]:
-    """将本批完整检测结果交给 publisher 执行正式准入。"""
-
-    return publisher.process_batch(
-        candidates=candidates,
-        accepted_routes=accepted_routes,
-        channels=channels,
-        settings=settings,
-    )
 
 def _collection_stop_reason(
     valid_sources: int,
