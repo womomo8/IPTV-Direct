@@ -505,10 +505,74 @@ def run_source_batch_pipeline(
             )
         else:
             try:
+                def report_globalping_progress(event):
+                    if not isinstance(event, dict):
+                        return
+
+                    event_type = event.get("event")
+                    stage = event.get("stage") or event.get(
+                        "stage_name", "未知阶段"
+                    )
+                    stage_labels = {
+                        "probe_1": "第一 ASN 探针阶段",
+                        "probe_2": "第二 ASN 探针阶段",
+                        "probe_3": "第三 ASN 探针阶段",
+                        "main_playlist": "主清单",
+                        "media_playlist": "媒体子清单",
+                    }
+                    stage_label = stage_labels.get(stage, stage)
+                    prefix = (
+                        f"[Globalping] {candidate.get('channel', '未知频道')}；"
+                        f"主机 {_safe_host(candidate)}；{stage_label}"
+                    )
+                    asn = event.get("asn")
+                    asn_text = f"；ASN {asn}" if asn else ""
+
+                    if event_type == "stage_started":
+                        message = f"探针阶段开始{asn_text}。"
+                    elif event_type == "measurement_stage_started":
+                        message = "测量子阶段开始。"
+                    elif event_type == "measurement_created":
+                        message = (
+                            f"测量已创建；测量ID "
+                            f"{event.get('measurement_id') or '未知'}。"
+                        )
+                    elif event_type == "measurement_polling":
+                        message = (
+                            f"测量进行中；状态 {event.get('status', '未知')}；"
+                            f"已等待 {event.get('elapsed_seconds', 0)} 秒。"
+                        )
+                    elif event_type == "measurement_finished":
+                        message = (
+                            f"测量轮询结束；状态 {event.get('status', '未知')}；"
+                            f"耗时 {event.get('elapsed_seconds', 0)} 秒。"
+                        )
+                    elif event_type == "measurement_stage_completed":
+                        message = (
+                            f"测量子阶段完成；状态 {event.get('status', '未知')}；"
+                            f"测量ID {event.get('measurement_id') or '未知'}；"
+                            f"耗时 {event.get('elapsed_seconds', 0)} 秒。"
+                        )
+                    elif event_type == "measurement_stage_failed":
+                        message = (
+                            f"测量子阶段失败；状态 {event.get('status', '未知')}；"
+                            f"原因：{_safe_diagnostic_text(event.get('reason') or '未提供')}。"
+                        )
+                    elif event_type == "stage_completed":
+                        message = (
+                            f"探针阶段完成；状态 {event.get('status', '未知')}；"
+                            f"测量ID {', '.join(event.get('measurement_ids', [])) or '无'}。"
+                        )
+                    else:
+                        return
+
+                    print(f"{prefix}{asn_text}；{message}", flush=True)
+
                 remote_results = globalping.check_candidates(
                     [candidate],
                     settings["globalping"],
                     session=session,
+                    progress_callback=report_globalping_progress,
                 )
 
                 if (
