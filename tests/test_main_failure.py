@@ -183,5 +183,40 @@ class MainFormalFailureTests(unittest.TestCase):
         publish_mock.assert_called_once()
         self.assertIn("正式订阅发布失败", errors)
 
+    def test_admission_results_are_printed_individually(self):
+        """最终准入日志必须逐条输出状态和原因。"""
+
+        results = [
+            {
+                "candidate": {
+                    "channel": CHANNEL,
+                    "normalized_url": "https://example.test/a.m3u8",
+                },
+                "status": publisher.ACCEPTED,
+                "reason": "检测通过",
+            },
+            {
+                "candidate": {
+                    "channel": CHANNEL,
+                    "normalized_url": "https://example.test/b.m3u8",
+                },
+                "status": publisher.REJECTED,
+                "reason": "质量排名未进入最终两条线路",
+            },
+        ]
+
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            main._print_admission_results(results)
+
+        content = output.getvalue()
+
+        self.assertIn("第 1 条", content)
+        self.assertIn("第 2 条", content)
+        self.assertIn("ACCEPTED", content)
+        self.assertIn("REJECTED", content)
+        self.assertIn("质量排名未进入最终两条线路", content)
+
 if __name__ == "__main__":
     unittest.main()
