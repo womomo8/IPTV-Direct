@@ -350,7 +350,10 @@ def run_source_batch_pipeline(
 
     if stream_candidates:
         try:
-            stream_results = stream.check_candidates(stream_candidates)
+            stream_results = stream.check_candidates(
+                stream_candidates,
+                settings["detection"],
+            )
 
             if (
                 not isinstance(stream_results, list)
