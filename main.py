@@ -880,23 +880,16 @@ def _print_manual_source_details(
         )
         for check_name in ("ipv4", "http", "hls", "ts"):
             detail = checks.get(check_name, {})
-            if isinstance(detail, dict):
-                print(
-                    f"      {check_name.upper()}："
-                    f"{detail.get('status', '未执行')}；"
-                    f"{_safe_diagnostic_text(detail.get('reason') or '无原因说明')}"
-                )
         if isinstance(remote, dict):
             print(
                 f"      Globalping：{remote.get('status', '未执行')}；"
                 f"{_safe_diagnostic_text(remote.get('error') or '无异常说明')}"
             )
-            
+
         print(
             f"      正式准入：{admission.get('status', '未进入准入')}；"
             f"{_safe_diagnostic_text(admission.get('reason') or '无原因说明')}"
         )
-
 
 # ----------------------------------------------------------------------
 # publisher 交接与停止条件
