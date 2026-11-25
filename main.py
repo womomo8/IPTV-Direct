@@ -510,8 +510,8 @@ def run_source_batch_pipeline(
                         return
 
                     event_type = event.get("event")
-                    stage = event.get("stage") or event.get(
-                        "stage_name", "未知阶段"
+                    stage = event.get("stage_name") or event.get(
+                        "stage", "未知阶段"
                     )
                     stage_labels = {
                         "probe_1": "第一 ASN 探针阶段",
