@@ -18,6 +18,15 @@
     "max_ts_read_bytes": 65536,
     "max_redirects": 5
   },
+    },
+  "stream": {
+    "probe_timeout_seconds": 12,
+    "decode_timeout_seconds": 4,
+    "decode_frames": 30,
+    "probe_concurrency": 12,
+    "decode_concurrency": 4,
+    "ffmpeg_threads": 1
+  },
   "globalping": {
     "max_probes": 3
   },
