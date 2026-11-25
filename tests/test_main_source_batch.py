@@ -214,6 +214,32 @@ class SourceBatchPipelineTests(unittest.TestCase):
             remote,
         )
 
+    def test_local_detection_progress_callback_is_passed_and_logs(self):
+        candidates = [
+            make_candidate("频道一", 1),
+        ]
+
+        (
+            _,
+            local,
+            _,
+            _,
+            _,
+        ) = self.run_batch(candidates)
+
+        callback = local.call_args.kwargs.get(
+            "progress_callback"
+        )
+        self.assertTrue(callable(callback))
+
+        with patch("builtins.print") as print_mock:
+            callback(1, 1)
+
+        print_mock.assert_called_once_with(
+            "[本地检测] 进度：已完成 1/1 条。",
+            flush=True,
+        )
+    
     def test_only_stream_pass_can_enter_globalping(self):
         """FAIL、INCOMPLETE 和无效状态均不得进入 Globalping。"""
 
