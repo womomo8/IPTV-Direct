@@ -954,6 +954,52 @@ class StatusAndFlowTests(unittest.TestCase):
         probes.assert_not_called()
         stage.assert_not_called()
 
+    def test_stage_name_is_preserved_in_measurement_polling_progress(self):
+        def wait_side_effect(
+            measurement_id,
+            budget,
+            progress_callback=None,
+        ):
+            progress_callback({
+                "event": "measurement_polling",
+                "measurement_id": measurement_id,
+                "status": "in-progress",
+                "elapsed_seconds": 5,
+            })
+            return {"status": "finished", "results": []}
+
+        for stage_name in ("main_playlist", "media_playlist"):
+            with self.subTest(stage_name=stage_name):
+                events = []
+
+                with patch.object(
+                    gp,
+                    "_create_measurement",
+                    return_value="measurement-1",
+                ), patch.object(
+                    gp,
+                    "_wait_measurement",
+                    side_effect=wait_side_effect,
+                ):
+                    gp._stage(
+                        "http://example.test/playlist.m3u8",
+                        [],
+                        {"remaining": 1},
+                        progress_callback=events.append,
+                        stage_name=stage_name,
+                    )
+
+                polling_events = [
+                    event
+                    for event in events
+                    if event.get("event") == "measurement_polling"
+                ]
+                self.assertEqual(len(polling_events), 1)
+                self.assertEqual(
+                    polling_events[0].get("stage_name"),
+                    stage_name,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
