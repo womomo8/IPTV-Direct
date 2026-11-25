@@ -981,24 +981,24 @@ def _run_hls(
         media_url = url
         media_parsed = parsed
 
-        if parsed["kind"] == "master":
+         if parsed["kind"] == "master":
             media_url = parsed["child_url"]
             if progress_callback is None:
-        if progress_callback is None:
-            main_id, main_measurement = _stage(
-                url, locations, budget, headers=headers
-            )
-        else:
-            main_id, main_measurement = _stage(
-                url,
-                locations,
-                budget,
-                headers=headers,
-                progress_callback=report_stage_progress,
-                stage_name="主清单",
-            )
-        measurements.append(main_id)
-        main_results = _result_map(main_measurement, locations)           
+                media_id, media_measurement = _stage(
+                    media_url, main_id, budget
+                )
+            else:
+                media_id, media_measurement = _stage(
+                    media_url,
+                    main_id,
+                    budget,
+                    progress_callback=progress_callback,
+                    stage_name="media_playlist",
+                )
+
+            measurements.append(media_id)
+            media_results = _result_map(media_measurement, expected_probe_key=selected_key)
+            media_item = media_results.get(selected_key)          
 
             if media_item is None:
                 raise GlobalpingError(
