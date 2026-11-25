@@ -659,20 +659,28 @@ def run_source_batch_pipeline(
             )
         completed_results.append(result)
 
-    # 所有候选完成本地、视频和适用的 Globalping 检测后，
-    # 才统一交给 publisher 执行最终准入。
+    # 所有候选完成检测后，先输出完整检测汇总，再执行最终准入。
+    _print_detection_summary(
+        completed_results,
+        submitted_candidates,
+    )
+
     print(
         f"[准入] 开始：待处理候选 {len(completed_results)} 条。",
         flush=True,
     )
     admission_started = time.perf_counter()
 
-    admission = publisher.process_batch(
-        completed_results,
-        accepted_routes,
-        channels,
-        settings,
-    )
+    try:
+        admission = publisher.process_batch(
+            completed_results,
+            accepted_routes,
+            channels,
+            settings,
+        )
+    except publisher.PublisherError as exc:
+        exc.detection_results = completed_results
+        raise
 
     print(
         f"[准入] 完成：耗时 {time.perf_counter() - admission_started:.2f} 秒。",
@@ -884,6 +892,29 @@ def _safe_diagnostic_text(value: Any) -> str:
         return _safe_host_from_url(raw) + suffix
 
     return pattern.sub(hide_url, text)
+
+def _print_admission_results(results: list[dict[str, Any]]) -> None:
+    """逐条输出最终准入状态和拒绝原因。"""
+
+    for index, item in enumerate(results, 1):
+        candidate = item.get("candidate", {})
+        if not isinstance(candidate, dict):
+            candidate = {}
+
+        channel = candidate.get("channel", "未知频道")
+        host = _safe_host(candidate)
+        status = item.get("status", "UNKNOWN")
+        reason = _safe_diagnostic_text(
+            item.get("reason") or "未提供"
+        )
+
+        print(
+            f"[最终准入] 第 {index} 条；"
+            f"频道 {channel}；"
+            f"主机 {host}；"
+            f"结果 {status}；"
+            f"原因：{reason}"
+        )
 
 def _print_manual_source_details(
     source: dict[str, Any],
@@ -1110,19 +1141,24 @@ def run_formal_flow(config: dict[str, Any]) -> int:
                 channels=channels,
             )
         except publisher.PublisherError as exc:
+            detection_results = getattr(
+                exc,
+                "detection_results",
+                None,
+            )
+            if isinstance(detection_results, list):
+                detected.extend(detection_results)
+
             errors.append(f"线路准入系统错误：{exc}")
             stopped = "publisher 正式准入发生系统错误"
             system_error = True
         else:
             detected.extend(batch_results)
 
-            _print_detection_summary(
-                batch_results,
-                submitted_candidates,
-            )
+            admission_results = admission["results"]
+            _print_admission_results(admission_results)
 
             accepted_routes = admission["accepted_routes"]
-            admission_results = admission["results"]
 
             for source_record in source_records:
                 identities = {
@@ -1235,13 +1271,28 @@ def run_formal_flow(config: dict[str, Any]) -> int:
             output_dir=ROOT / "output",
         )
     except Exception as exc:
+        subscription_state = getattr(
+            exc,
+            "subscription_state",
+            "UNKNOWN",
+        )
+
+        state_messages = {
+            "UNMODIFIED": "正式订阅未修改。",
+            "RESTORED": "正式订阅已恢复为旧版本。",
+            "ROLLBACK_FAILED": "正式订阅回滚失败，旧文件状态未能确认。",
+            "UNKNOWN": "正式订阅状态无法确认，需要检查正式文件。",
+        }
+
         print(
             f"第9阶段正式订阅发布失败：{exc}",
             file=sys.stderr,
         )
         print(
-            "请检查发布保护和回滚结果；"
-            "本轮不能视为发布成功。",
+            state_messages.get(
+                subscription_state,
+                state_messages["UNKNOWN"],
+            ),
             file=sys.stderr,
         )
         return 1
