@@ -910,10 +910,15 @@ def run_formal_flow(config: dict[str, Any]) -> int:
         print("正式订阅未修改。", file=sys.stderr)
         return 1   
     
-    seen_urls: set[str] = set()
+    # 历史线路作为普通候选重新检测。
+    # 先加入统一候选池，避免新来源重复线路再次占用总额度。
+    seen_urls: set[str] = {
+        candidate["normalized_url"]
+        for candidate in history_candidates
+    }
     errors: list[str] = []
     detected: list[dict[str, Any]] = []
-    all_candidates: list[dict[str, Any]] = []
+    all_candidates: list[dict[str, Any]] = list(history_candidates)
     source_records: list[dict[str, Any]] = []
 
     accepted_routes: list[dict[str, Any]] = []
@@ -924,7 +929,7 @@ def run_formal_flow(config: dict[str, Any]) -> int:
     }
 
     valid_sources = 0
-    extracted_total = len(history_candidates)
+    extracted_total = len(all_candidates)
     duplicate_total = 0
     stopped = "所有配置来源均已处理"
     system_error = False
@@ -1056,28 +1061,6 @@ def run_formal_flow(config: dict[str, Any]) -> int:
         if stop_reason:
             stopped = stop_reason
             break
-
-     # 历史线路必须重新检测，不能直接作为已准入线路。
-    history_added = 0
-
-    for candidate in history_candidates:
-        url = candidate["normalized_url"]
-
-        # 同一 URL 只保留一个候选。
-        # 如果新来源已经提供该线路，以新来源候选为准。
-        if url in seen_urls:
-            duplicate_total += 1
-            continue
-
-        seen_urls.add(url)
-        all_candidates.append(candidate)
-        history_added += 1
-
-    if history_candidates:
-        print(
-            f"历史订阅重新加入本轮检测：{history_added} 条；"
-            f"与新来源重复 {len(history_candidates) - history_added} 条。"
-        )   
     
     if all_candidates:
         try:
