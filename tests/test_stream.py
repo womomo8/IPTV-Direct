@@ -210,7 +210,7 @@ class StreamQualityTests(unittest.TestCase):
         self.assertIn("确认视频解码失败", result["reason"])
         decode.assert_called_once()
 
-        @patch("stream.shutil.which", return_value="/usr/bin/ffmpeg")
+    @patch("stream.shutil.which", return_value="/usr/bin/ffmpeg")
     @patch("stream._probe")
     @patch("stream._decode")
     def test_ffmpeg_non_decode_error_is_incomplete(
