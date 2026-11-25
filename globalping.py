@@ -825,10 +825,19 @@ def _stage(
         if progress_callback is None:
             measurement = _wait_measurement(measurement_id, budget)
         else:
+            def report_measurement_progress(event):
+                _notify_progress(
+                    progress_callback,
+                    {
+                        **event,
+                        "stage_name": stage_name,
+                    },
+                )
+
             measurement = _wait_measurement(
                 measurement_id,
                 budget,
-                progress_callback=progress_callback,
+                progress_callback=report_measurement_progress,
             )
 
         if measurement.get("status") != "finished":
