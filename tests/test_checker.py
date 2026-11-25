@@ -752,6 +752,69 @@ class CheckerLocalTests(unittest.TestCase):
             ("/large-direct.ts", "bytes=0-65535"),
         )
 
+    def test_progress_callback_tracks_completion_and_preserves_order(self):
+        candidates = [
+            {"id": "first", "normalized_url": "first"},
+            {"id": "second", "normalized_url": "second"},
+            {"id": "third", "normalized_url": "third"},
+        ]
+        completion_order = []
+        progress = []
+
+        def fake_check(item, submitted_at):
+            if item["id"] == "first":
+                time.sleep(0.1)
+            completion_order.append(item["id"])
+            return dict(item)
+
+        with patch.object(
+            Detector,
+            "check_one",
+            side_effect=fake_check,
+        ):
+            results = check_candidates(
+                candidates,
+                self.settings(
+                    local_concurrency=3,
+                    queue_limit=3,
+                ),
+                progress_callback=lambda completed, total: (
+                    progress.append((completed, total))
+                ),
+            )
+
+        self.assertNotEqual(completion_order[0], "first")
+        self.assertEqual(
+            progress,
+            [(1, 3), (2, 3), (3, 3)],
+        )
+        self.assertEqual(
+            [item["id"] for item in results],
+            ["first", "second", "third"],
+        )
+
+    def test_progress_callback_exception_does_not_interrupt_detection(self):
+        candidate = {
+            "id": "first",
+            "normalized_url": "first",
+        }
+
+        def failing_callback(completed, total):
+            raise RuntimeError("模拟日志回调异常")
+
+        with patch.object(
+            Detector,
+            "check_one",
+            return_value=dict(candidate),
+        ):
+            results = check_candidates(
+                [candidate],
+                self.settings(),
+                progress_callback=failing_callback,
+            )
+
+        self.assertEqual(results, [candidate])
+    
     def test_ts_requires_five_sync_bytes_at_188_byte_intervals(self):
         """五个同步位置必须连续满足，四个同步位置不能通过。"""
         valid = bytearray(188 * 5)
