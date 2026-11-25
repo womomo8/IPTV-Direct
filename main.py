@@ -667,10 +667,11 @@ def _print_detection_summary(
     results: list[dict[str, Any]],
     submitted_candidates: list[dict[str, Any]] | None = None,
 ) -> None:
-    """汇总本地检测结果，以及真正提交给 Globalping 的检测明细。"""
+    """输出批次统计，仅对检测异常保留必要诊断。"""
 
     local_ok = sum(checker.local_checks_passed(item) for item in results)
     local_bad = len(results) - local_ok
+
     submitted_items = (
         submitted_candidates
         if submitted_candidates is not None
@@ -692,15 +693,29 @@ def _print_detection_summary(
         f"本地未通过/未完成 {local_bad} 条；"
         f"Globalping 已提交 {len(submitted_items)} 条、"
         f"未提交 {len(results) - len(submitted_items)} 条；"
-        f"实际远程结果 PASS {remote_counts[PASS]} 条、"
-        f"FAIL {remote_counts[FAIL]} 条、"
+        f"PASS {remote_counts[PASS]} 条；"
+        f"FAIL {remote_counts[FAIL]} 条；"
         f"INCOMPLETE {remote_counts[INCOMPLETE]} 条。"
     )
 
     stream_counts = {state: 0 for state in (PASS, FAIL, INCOMPLETE)}
     stream_checked = 0
 
-    for index, item in enumerate(results, 1):
+    for item in results:
+        checks = item.get("checks", {})
+        if not checker.local_checks_passed(item):
+            for check_name, detail in checks.items():
+                if not isinstance(detail, dict):
+                    continue
+                if detail.get("status") == PASS:
+                    continue
+                print(
+                    f"本地检测异常：频道 {item.get('channel', '未知频道')}；"
+                    f"主机 {_safe_host(item)}；"
+                    f"{check_name.upper()} {detail.get('status', '未知')}；"
+                    f"原因：{_safe_diagnostic_text(detail.get('reason') or '未提供')}"
+                )
+
         quality = item.get("stream_quality")
         if not isinstance(quality, dict):
             continue
@@ -710,35 +725,14 @@ def _print_detection_summary(
         if status in stream_counts:
             stream_counts[status] += 1
 
-        width = quality.get("width")
-        height = quality.get("height")
-        resolution = (
-            f"{width}×{height}"
-            if isinstance(width, int) and isinstance(height, int)
-            else "无法确认"
-        )
-
-        source_type = item.get("source_type") or "未知来源"
-        source_order = item.get("source_order")
-        source_order_text = (
-            str(source_order)
-            if source_order is not None
-            else "未知"
-        )
-        source_host = _safe_host_from_url(
-            item.get("source_url", "")
-        )
+        if status == PASS:
+            continue
 
         print(
-            f"视频质量明细 {index}/{len(results)}："
-            f"频道 {item.get('channel', '未知频道')}；"
-            f"来源类型 {source_type}；"
-            f"来源序号 {source_order_text}；"
-            f"来源主机 {source_host}；"
-            f"目标主机 {_safe_host(item)}；"
-            f"结果 {status}；"
-            f"分辨率 {resolution}；"
-            f"扫描方式 {quality.get('field_order') or '未知'}；"
+            f"视频检测异常：频道 {item.get('channel', '未知频道')}；"
+            f"主机 {_safe_host(item)}；"
+            f"状态 {status}；"
+            f"分辨率 {quality.get('width', '未知')}×{quality.get('height', '未知')}；"
             f"编码 {quality.get('codec') or '未知'}；"
             f"帧率 {quality.get('fps') or '未知'}；"
             f"原因：{_safe_diagnostic_text(quality.get('reason') or '未提供')}"
@@ -750,41 +744,38 @@ def _print_detection_summary(
         f"FAIL {stream_counts[FAIL]} 条；"
         f"INCOMPLETE {stream_counts[INCOMPLETE]} 条；"
         f"未进入视频检测 {len(results) - stream_checked} 条。"
-    )        
-    for index, item in enumerate(submitted_items, 1):
+    )
+
+    for item in submitted_items:
         remote = item.get("globalping", {})
         if not isinstance(remote, dict):
             continue
 
-        channel = item.get("channel", "未知频道")
-        media_type = item.get("media_type", "未知类型")
-        try:
-            host = urlsplit(str(item.get("normalized_url", ""))).hostname or "无法识别"
-        except ValueError:
-            host = "无法识别"
+        status = remote.get("status", "未知")
+        if status == PASS:
+            continue
 
         print(
-            f"Globalping 明细 {index}/{len(submitted_items)}："
-            f"频道 {channel}；类型 {media_type}；目标主机 {host}；"
-            f"总体状态 {remote.get('status', '未知')}。"
+            f"Globalping 检测异常："
+            f"频道 {item.get('channel', '未知频道')}；"
+            f"主机 {_safe_host(item)}；"
+            f"状态 {status}；"
+            f"原因：{_safe_diagnostic_text(remote.get('error') or '未提供')}"
         )
 
         probes = remote.get("probes", {})
-        if isinstance(probes, dict) and probes:
+        if isinstance(probes, dict):
             for probe in probes.values():
                 if isinstance(probe, dict):
                     print(
-                        "  探针："
-                        f"{probe.get('country', '未知地区')} "
+                        f"  探针：{probe.get('country', '未知地区')} "
                         f"{probe.get('city', '未知城市')}；"
-                        f"网络 {probe.get('network', '未知网络')}；"
-                        f"ASN {probe.get('asn', '未知')}。"
+                        f"ASN {probe.get('asn', '未知')}；"
+                        f"网络 {probe.get('network', '未知网络')}。"
                     )
-        else:
-            print("  探针：没有取得有效探针结果。")
 
         stages = remote.get("stages", {})
-        if isinstance(stages, dict) and stages:
+        if isinstance(stages, dict):
             for stage_name, stage in stages.items():
                 if not isinstance(stage, dict):
                     continue
@@ -792,16 +783,8 @@ def _print_detection_summary(
                     f"  阶段 {stage_name}："
                     f"{stage.get('status', '未知')}；"
                     f"测量ID {stage.get('measurement_id') or '无'}；"
-                    f"原因：{_safe_diagnostic_text(stage.get('reason') or '没有提供原因')}"
+                    f"原因：{_safe_diagnostic_text(stage.get('reason') or '未提供')}"
                 )
-        else:
-            print("  阶段：没有取得阶段记录。")
-
-        if remote.get("error"):
-            print(
-                "  远程异常/未完成原因："
-                f"{_safe_diagnostic_text(remote['error'])}"
-            )
 
 def _safe_host_from_url(value: Any) -> str:
     """从 URL 提取主机名，不输出路径、查询参数或凭据。"""
@@ -835,59 +818,12 @@ def _print_manual_source_details(
     detected: list[dict[str, Any]],
     admission_results: list[dict[str, Any]],
 ) -> None:
-    """输出各类来源的逐条采集、检测和准入结果。"""
-    candidates = normalized.get("candidates", [])
-    print(
-        f"来源诊断（{source.get('source_type', '未知类型')}）："
-        f"{source.get('name', '未命名来源')}；"
-        f"格式 {normalized.get('format', '未知')}；"
-        f"提取 {normalized.get('extracted_candidates', 0)} 条；"
-        f"匹配目标频道 {normalized.get('matched_target_candidates', 0)} 条；"
-        f"重复 {normalized.get('duplicate_candidates', 0)} 条；"
-        f"进入检测 {len(detected)} 条。"
-    )
+    """只输出来源解析异常，不重复打印候选检测和准入明细。"""
 
     for error in normalized.get("errors", []):
-        print(f"  解析/匹配提示：{_safe_diagnostic_text(error)}")
-
-    admitted = {
-        _identity(result.get("candidate", {})): result
-        for result in admission_results
-        if isinstance(result, dict) and isinstance(result.get("candidate"), dict)
-    }
-    detected_by_id = {
-        _identity(result): result
-        for result in detected
-        if isinstance(result, dict)
-    }
-
-    for number, candidate in enumerate(candidates, 1):
-        key = _identity(candidate)
-        checked = detected_by_id.get(key, {})
-        checks = checked.get("checks", {})
-        remote = checked.get("globalping", {})
-        admission = admitted.get(key, {})
         print(
-            f"  [{number}] {candidate.get('channel', '未知频道')}；"
-            f"主机 {_safe_host(candidate)}"
-        )
-        for check_name in ("ipv4", "http", "hls", "ts"):
-            detail = checks.get(check_name, {})
-            if isinstance(detail, dict):
-                print(
-                    f"      {check_name.upper()}："
-                    f"{detail.get('status', '未执行')}；"
-                    f"{_safe_diagnostic_text(detail.get('reason') or '无原因说明')}"
-                )
-        if isinstance(remote, dict):
-            print(
-                f"      Globalping：{remote.get('status', '未执行')}；"
-                f"{_safe_diagnostic_text(remote.get('error') or '无异常说明')}"
-            )
-
-        print(
-            f"      正式准入：{admission.get('status', '未进入准入')}；"
-            f"{_safe_diagnostic_text(admission.get('reason') or '无原因说明')}"
+            f"来源解析提示：{_safe_diagnostic_text(error)}",
+            file=sys.stderr,
         )
 
 # ----------------------------------------------------------------------
