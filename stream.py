@@ -338,6 +338,11 @@ def check_stream(url: str) -> dict[str, Any]:
         )
         return result
 
+    except StreamDecodeError as exc:
+        result["status"] = FAIL
+        result["reason"] = str(exc)
+        return result
+
     except Exception as exc:
         result["status"] = INCOMPLETE
         result["reason"] = (
