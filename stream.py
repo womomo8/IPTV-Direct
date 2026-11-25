@@ -28,6 +28,27 @@ DECODE_FRAMES = 30
 class StreamQualityError(Exception):
     """视频质量检测错误。"""
 
+class StreamDecodeError(StreamQualityError):
+    """已经取得明确证据的视频解码失败。"""
+
+
+_DECODE_ERROR_MARKERS = (
+    "error while decoding",
+    "decode error",
+    "decoding error",
+    "non-existing pps",
+    "decode_slice_header",
+    "invalid nal unit",
+)
+
+
+def _is_explicit_decode_error(stderr: Any) -> bool:
+    """只有 FFmpeg 输出明确的解码错误特征时才认定解码失败。"""
+    message = str(stderr or "").lower()
+    return any(
+        marker in message
+        for marker in _DECODE_ERROR_MARKERS
+    )
 
 def _valid_url(url: Any) -> bool:
     if not isinstance(url, str):
@@ -229,8 +250,16 @@ def _decode(url: str) -> None:
     result = _run(command, DECODE_TIMEOUT)
 
     if result.returncode != 0:
+        error_message = result.stderr.strip()[:300]
+
+        if _is_explicit_decode_error(result.stderr):
+            raise StreamDecodeError(
+                f"FFmpeg 确认视频解码失败：{error_message}"
+            )
+
         raise StreamQualityError(
-            f"FFmpeg 解码失败：{result.stderr.strip()[:300]}"
+            f"FFmpeg 执行失败，无法确认是否为解码错误："
+            f"{error_message}"
         )
 
     decoded_frames = None
