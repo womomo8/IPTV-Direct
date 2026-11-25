@@ -11,7 +11,8 @@ import shutil
 import subprocess
 from typing import Any
 from urllib.parse import urlsplit
-
+from concurrent.futures import ThreadPoolExecutor
+from threading import BoundedSemaphore
 
 PASS = "PASS"
 FAIL = "FAIL"
@@ -283,8 +284,11 @@ def _decode(url: str) -> None:
         )
 
 
-def check_stream(url: str) -> dict[str, Any]:
-    """检测单条线路，任何硬性指标不达标均淘汰。"""
+def check_stream(
+    url: str,
+    probe_semaphore: BoundedSemaphore | None = None,
+    decode_semaphore: BoundedSemaphore | None = None,
+) -> dict[str, Any]:
 
     result: dict[str, Any] = {
         "status": INCOMPLETE,
@@ -306,7 +310,12 @@ def check_stream(url: str) -> dict[str, Any]:
         return result
 
     try:
-        metadata = _probe(url)
+        if probe_semaphore is None:
+            metadata = _probe(url)
+        else:
+            with probe_semaphore:
+                metadata = _probe(url)
+
         result.update(metadata)
 
         if (
@@ -330,7 +339,11 @@ def check_stream(url: str) -> dict[str, Any]:
             )
             return result
 
-        _decode(url)
+        if decode_semaphore is None:
+            _decode(url)
+        else:
+            with decode_semaphore:
+                _decode(url)
 
         result["status"] = PASS
         result["reason"] = (
@@ -355,27 +368,79 @@ def check_candidates(
     candidates: list[dict[str, Any]],
     detection_settings: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """逐条检测候选线路，保留候选身份和原有数据。"""
+    """并发检测候选线路，保留候选身份和原有顺序。"""
 
     if not isinstance(candidates, list):
         raise ValueError("candidates 必须是列表")
-
-    results = []
 
     for candidate in candidates:
         if not isinstance(candidate, dict):
             raise ValueError("候选线路数据必须是字典")
 
-        url = candidate.get("normalized_url")
-        quality = check_stream(url)
+    if detection_settings is None:
+        detection_settings = {}
 
-        results.append({
+    if not isinstance(detection_settings, dict):
+        raise ValueError("detection_settings 必须是字典")
+
+    probe_concurrency = detection_settings.get(
+        "stream_probe_concurrency", 4
+    )
+    decode_concurrency = detection_settings.get(
+        "stream_decode_concurrency", 2
+    )
+
+    if (
+        isinstance(probe_concurrency, bool)
+        or not isinstance(probe_concurrency, int)
+        or probe_concurrency < 1
+    ):
+        raise ValueError("FFprobe 并发数必须是正整数")
+
+    if (
+        isinstance(decode_concurrency, bool)
+        or not isinstance(decode_concurrency, int)
+        or decode_concurrency < 1
+    ):
+        raise ValueError("FFmpeg 并发数必须是正整数")
+
+    probe_semaphore = BoundedSemaphore(probe_concurrency)
+    decode_semaphore = BoundedSemaphore(decode_concurrency)
+
+    def check_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+        url = candidate.get("normalized_url")
+
+        try:
+            quality = check_stream(
+                url,
+                probe_semaphore,
+                decode_semaphore,
+            )
+        except Exception as exc:
+            quality = {
+                "status": INCOMPLETE,
+                "width": None,
+                "height": None,
+                "field_order": None,
+                "codec": None,
+                "fps": None,
+                "reason": (
+                    f"视频检测发生未预期异常"
+                    f"（{type(exc).__name__}）：{exc}"
+                ),
+            }
+
+        return {
             **candidate,
             "stream_quality": quality,
-        })
+        }
 
-    return results
-
+    with ThreadPoolExecutor(
+        max_workers=probe_concurrency + decode_concurrency
+    ) as executor:
+        return list(
+            executor.map(check_candidate, candidates)
+        )
 
 def quality_passed(candidate: dict[str, Any]) -> bool:
     """只有明确通过全部视频质量检测的线路才允许继续。"""
