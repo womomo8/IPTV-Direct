@@ -429,6 +429,63 @@ class MainCollectionFlowTests(unittest.TestCase):
         self.assertIn("达到有效来源上限 2", output)
         build_mock.assert_called_once()
 
+    def test_candidate_pool_handles_1000_unique_candidates(self):
+        consumed = []
+        received_candidates = []
+
+        def source_stream():
+            for source_index in range(11):
+                consumed.append(source_index)
+                yield make_source_item(source_index)
+
+        def normalize_callback(**kwargs):
+            source_index = kwargs["source"]["order"]
+            candidates = [
+                {
+                    "channel": CHANNEL,
+                    "normalized_url": (
+                        f"https://example.test/"
+                        f"source{source_index}/candidate{candidate_index}.m3u8"
+                    ),
+                    "media_type": "HLS",
+                }
+                for candidate_index in range(100)
+            ]
+
+            return {
+                "recognized": True,
+                "format": "m3u",
+                "extracted_candidates": 100,
+                "duplicate_candidates": 0,
+                "matched_target_candidates": 100,
+                "candidates": candidates,
+            }
+
+        def admit(candidates, accepted_routes, channels, settings):
+            received_candidates.extend(candidates)
+            return self.make_admission(accepted_routes)
+
+        result, output, _, admission_mock, build_mock = self.run_flow(
+            source_stream(),
+            make_settings(max_candidates_total=1000),
+            admit,
+            normalize_callback=normalize_callback,
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(consumed, list(range(10)))
+        self.assertEqual(admission_mock.call_count, 1)
+        self.assertEqual(len(received_candidates), 1000)
+
+        identities = {
+            item["normalized_url"]
+            for item in received_candidates
+        }
+        self.assertEqual(len(identities), 1000)
+
+        self.assertIn("达到全部候选总上限 1000", output)
+        build_mock.assert_called_once()
+
 class ChannelAliasTests(unittest.TestCase):
 
     def test_cctv5_alias_matches_canonical_channel(self):
