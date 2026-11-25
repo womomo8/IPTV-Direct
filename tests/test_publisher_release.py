@@ -300,6 +300,39 @@ class PublisherReleaseTests(unittest.TestCase):
         self.assertEqual(m3u_path.read_bytes(), old_m3u)
         self.assertEqual(txt_path.read_bytes(), old_txt)
 
+    def test_rollback_failure_is_reported(self):
+        """回滚失败必须明确标记正式订阅状态。"""
+
+        old = make_subscriptions([
+            ("CCTV-1", "https://example.com/old1.m3u8"),
+            ("CCTV-5", "https://example.com/old5.m3u8"),
+        ])
+        new = make_subscriptions([
+            ("CCTV-1", "https://example.com/new1.m3u8"),
+            ("CCTV-5", "https://example.com/new5.m3u8"),
+        ])
+
+        self.publish(old)
+
+        with (
+            patch(
+                "publisher.os.replace",
+                side_effect=OSError("模拟文件替换失败"),
+            ),
+            patch(
+                "publisher._restore_subscription_files",
+                return_value=["模拟回滚失败"],
+            ),
+        ):
+            with self.assertRaises(publisher.PublisherError) as context:
+                self.publish(new)
+
+        self.assertEqual(
+            context.exception.subscription_state,
+            "ROLLBACK_FAILED",
+        )
+        self.assertIn("回滚失败", str(context.exception))   
+    
     def test_inconsistent_route_count_is_rejected(self):
         """传入的线路数量与订阅实际内容不一致时，必须拒绝。"""
         invalid = make_subscriptions([
