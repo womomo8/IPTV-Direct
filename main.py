@@ -891,14 +891,7 @@ def _print_manual_source_details(
                 f"      Globalping：{remote.get('status', '未执行')}；"
                 f"{_safe_diagnostic_text(remote.get('error') or '无异常说明')}"
             )
-            stages = remote.get("stages", {})
-            if isinstance(stages, dict):
-                for stage_name, stage in stages.items():
-                    if isinstance(stage, dict):
-                        print(
-                            f"        {stage_name}：{stage.get('status', '未知')}；"
-                            f"{_safe_diagnostic_text(stage.get('reason') or '无原因说明')}"
-                        )
+            
         print(
             f"      正式准入：{admission.get('status', '未进入准入')}；"
             f"{_safe_diagnostic_text(admission.get('reason') or '无原因说明')}"
