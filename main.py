@@ -93,6 +93,7 @@ def _check_settings(settings: dict[str, Any]) -> None:
         ),
         "selection": ("max_routes_per_channel",),
         "schedule": ("timezone", "daily_time"),
+    }
 
     for section, keys in required.items():
         data = settings.get(section)
