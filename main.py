@@ -666,13 +666,29 @@ def _print_detection_summary(
             else "无法确认"
         )
 
+        source_type = item.get("source_type") or "未知来源"
+        source_order = item.get("source_order")
+        source_order_text = (
+            str(source_order)
+            if source_order is not None
+            else "未知"
+        )
+        source_host = _safe_host_from_url(
+            item.get("source_url", "")
+        )
+
         print(
             f"视频质量明细 {index}/{len(results)}："
             f"频道 {item.get('channel', '未知频道')}；"
+            f"来源类型 {source_type}；"
+            f"来源序号 {source_order_text}；"
+            f"来源主机 {source_host}；"
+            f"目标主机 {_safe_host(item)}；"
             f"结果 {status}；"
             f"分辨率 {resolution}；"
             f"扫描方式 {quality.get('field_order') or '未知'}；"
             f"编码 {quality.get('codec') or '未知'}；"
+            f"帧率 {quality.get('fps') or '未知'}；"
             f"原因：{_safe_diagnostic_text(quality.get('reason') or '未提供')}"
         )
 
