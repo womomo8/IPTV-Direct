@@ -145,7 +145,12 @@ class SourceBatchPipelineTests(unittest.TestCase):
 
         process_batch_mock = None
         
-        def remote_side_effect(items, settings, session=None):
+        def remote_side_effect(
+            items,
+            settings,
+            session=None,
+            progress_callback=None,
+        ):
             self.assertEqual(len(items), 1)
             self.assertEqual(process_batch_mock.call_count, 0)
             candidate = items[0]
