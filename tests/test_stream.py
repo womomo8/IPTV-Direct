@@ -2,6 +2,7 @@
 import json
 import http.server
 import threading
+import time
 import shutil
 import tempfile
 import subprocess
@@ -255,10 +256,93 @@ class StreamQualityTests(unittest.TestCase):
             results[0]["stream_quality"]["status"],
             stream.PASS,
         )
-        check.assert_called_once_with(
-            "https://example.com/live.ts"
+        check.assert_called_once()
+        self.assertEqual(
+            check.call_args.args[0],
+            "https://example.com/live.ts",
+        )
+        self.assertEqual(len(check.call_args.args), 3)
+
+    def test_check_candidates_limits_concurrency_and_isolates_errors(self):
+        lock = threading.Lock()
+        calls = {}
+        active_probe = 0
+        active_decode = 0
+        max_probe = 0
+        max_decode = 0
+
+        def fake_check(url, probe_semaphore, decode_semaphore):
+            nonlocal active_probe, active_decode
+            with lock:
+                calls[url] = calls.get(url, 0) + 1
+
+            with probe_semaphore:
+                with lock:
+                    active_probe += 1
+                    max_probe = max(max_probe, active_probe)
+                time.sleep(0.02)
+                with lock:
+                    active_probe -= 1
+
+            with decode_semaphore:
+                with lock:
+                    active_decode += 1
+                    max_decode = max(max_decode, active_decode)
+                time.sleep(0.02)
+                with lock:
+                    active_decode -= 1
+
+            if url.endswith("/3.ts"):
+                raise RuntimeError("单条线路测试异常")
+
+            return {"status": stream.PASS}
+
+        candidates = [
+            {
+                "channel": "CCTV-1",
+                "normalized_url": f"https://example.com/{i}.ts",
+            }
+            for i in range(6)
+        ]
+
+        with patch("stream.check_stream", side_effect=fake_check):
+            results = stream.check_candidates(
+                candidates,
+                {
+                    "stream_probe_concurrency": 2,
+                    "stream_decode_concurrency": 1,
+                },
+            )
+
+        self.assertEqual(
+            [item["normalized_url"] for item in results],
+            [item["normalized_url"] for item in candidates],
+        )
+        self.assertEqual(len(results), len(candidates))
+        self.assertTrue(all(count == 1 for count in calls.values()))
+        self.assertEqual(len(calls), len(candidates))
+        self.assertLessEqual(max_probe, 2)
+        self.assertGreaterEqual(max_probe, 2)
+        self.assertEqual(max_decode, 1)
+        self.assertEqual(
+            results[3]["stream_quality"]["status"],
+            stream.INCOMPLETE,
+        )
+        self.assertTrue(
+            all(
+                item["stream_quality"]["status"] == stream.PASS
+                for index, item in enumerate(results)
+                if index != 3
+            )
         )
 
+    def test_check_candidates_rejects_invalid_concurrency(self):
+        with self.assertRaises(ValueError):
+            stream.check_candidates(
+                [],
+                {"stream_probe_concurrency": 0},
+            )
+    
     def test_quality_passed_requires_explicit_pass(self):
         self.assertTrue(
             stream.quality_passed({
