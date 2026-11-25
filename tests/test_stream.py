@@ -194,12 +194,32 @@ class StreamQualityTests(unittest.TestCase):
     @patch("stream.shutil.which", return_value="/usr/bin/ffmpeg")
     @patch("stream._probe")
     @patch("stream._decode")
-    def test_decode_failure_does_not_pass(
+    def test_explicit_decode_failure_is_fail(
+        self, decode, probe, which
+    ):
+        probe.return_value = self.metadata()
+        decode.side_effect = stream.StreamDecodeError(
+            "FFmpeg 确认视频解码失败：non-existing PPS 0 referenced"
+        )
+
+        result = stream.check_stream(
+            "https://example.com/live.ts"
+        )
+
+        self.assertEqual(result["status"], stream.FAIL)
+        self.assertIn("确认视频解码失败", result["reason"])
+        decode.assert_called_once()
+
+        @patch("stream.shutil.which", return_value="/usr/bin/ffmpeg")
+    @patch("stream._probe")
+    @patch("stream._decode")
+    def test_ffmpeg_non_decode_error_is_incomplete(
         self, decode, probe, which
     ):
         probe.return_value = self.metadata()
         decode.side_effect = stream.StreamQualityError(
-            "视频解码失败"
+            "FFmpeg 执行失败，无法确认是否为解码错误："
+            "Connection timed out"
         )
 
         result = stream.check_stream(
@@ -377,6 +397,26 @@ class StreamProbeMeasurementTests(unittest.TestCase):
 
 class StreamDecodeTests(unittest.TestCase):
 
+    def test_explicit_decoder_error_is_recognized(self):
+        self.assertTrue(
+            stream._is_explicit_decode_error(
+                "non-existing PPS 0 referenced"
+            )
+        )
+
+        self.assertTrue(
+            stream._is_explicit_decode_error(
+                "Error while decoding stream"
+            )
+        )
+
+    def test_network_error_is_not_decoder_error(self):
+        self.assertFalse(
+            stream._is_explicit_decode_error(
+                "Connection timed out"
+            )
+        )
+    
     @patch("stream._run")
     def test_decode_passes_with_30_frames(self, run):
         run.return_value = subprocess.CompletedProcess(
