@@ -54,7 +54,9 @@ jobs:
         run: echo "运行模式：正式运行"
 
       - name: Run IPTV-Direct
-        run: python main.py --mode formal
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: python -u main.py --mode formal
 
       - name: Commit subscription updates
         run: |
