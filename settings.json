@@ -18,7 +18,6 @@
     "max_ts_read_bytes": 65536,
     "max_redirects": 5
   },
-    },
   "stream": {
     "probe_timeout_seconds": 12,
     "decode_timeout_seconds": 4,
