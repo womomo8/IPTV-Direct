@@ -646,9 +646,8 @@ class GlobalpingSummaryTests(unittest.TestCase):
         self.assertIn("本地全部通过 1 条", report)
         self.assertIn("Globalping 已提交 1 条", report)
         self.assertIn("未提交 1 条", report)
-        self.assertIn("实际远程结果 PASS 0 条", report)
+        self.assertIn("PASS 0 条；FAIL 0 条；INCOMPLETE 1 条", report,)
         self.assertIn("INCOMPLETE 1 条", report)
-
         self.assertIn("北京", report)
         self.assertIn("China Mobile", report)
         self.assertIn("test-measurement-1", report)
