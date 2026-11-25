@@ -1009,9 +1009,9 @@ def run_formal_flow(config: dict[str, Any]) -> int:
         print(
             f"来源处理：{label}；"
             f"识别格式 {normalized['format']}；"
-            f"提取候选 {normalized['extracted_candidates']}；"
-            f"本批去重 {normalized['duplicate_candidates']}；"
-            f"进入全局候选池 {len(candidates)}。"
+            f"匹配目标频道 {normalized['matched_target_candidates']} 条；"
+            f"本批去重 {normalized['duplicate_candidates']} 条；"
+            f"进入全局候选池 {len(candidates)} 条。"
         )
 
         stop_reason = _collection_stop_reason(
