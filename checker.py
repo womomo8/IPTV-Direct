@@ -10,7 +10,7 @@ import socket
 import ssl
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urljoin, urlsplit
 
 PASS, FAIL, INCOMPLETE = "PASS", "FAIL", "INCOMPLETE"
@@ -896,8 +896,8 @@ def local_checks_passed(candidate):
     )
 
 
-def check_candidates(candidates, settings):
-    """按输入顺序检测候选；settings 接收 settings.json 的 detection 区段。"""
+def check_candidates(candidates, settings, progress_callback=None):
+    """按输入顺序检测候选；可选回调报告实际完成进度。"""
     required = (
         "local_concurrency",
         "per_host_concurrency",
@@ -944,11 +944,19 @@ def check_candidates(candidates, settings):
                 )
                 for item in batch
             ]
-            for index, future in enumerate(futures):
+            future_indices = {
+                future: index
+                for index, future in enumerate(futures)
+            }
+            batch_results = [None] * len(batch)
+            batch_completed = 0
+
+            for future in as_completed(future_indices):
+                index = future_indices[future]
                 try:
-                    results.append(future.result())
+                    batch_results[index] = future.result()
                 except Exception as exc:
-                    results.append({
+                    batch_results[index] = {
                         **batch[index],
                         "media_type": "UNKNOWN",
                         "checks": {
@@ -960,6 +968,18 @@ def check_candidates(candidates, settings):
                                 "ipv4", "http", "hls", "ts"
                             )
                         },
-                    })
+                    }
+
+                batch_completed += 1
+                if progress_callback is not None:
+                    try:
+                        progress_callback(
+                            start + batch_completed,
+                            len(items),
+                        )
+                    except Exception:
+                        pass
+
+            results.extend(batch_results)
 
     return results
