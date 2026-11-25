@@ -274,6 +274,67 @@ class SourceBatchPipelineTests(unittest.TestCase):
             "[Globalping] 频道一；主机 example.test；第一 ASN 探针阶段；ASN 12345；探针阶段开始。",
             flush=True,
         )
+
+    def test_detection_summary_is_printed_before_admission(self):
+        """完整检测汇总必须先于 publisher 最终准入执行。"""
+
+        candidate = make_candidate("频道一", 1)
+        local_result = make_local(candidate)
+        stream_result = {
+            **local_result,
+            "stream_quality": {"status": "PASS"},
+        }
+
+        events = []
+        original_process_batch = publisher.process_batch
+
+        def record_admission(*args, **kwargs):
+            events.append("admission")
+            return original_process_batch(*args, **kwargs)
+
+        with (
+            patch.object(
+                main.checker,
+                "check_candidates",
+                return_value=[local_result],
+            ),
+            patch.object(
+                main.stream,
+                "check_candidates",
+                return_value=[stream_result],
+            ),
+            patch.object(
+                main.globalping,
+                "create_session",
+                return_value=self.session,
+            ),
+            patch.object(
+                main.globalping,
+                "check_candidates",
+                return_value=[make_remote(candidate)],
+            ),
+            patch.object(
+                main,
+                "_print_detection_summary",
+                side_effect=lambda *args, **kwargs: events.append("summary"),
+            ),
+            patch.object(
+                publisher,
+                "process_batch",
+                side_effect=record_admission,
+            ),
+        ):
+            main.run_source_batch_pipeline(
+                [candidate],
+                [],
+                SETTINGS,
+                CHANNELS,
+            )
+
+        self.assertEqual(
+            events,
+            ["summary", "admission"],
+        )
     
     def test_only_stream_pass_can_enter_globalping(self):
         """FAIL、INCOMPLETE 和无效状态均不得进入 Globalping。"""
