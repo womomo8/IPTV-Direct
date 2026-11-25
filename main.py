@@ -313,9 +313,18 @@ def run_source_batch_pipeline(
         flush=True,
     )
     local_started = time.perf_counter()
+
+    def report_local_progress(completed, total):
+        print(
+            f"[本地检测] 进度：已完成 {completed}/{total} 条。",
+            flush=True,
+        )
+
     try:
         local_results = checker.check_candidates(
-            candidates, settings["detection"]
+            candidates,
+            settings["detection"],
+            progress_callback=report_local_progress,
         )
         if (
             not isinstance(local_results, list)
