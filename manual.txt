@@ -1,4 +1,3 @@
-
 # IPTV-Direct 人工来源
 # 每行一个 HTTP 或 HTTPS 播放列表地址
 
@@ -8,8 +7,8 @@ https://raw.githubusercontent.com/best-fan/iptv-sources/main/cn_cctv.m3u8
 # 国内综合来源
 https://raw.githubusercontent.com/hujingguang/ChinaIPTV/main/cnTV_AutoUpdate.m3u8
 https://raw.githubusercontent.com/womomo8/IPTV-Auto/main/output/iptv.m3u
-https://raw.githubusercontent.com/best-fan/iptv-sources/main/cn_province.m3u8
-https://raw.githubusercontent.com/best-fan/iptv-sources/main/cn_all.m3u8
+https://raw.githubusercontent.com/best-fan/iptv-sources/main/cn_province.m3u
+https://raw.githubusercontent.com/best-fan/iptv-sources/main/cn_all.m3u
 
 # 国内分类来源
 https://m3u.ibert.me/txt/o_s_cn.txt
@@ -22,13 +21,13 @@ https://iptv-org.github.io/iptv/countries/mo.m3u
 https://raw.githubusercontent.com/o0i/iptv/master/test.txt
 https://raw.githubusercontent.com/10yanhon/iptv/main/iptv-21
 
-# 国内综合及卫视补充来源（非体育专源）
+# 国内综合及卫视补充来源
 https://raw.githubusercontent.com/iptvjs/iptv/main/ew_ws.m3u
 
 # 咪咕来源
 https://raw.githubusercontent.com/YanG-1989/m3u/main/Migu.m3u
 
-# 福建移动六个频道：内嵌 M3U，作为一个来源批量解析
+# 福建移动六个频道：内嵌 M3U
 #EXTM3U
 #EXTINF:-1 tvg-id="CCTV1" tvg-name="CCTV-1" group-title="福建移动",CCTV-1
 http://cmhiott.hvs.fj.chinamobile.com/PLTV/88888888/224/3221225829/index.m3u8?servicetype=1
@@ -44,7 +43,7 @@ http://cmhiott.hvs.fj.chinamobile.com/PLTV/88888888/224/3221225805/index.m3u8?se
 http://cmhiott.hvs.fj.chinamobile.com/PLTV/88888888/224/3221225820/index.m3u8?servicetype=1
 #END-M3U
 
-# 体育及港澳台专项补充：独立来源，避免被单来源100条上限截断
+# 体育及港澳台专项补充
 #EXTM3U
 #EXTINF:-1 tvg-name="CCTV-5+" group-title="体育",CCTV-5+
 http://ottrrs.hl.chinamobile.com/PLTV/88888888/224/3221225603/index.m3u8
@@ -74,17 +73,14 @@ http://221.7.175.154:8445/tsfile/live/1021_1.m3u8?key=txiptv&playlive=1&authid=0
 http://cdn.163189.xyz/live/fct4k/stream.m3u8
 #EXTINF:-1 tvg-name="澳门莲花" group-title="港澳台",澳门莲花
 http://anren.live/HK/BiIOU11uLA.m3u8
-# jiandantv 来源补充：避免单来源100条上限截断
 
+# 中天新闻补充
 #EXTINF:-1 tvg-name="中天新闻" group-title="港澳台",中天新闻
 http://flv3948069e.live.126.net/live/dabadqdszbtest78612.flv
 #EXTINF:-1 tvg-name="中天新闻" group-title="港澳台",中天新闻
 http://app.kds666.top:5566/api.php?id=1&s=3
 
-#EXTINF:-1 tvg-name="广东体育" group-title="体育",广东体育
-http://173.208.234.146/live/gdty.m3u8
-#EXTINF:-1 tvg-name="广东体育" group-title="体育",广东体育
-http://cdn2.163189.xyz/live/gdty/stream.m3u8
+# 广东体育其他候选线路
 #EXTINF:-1 tvg-name="广东体育" group-title="体育",广东体育
 http://38.75.136.137:98/gslb/dsdqpub/gdty.m3u8?auth=testpub
 #EXTINF:-1 tvg-name="广东体育" group-title="体育",广东体育
@@ -106,10 +102,7 @@ http://8.138.7.223/tv/gd.php?id=00031
 #EXTINF:-1 tvg-name="广东体育" group-title="体育",广东体育
 http://167.88.62.43:64013/0.ts
 
-#EXTINF:-1 tvg-name="睛彩竞技" group-title="体育",睛彩竞技
-http://ottrrs.hl.chinamobile.com/PLTV/88888888/224/3221226472/index.m3u8
-#EXTINF:-1 tvg-name="睛彩竞技" group-title="体育",睛彩竞技
-http://ottrrs.hl.chinamobile.com/PLTV/88888888/224/3221226124/index.m3u8
+# 睛彩竞技其他候选线路
 #EXTINF:-1 tvg-name="睛彩竞技" group-title="体育",睛彩竞技
 http://39.134.67.108/PLTV/88888888/224/3221225897/1.m3u8
 #EXTINF:-1 tvg-name="睛彩竞技" group-title="体育",睛彩竞技
@@ -119,10 +112,7 @@ http://kkk.888.3116598.xyz/api.php?n=tttt&id=2TKnNO&tk=FgM0vQMejxvG
 #EXTINF:-1 tvg-name="睛彩竞技" group-title="体育",睛彩竞技
 http://kkk.888.3116598.xyz/api.php?n=tttt&id=i210MD&tk=FgM0vQMejxvG
 
-#EXTINF:-1 tvg-name="睛彩篮球" group-title="体育",睛彩篮球
-http://ottrrs.hl.chinamobile.com/PLTV/88888888/224/3221226469/index.m3u8
-#EXTINF:-1 tvg-name="睛彩篮球" group-title="体育",睛彩篮球
-http://ottrrs.hl.chinamobile.com/PLTV/88888888/224/3221226147/index.m3u8
+# 睛彩篮球其他候选线路
 #EXTINF:-1 tvg-name="睛彩篮球" group-title="体育",睛彩篮球
 http://39.134.67.108/PLTV/88888888/224/3221225895/1.m3u8
 #EXTINF:-1 tvg-name="睛彩篮球" group-title="体育",睛彩篮球
