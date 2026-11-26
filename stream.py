@@ -18,8 +18,10 @@ PASS = "PASS"
 FAIL = "FAIL"
 INCOMPLETE = "INCOMPLETE"
 
-PROBE_TIMEOUT = 12
-DECODE_TIMEOUT = 4
+PROBE_TIMEOUT = 20
+DECODE_TIMEOUT = 8
+PROBE_RW_TIMEOUT = 15_000_000
+DECODE_RW_TIMEOUT = 8_000_000
 MIN_WIDTH = 1920
 MIN_HEIGHT = 1080
 MIN_FPS = 23.0
@@ -152,7 +154,7 @@ def _probe(url: str) -> dict[str, Any]:
     command = [
         "ffprobe",
         "-v", "error",
-        "-rw_timeout", "10000000",
+        "-rw_timeout", str(PROBE_RW_TIMEOUT),
         "-analyzeduration", "5000000",
         "-probesize", "5000000",
         "-select_streams", "v:0",
@@ -239,7 +241,7 @@ def _decode(url: str) -> None:
         "-xerror",
         "-err_detect", "explode",
         "-progress", "pipe:1",
-        "-rw_timeout", "4000000",
+        "-rw_timeout", str(DECODE_RW_TIMEOUT),
         "-i", url,
         "-map", "0:v:0",
         "-an",
