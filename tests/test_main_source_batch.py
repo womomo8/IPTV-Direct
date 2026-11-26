@@ -861,6 +861,64 @@ class HistoricalCandidateTests(unittest.TestCase):
             self.settings["collection"]["max_candidates_total"],
         )
 
+    def test_history_with_unmatched_channel_is_skipped(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_history(root)
+
+            (root / "output" / "iptv.m3u").write_text(
+                "#EXTM3U\n"
+                '#EXTINF:-1 tvg-name="旧频道",旧频道\n'
+                "https://example.test/old.m3u8\n",
+                encoding="utf-8",
+            )
+
+            (root / "output" / "iptv.txt").write_text(
+                "旧频道,https://example.test/old.m3u8\n",
+                encoding="utf-8",
+            )
+
+            candidates = main._load_historical_candidates(
+                root,
+                ["频道一"],
+                self.settings,
+            )
+
+        self.assertEqual(candidates, [])
+
+    def test_history_partial_channel_match_keeps_matching_routes(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_history(root)
+
+            (root / "output" / "iptv.m3u").write_text(
+                "#EXTM3U\n"
+                '#EXTINF:-1 tvg-name="频道一",频道一\n'
+                "https://example.test/current.m3u8\n"
+                '#EXTINF:-1 tvg-name="旧频道",旧频道\n'
+                "https://example.test/old.m3u8\n",
+                encoding="utf-8",
+            )
+
+            (root / "output" / "iptv.txt").write_text(
+                "频道一,https://example.test/current.m3u8\n"
+                "旧频道,https://example.test/old.m3u8\n",
+                encoding="utf-8",
+            )
+
+            candidates = main._load_historical_candidates(
+                root,
+                ["频道一"],
+                self.settings,
+            )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["channel"], "频道一")
+        self.assertEqual(
+            candidates[0]["normalized_url"],
+            "https://example.test/current.m3u8",
+        )    
+    
     def test_missing_one_history_file_fails_closed(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
