@@ -744,14 +744,85 @@ def run_source_batch_pipeline(
         submitted_candidates,
     )
 
+def _local_detection_outcome(
+    candidate: dict[str, Any],
+) -> tuple[str, str | None]:
+    """按候选线路归类本地检测结果，并选取一个主要原因。"""
+
+    if checker.local_checks_passed(candidate):
+        return PASS, None
+
+    checks = candidate.get("checks")
+    if not isinstance(checks, dict):
+        return INCOMPLETE, "缺少有效的本地检测结果"
+
+    media_type = candidate.get("media_type")
+
+    if media_type == "HLS":
+        required = ("ipv4", "http", "ts", "hls")
+    elif media_type == "DIRECT_TS":
+        required = ("ipv4", "http", "ts")
+    else:
+        return INCOMPLETE, "无法确认媒体类型"
+
+    failed = [
+        name
+        for name in required
+        if isinstance(checks.get(name), dict)
+        and checks[name].get("status") == FAIL
+    ]
+
+    if failed:
+        name = failed[0]
+        detail = checks[name]
+        reason = detail.get("reason") or "未提供失败原因"
+        return FAIL, f"{name.upper()}：{reason}"
+
+    for name in required:
+        detail = checks.get(name)
+
+        if (
+            not isinstance(detail, dict)
+            or detail.get("status") != PASS
+        ):
+            reason = (
+                detail.get("reason")
+                if isinstance(detail, dict)
+                else None
+            )
+            reason = reason or (
+                detail.get("status", "缺少检测状态")
+                if isinstance(detail, dict)
+                else "缺少检测结果"
+            )
+            return INCOMPLETE, f"{name.upper()}：{reason}"
+
+    if media_type == "DIRECT_TS":
+        hls = checks.get("hls")
+        if not isinstance(hls, dict) or hls.get("status") != "N/A":
+            return INCOMPLETE, "HLS：直接 TS 线路的 HLS 状态不符合预期"
+
+    return INCOMPLETE, "本地检测结果不完整"
+
+
 def _print_detection_summary(
     results: list[dict[str, Any]],
     submitted_candidates: list[dict[str, Any]] | None = None,
 ) -> None:
-    """输出批次统计，仅对检测异常保留必要诊断。"""
+    """输出本地、视频及远程检测汇总，避免重复异常日志。"""
 
-    local_ok = sum(checker.local_checks_passed(item) for item in results)
-    local_bad = len(results) - local_ok
+    local_counts = {state: 0 for state in (PASS, FAIL, INCOMPLETE)}
+    local_reasons = {state: {} for state in (FAIL, INCOMPLETE)}
+
+    for item in results:
+        status, reason = _local_detection_outcome(item)
+        local_counts[status] += 1
+
+        if reason is not None:
+            reason = _safe_diagnostic_text(reason)
+            local_reasons[status][reason] = (
+                local_reasons[status].get(reason, 0) + 1
+            )
 
     submitted_items = (
         submitted_candidates
@@ -770,14 +841,40 @@ def _print_detection_summary(
 
     print(
         f"检测统计：候选 {len(results)} 条；"
-        f"本地全部通过 {local_ok} 条；"
-        f"本地未通过/未完成 {local_bad} 条；"
+        f"本地 PASS {local_counts[PASS]} 条；"
+        f"FAIL {local_counts[FAIL]} 条；"
+        f"INCOMPLETE {local_counts[INCOMPLETE]} 条；"
         f"Globalping 已提交 {len(submitted_items)} 条、"
         f"未提交 {len(results) - len(submitted_items)} 条；"
         f"PASS {remote_counts[PASS]} 条；"
         f"FAIL {remote_counts[FAIL]} 条；"
         f"INCOMPLETE {remote_counts[INCOMPLETE]} 条。"
     )
+
+    for status in (FAIL, INCOMPLETE):
+        reasons = sorted(
+            local_reasons[status].items(),
+            key=lambda item: (-item[1], item[0]),
+        )
+
+        if not reasons:
+            continue
+
+        shown = reasons[:5]
+        summary = "；".join(
+            f"{reason} × {count} 条"
+            for reason, count in shown
+        )
+
+        remaining = reasons[5:]
+        if remaining:
+            remaining_count = sum(count for _, count in remaining)
+            summary += (
+                f"；其他原因 {len(remaining)} 类，"
+                f"共 {remaining_count} 条"
+            )
+
+        print(f"本地 {status} 主要原因：{summary}。")
 
     stream_counts = {state: 0 for state in (PASS, FAIL, INCOMPLETE)}
     stream_checked = 0
