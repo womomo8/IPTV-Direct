@@ -18,6 +18,7 @@ class StreamTimeoutTests(unittest.TestCase):
         self.assertEqual(stream.PROBE_RW_TIMEOUT, 15_000_000)
         self.assertEqual(stream.DECODE_TIMEOUT, 20)
         self.assertEqual(stream.DECODE_RW_TIMEOUT, 20_000_000)
+    
     def test_ffprobe_timeout_reason_is_preserved(self):
         with (
             patch(
