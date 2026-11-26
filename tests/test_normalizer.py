@@ -104,6 +104,18 @@ class URLNormalizationTests(unittest.TestCase):
             "https://example.com/live?token=abc&id=1",
         )
 
+    def test_encodes_unicode_url_without_double_encoding(self):
+        self.assertEqual(
+            normalize_url(
+                "https://example.com/直播/频道.m3u"
+                "?token=中文&part=%2F"
+            ),
+            "https://example.com/"
+            "%E7%9B%B4%E6%92%AD/"
+            "%E9%A2%91%E9%81%93.m3u"
+            "?token=%E4%B8%AD%E6%96%87&part=%2F",
+        )
+    
     def test_removes_fragment(self):
         self.assertEqual(
             normalize_url("https://example.com/live#section"),
