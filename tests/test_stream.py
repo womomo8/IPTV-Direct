@@ -13,6 +13,12 @@ import stream
 
 class StreamTimeoutTests(unittest.TestCase):
 
+    def test_timeout_configuration_matches_measured_limits(self):
+        self.assertEqual(stream.PROBE_TIMEOUT, 20)
+        self.assertEqual(stream.PROBE_RW_TIMEOUT, 15_000_000)
+        self.assertEqual(stream.DECODE_TIMEOUT, 8)
+        self.assertEqual(stream.DECODE_RW_TIMEOUT, 8_000_000)
+
     def test_ffprobe_timeout_reason_is_preserved(self):
         with (
             patch(
@@ -23,7 +29,7 @@ class StreamTimeoutTests(unittest.TestCase):
                 "stream.subprocess.run",
                 side_effect=subprocess.TimeoutExpired(
                     cmd="ffprobe",
-                    timeout=12,
+                    timeout=stream.PROBE_TIMEOUT,
                 ),
             ),
         ):
@@ -33,7 +39,7 @@ class StreamTimeoutTests(unittest.TestCase):
 
         self.assertEqual(result["status"], stream.INCOMPLETE)
         self.assertIn(
-            "ffprobe执行超时（限制 12 秒）",
+            f"ffprobe执行超时（限制 {stream.PROBE_TIMEOUT} 秒）",
             result["reason"],
         )
 
@@ -60,7 +66,7 @@ class StreamTimeoutTests(unittest.TestCase):
                 "stream.subprocess.run",
                 side_effect=subprocess.TimeoutExpired(
                     cmd="ffmpeg",
-                    timeout=4,
+                    timeout=stream.DECODE_TIMEOUT,
                 ),
             ),
         ):
@@ -70,7 +76,7 @@ class StreamTimeoutTests(unittest.TestCase):
 
         self.assertEqual(result["status"], stream.INCOMPLETE)
         self.assertIn(
-            "ffmpeg执行超时（限制 4 秒）",
+            f"ffmpeg执行超时（限制 {stream.DECODE_TIMEOUT} 秒）",
             result["reason"],
         )
 
@@ -416,6 +422,14 @@ class StreamProbeMeasurementTests(unittest.TestCase):
         self.assertEqual(
             command[command.index("-read_intervals") + 1],
             "%+3",
+        )
+        self.assertEqual(
+            command[command.index("-rw_timeout") + 1],
+            str(stream.PROBE_RW_TIMEOUT),
+        )
+        run.assert_called_once_with(
+            command,
+            stream.PROBE_TIMEOUT,
         )
     
     def test_missing_frame_timestamps_does_not_fallback_to_avg_fps(self):
