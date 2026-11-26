@@ -306,7 +306,7 @@ class Detector:
                     options["context"] = ssl.create_default_context()
                 conn = cls(host, port, **options)
 
-                 path = quote(
+                path = quote(
                     parsed.path or "/",
                     safe="/%:@!$&'()*+,;=-._~",
                 )
