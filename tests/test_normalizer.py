@@ -380,6 +380,51 @@ class SourceParsingTests(unittest.TestCase):
         self.assertEqual(candidate["tvg_name"], "CCTV-1")
         self.assertEqual(candidate["category"], "央视")
 
+    def test_m3u_display_title_overrides_conflicting_tvg_name(self):
+        channels = ["CCTV-5", "CCTV-5+"]
+
+        content = (
+            "#EXTM3U\n"
+            '#EXTINF:-1 tvg-name="CCTV5",CCTV5+\n'
+            "https://example.test/cctv5plus.m3u8\n"
+        )
+
+        result = parse_source_content(
+            content,
+            SOURCE,
+            channels,
+            aliases={
+                "CCTV5": "CCTV-5",
+                "CCTV5+": "CCTV-5+",
+            },
+        )
+
+        self.assertEqual(
+            result["candidates"][0]["channel"],
+            "CCTV-5+",
+        )
+
+    def test_m3u_falls_back_to_tvg_name_when_title_is_unknown(self):
+        channels = ["CCTV-5", "CCTV-5+"]
+
+        content = (
+            "#EXTM3U\n"
+            '#EXTINF:-1 tvg-name="CCTV5",未知标题\n'
+            "https://example.test/cctv5.m3u8\n"
+        )
+
+        result = parse_source_content(
+            content,
+            SOURCE,
+            channels,
+            aliases={"CCTV5": "CCTV-5"},
+        )
+
+        self.assertEqual(
+            result["candidates"][0]["channel"],
+            "CCTV-5",
+        )
+    
     def test_parse_m3u_title_with_commas_in_quoted_attributes(self):
         root = Path(__file__).resolve().parents[1]
 
