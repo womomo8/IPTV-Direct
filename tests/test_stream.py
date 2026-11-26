@@ -515,6 +515,10 @@ class StreamDecodeTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertIn("-progress", command)
         self.assertIn("pipe:1", command)
+        self.assertEqual(
+            command[command.index("-rw_timeout") + 1],
+            str(stream.DECODE_RW_TIMEOUT),
+        )
         run.assert_called_once_with(
             command,
             stream.DECODE_TIMEOUT,
