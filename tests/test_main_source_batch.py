@@ -335,6 +335,65 @@ class SourceBatchPipelineTests(unittest.TestCase):
             events,
             ["summary", "admission"],
         )
+
+    def test_local_summary_separates_status_and_aggregates_reasons(self):
+        """本地状态互斥统计，主要原因按候选数量汇总。"""
+
+        passed = make_local(
+            make_candidate("频道一", 1)
+        )
+
+        failed = make_local(
+            make_candidate("频道一", 2)
+        )
+        failed["checks"]["http"] = {
+            "status": "FAIL",
+            "reason": "连接被拒绝",
+        }
+
+        incomplete = make_local(
+            make_candidate("频道一", 3)
+        )
+        incomplete["checks"]["ts"] = {
+            "status": "INCOMPLETE",
+            "reason": "请求超时",
+        }
+
+        mixed = make_local(
+            make_candidate("频道一", 4)
+        )
+        mixed["checks"]["http"] = {
+            "status": "FAIL",
+            "reason": "连接被拒绝",
+        }
+        mixed["checks"]["ts"] = {
+            "status": "INCOMPLETE",
+            "reason": "请求超时",
+        }
+
+        with patch("builtins.print") as print_mock:
+            main._print_detection_summary(
+                [passed, failed, incomplete, mixed],
+                [],
+            )
+
+        output = "\n".join(
+            str(call.args[0])
+            for call in print_mock.call_args_list
+        )
+
+        self.assertIn(
+            "候选 4 条；本地 PASS 1 条；FAIL 2 条；INCOMPLETE 1 条",
+            output,
+        )
+        self.assertIn(
+            "本地 FAIL 主要原因：HTTP：连接被拒绝 × 2 条",
+            output,
+        )
+        self.assertIn(
+            "本地 INCOMPLETE 主要原因：TS：请求超时 × 1 条",
+            output,
+        )
     
     def test_only_stream_pass_can_enter_globalping(self):
         """FAIL、INCOMPLETE 和无效状态均不得进入 Globalping。"""
