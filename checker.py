@@ -11,7 +11,7 @@ import ssl
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import quote, urljoin, urlsplit
 
 PASS, FAIL, INCOMPLETE = "PASS", "FAIL", "INCOMPLETE"
 NA = "N/A"
@@ -246,7 +246,6 @@ class Detector:
         self,
         url,
         deadline,
-        queue_deadline,
         limit,
         use_range=True,
         first_slot=None,
@@ -278,11 +277,11 @@ class Detector:
                 host = parsed.hostname
                 if slot is None:
                     slot = self._slot(host)
-                    wait = min(queue_deadline, deadline) - time.monotonic()
+                    wait = deadline - time.monotonic()
                     if wait <= 0 or not slot.acquire(timeout=wait):
                         raise CheckError(
                             INCOMPLETE,
-                            "等待主机并发槽位超过剩余时间预算",
+                            "等待主机并发槽位超过单候选主动检测时间预算",
                         )
                     acquired = True
 
@@ -307,9 +306,15 @@ class Detector:
                     options["context"] = ssl.create_default_context()
                 conn = cls(host, port, **options)
 
-                path = parsed.path or "/"
+                 path = quote(
+                    parsed.path or "/",
+                    safe="/%:@!$&'()*+,;=-._~",
+                )
                 if parsed.query:
-                    path += "?" + parsed.query
+                    path += "?" + quote(
+                        parsed.query,
+                        safe="/?%:@!$&'()*+,;=-._~",
+                    )
                 headers = {
                     "Host": parsed.netloc,
                     "User-Agent": "IPTV-Direct/1.0",
@@ -604,9 +609,7 @@ class Detector:
             )
         return result["data"]
 
-    def _manifest(
-        self, deadline, queue_deadline, first, candidate_result
-    ):
+    def _manifest(self, deadline, first, candidate_result):
         # 关键修正：在完整清单读取和大小检查之前，
         # 先根据首次读取到的实际内容确认是否具备 HLS 结构。
         # 普通频道订阅 M3U 只有 #EXTM3U / #EXTINF，
@@ -618,7 +621,6 @@ class Detector:
             result = self._request(
                 first["url"],
                 deadline,
-                queue_deadline,
                 self.manifest_limit,
                 use_range=True,
             )
@@ -644,7 +646,6 @@ class Detector:
             media = self._request(
                 variants[0],
                 deadline,
-                queue_deadline,
                 self.manifest_limit,
                 use_range=True,
             )
@@ -684,7 +685,6 @@ class Detector:
             part = self._request(
                 segment,
                 deadline,
-                queue_deadline,
                 self.ts_limit,
                 use_range=True,
             )
@@ -742,8 +742,10 @@ class Detector:
             _ = parsed.port
 
             slot = self._slot(host)
+            # submitted_at 保留用于兼容旧调用；
+            # 排队计时从候选检测任务真正开始执行后计算。
             queue_deadline = (
-                submitted_at + self.settings["max_queue_seconds"]
+                time.monotonic() + self.settings["max_queue_seconds"]
             )
             wait = queue_deadline - time.monotonic()
             if wait <= 0 or not slot.acquire(timeout=wait):
@@ -760,7 +762,6 @@ class Detector:
             first = self._request(
                 url,
                 deadline,
-                queue_deadline,
                 self.ts_limit,
                 use_range=True,
                 first_slot=first_slot,
@@ -784,7 +785,6 @@ class Detector:
                 try:
                     hls = self._manifest(
                         deadline,
-                        queue_deadline,
                         first,
                         result,
                     )
