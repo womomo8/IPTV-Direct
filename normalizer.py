@@ -3,7 +3,7 @@
 
 import re
 from pathlib import Path
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 
 
 class ChannelConfigError(ValueError):
@@ -114,14 +114,22 @@ def normalize_url(value):
     ):
         netloc += f":{port}"
 
+    path = quote(
+        parsed.path or "/",
+        safe="/%:@!$&'()*+,;=-._~",
+    )
+    query = quote(
+        parsed.query,
+        safe="/?%:@!$&'()*+,;=-._~",
+    )
+
     return urlunsplit((
         scheme,
         netloc,
-        parsed.path or "/",
-        parsed.query,
+        path,
+        query,
         "",
     ))
-
 
 def _channel_match(names, channels, aliases):
     """只按标准名称或明确别名精确匹配。"""
