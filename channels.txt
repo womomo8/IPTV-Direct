@@ -27,7 +27,7 @@ CCTV-17
 广东卫视
 东南卫视
 
-# 港澳台
+# 港澳台频道
 凤凰卫视中文台
 凤凰资讯台
 翡翠台
@@ -47,9 +47,8 @@ BRTV体育休闲
 辽宁体育
 魅力足球
 
-# 美国及国际体育频道
+# 美国体育频道
 NBA TV
-The NBA Channel
 ESPN
 ESPN 2
 ESPN 4
@@ -82,12 +81,10 @@ Arena Sport 1
 Arena Sport 2
 Canal+ Sport
 
-# beIN SPORTS
+# 国际体育频道
 beIN Sports 1 Turk
 beIN SPORTS XTRA
 beIN Sports XTRA en Espanol
-
-# 其他国际体育
 Claro Sports
 DD Sports HD
 F1 Channel
