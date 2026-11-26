@@ -251,6 +251,73 @@ class CheckerConcurrencyTests(unittest.TestCase):
                 "PASS",
             )
 
+    def test_executor_queue_wait_does_not_consume_candidate_queue_budget(self):
+        """线程池排队时间不应提前消耗候选的主机槽位等待预算。"""
+        with State.lock:
+            State.routes = {
+                "/worker-first.ts": 1.2,
+                "/worker-queued.ts": 0,
+            }
+
+        candidates = [
+            self.candidate("/worker-first.ts"),
+            self.candidate("/worker-queued.ts"),
+        ]
+
+        results = self.run_candidates(
+            candidates,
+            local_concurrency=1,
+            per_host_concurrency=2,
+            queue_limit=2,
+            max_queue_seconds=1,
+            candidate_active_budget_seconds=4,
+        )
+
+        self.assertEqual(len(results), 2)
+
+        for result in results:
+            self.assertEqual(
+                result["checks"]["ipv4"]["status"],
+                "PASS",
+                msg=f"候选未能完成 IPv4 检测：{result}",
+            )
+
+        self.assertEqual(
+            results[1]["checks"]["http"]["status"],
+            "PASS",
+            msg=f"线程池排队后的候选被错误判定：{results[1]}",
+        )
+
+    def test_unicode_request_path_and_query_are_encoded(self):
+        """请求路径和查询参数中的中文必须转换为 UTF-8 百分号编码。"""
+        encoded_path = (
+            "/%E7%9B%B4%E6%92%AD.ts"
+            "?token=%E4%B8%AD%E6%96%87"
+        )
+
+        with State.lock:
+            State.routes = {
+                encoded_path: 0,
+            }
+
+        candidate = self.candidate(
+            "/直播.ts?token=中文"
+        )
+
+        results = self.run_candidates([candidate])
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(
+            results[0]["checks"]["ipv4"]["status"],
+            "PASS",
+            msg=f"中文 URL 请求失败：{results[0]}",
+        )
+        self.assertEqual(
+            results[0]["checks"]["http"]["status"],
+            "PASS",
+            msg=f"中文 URL 的 HTTP 检测失败：{results[0]}",
+        )
+    
     def test_waiting_for_host_slot_times_out_as_incomplete(self):
         """用事件锁定第一个请求，再验证第二个请求等待槽位超时。"""
         started_event = threading.Event()
