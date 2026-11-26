@@ -430,33 +430,86 @@ def _create_measurement(
 
     return measurement_id
 
-def _wait_measurement(measurement_id: str, budget: dict[str, Any]) -> dict[str, Any]:
+def _wait_measurement(
+    measurement_id: str,
+    budget: dict[str, Any],
+    progress_callback: Any = None,
+) -> dict[str, Any]:
     """轮询单个测量；每次响应后等待 800 ms，处理 ETag/304。"""
     url = f"{API_BASE}/measurements/{measurement_id}"
     started = time.monotonic()
     etag: str | None = None
+    last_progress_report = -5.0
+
+    def report(event: dict[str, Any]) -> None:
+        if not callable(progress_callback):
+            return
+        try:
+            progress_callback(event)
+        except Exception:
+            pass
 
     while time.monotonic() - started < MAX_POLL_SECONDS:
         headers = {"If-None-Match": etag} if etag else None
         try:
-            status, data, response_headers = _api_request(url, extra_headers=headers)
+            status, data, response_headers = _api_request(
+                url,
+                extra_headers=headers,
+            )
         except GlobalpingError as exc:
             if exc.rate_limited:
                 budget["halted"] = True
-            raise GlobalpingError(f"查询测量结果失败：{exc}", rate_limited=exc.rate_limited) from exc
+            raise GlobalpingError(
+                f"查询测量结果失败：{exc}",
+                rate_limited=exc.rate_limited,
+            ) from exc
 
         etag = response_headers.get("etag") or etag
+        elapsed = round(time.monotonic() - started, 2)
+
         if status == 304:
+            if elapsed - last_progress_report >= 5:
+                report({
+                    "event": "measurement_polling",
+                    "measurement_id": measurement_id,
+                    "status": "in-progress",
+                    "elapsed_seconds": elapsed,
+                })
+                last_progress_report = elapsed
+
             time.sleep(POLL_INTERVAL)
             continue
+
         if not isinstance(data, dict):
-            raise GlobalpingError("Globalping 测量结果不是 JSON 对象。")
-        if data.get("status") != "in-progress":
+            raise GlobalpingError(
+                "Globalping 测量结果不是 JSON 对象。"
+            )
+
+        measurement_status = data.get("status")
+
+        if measurement_status != "in-progress":
+            report({
+                "event": "measurement_finished",
+                "measurement_id": measurement_id,
+                "status": measurement_status or "unknown",
+                "elapsed_seconds": elapsed,
+            })
             return data
+
+        if elapsed - last_progress_report >= 5:
+            report({
+                "event": "measurement_polling",
+                "measurement_id": measurement_id,
+                "status": measurement_status,
+                "elapsed_seconds": elapsed,
+            })
+            last_progress_report = elapsed
+
         time.sleep(POLL_INTERVAL)
 
-    raise GlobalpingError(f"测量任务 {measurement_id} 等待超过 {MAX_POLL_SECONDS} 秒。")
-
+    raise GlobalpingError(
+        f"测量任务 {measurement_id} 等待超过 {MAX_POLL_SECONDS} 秒。"
+    )
 
 def _probe_key(probe: dict[str, Any]) -> tuple[Any, ...]:
     """使用公开探针元数据匹配复用测量；Globalping 不公开稳定 probe ID。"""
@@ -735,19 +788,94 @@ def _parse_playlist(body: bytes | None, base_url: str) -> dict[str, Any]:
         raise GlobalpingError("媒体清单没有可验证的媒体分片。", FAIL)
     return {"kind": "media", "segments": segments[:3]}
 
-
 def _stage(
     url: str,
     locations: list[dict[str, Any]] | str,
     budget: dict[str, Any],
     headers: dict[str, str] | None = None,
+    progress_callback: Any = None,
+    stage_name: str = "unknown",
+    asn: int | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    measurement_id = _create_measurement(url, locations, budget, headers)
-    measurement = _wait_measurement(measurement_id, budget)
-    if measurement.get("status") != "finished":
-        raise GlobalpingError("Globalping 测量未完成。")
-    return measurement_id, measurement
+    started = time.monotonic()
 
+    def report(event: dict[str, Any]) -> None:
+        if not callable(progress_callback):
+            return
+
+        payload = {
+            **event,
+            "stage_name": stage_name,
+            "asn": asn,
+        }
+
+        try:
+            progress_callback(payload)
+        except Exception:
+            pass
+
+    report({
+        "event": "measurement_stage_started",
+    })
+
+    measurement_id: str | None = None
+
+    try:
+        measurement_id = _create_measurement(
+            url,
+            locations,
+            budget,
+            headers,
+        )
+
+        report({
+            "event": "measurement_created",
+            "measurement_id": measurement_id,
+        })
+
+        if progress_callback is None:
+            measurement = _wait_measurement(
+                measurement_id,
+                budget,
+            )
+        else:
+            measurement = _wait_measurement(
+                measurement_id,
+                budget,
+                progress_callback=report,
+            )
+
+        if measurement.get("status") != "finished":
+            raise GlobalpingError("Globalping 测量未完成。")
+
+        report({
+            "event": "measurement_stage_completed",
+            "measurement_id": measurement_id,
+            "status": measurement.get("status", "finished"),
+            "elapsed_seconds": round(
+                time.monotonic() - started,
+                2,
+            ),
+        })
+
+        return measurement_id, measurement
+
+    except Exception as exc:
+        report({
+            "event": "measurement_stage_failed",
+            "measurement_id": measurement_id,
+            "status": (
+                exc.status
+                if isinstance(exc, GlobalpingError)
+                else INCOMPLETE
+            ),
+            "reason": str(exc),
+            "elapsed_seconds": round(
+                time.monotonic() - started,
+                2,
+            ),
+        })
+        raise
 
 def _stage_record(
     measurement_id: str | None,
@@ -806,6 +934,8 @@ def _run_hls(
     candidate: dict[str, Any],
     locations: list[dict[str, Any]],
     budget: dict[str, Any],
+    progress_callback: Any = None,
+    asn: int | None = None,
 ) -> dict[str, Any]:
     url = candidate["normalized_url"]
     checks = {
@@ -819,7 +949,21 @@ def _run_hls(
     measurements: list[str] = []
 
     try:
-        main_id, main_measurement = _stage(url, locations, budget)
+        if progress_callback is None:
+            main_id, main_measurement = _stage(
+                url,
+                locations,
+                budget,
+            )
+        else:
+            main_id, main_measurement = _stage(
+                url,
+                locations,
+                budget,
+                progress_callback=progress_callback,
+                stage_name="main_playlist",
+                asn=asn,
+            )
         measurements.append(main_id)
         main_results = _result_map(main_measurement, locations)
         checks["ipv4"] = _aggregate_ipv4(main_results)
@@ -861,9 +1005,39 @@ def _run_hls(
 
         if parsed["kind"] == "master":
             media_url = parsed["child_url"]
-            media_id, media_measurement = _stage(
-                media_url, main_id, budget
-            )
+            if progress_callback is None:
+                media_id, media_measurement = _stage(
+                    media_url,
+                    main_id,
+                    budget,
+                )
+            else:
+                media_id, media_measurement = _stage(
+                    media_url,
+                    main_id,
+                    budget,
+                    progress_callback=progress_callback,
+                    stage_name="media_playlist",
+                    asn=asn,
+                )
+            else:
+                media_id, media_measurement = _stage(
+                    media_url,
+                    main_id,
+                    budget,
+                    progress_callback=progress_callback,
+                    stage_name="media_playlist",
+                    asn=asn,
+                )
+            else:
+                media_id, media_measurement = _stage(
+                    media_url,
+                    main_id,
+                    budget,
+                    progress_callback=progress_callback,
+                    stage_name="media_playlist",
+                    asn=asn,
+                )
             measurements.append(media_id)
 
             media_results = _result_map(media_measurement, expected_probe_key=selected_key)
@@ -955,6 +1129,8 @@ def _run_direct_ts(
     candidate: dict[str, Any],
     locations: list[dict[str, Any]],
     budget: dict[str, Any],
+    progress_callback: Any = None,
+    asn: int | None = None,
 ) -> dict[str, Any]:
     url = candidate["normalized_url"]
     checks = {
@@ -968,9 +1144,21 @@ def _run_direct_ts(
     measurements: list[str] = []
 
     try:
-        measurement_id, measurement = _stage(
-            url, locations, budget
-        )
+        if progress_callback is None:
+            measurement_id, measurement = _stage(
+                url,
+                locations,
+                budget,
+            )
+        else:
+            measurement_id, measurement = _stage(
+                url,
+                locations,
+                budget,
+                progress_callback=progress_callback,
+                stage_name="direct_ts",
+                asn=asn,
+            )
         measurements.append(measurement_id)
 
         results = _result_map(measurement, locations)
@@ -1227,11 +1415,11 @@ def create_session(settings: dict[str, Any]) -> dict[str, Any]:
         "error": None,
     }
 
-
 def check_candidates(
     candidates: list[dict[str, Any]],
     settings: dict[str, Any],
     session: dict[str, Any] | None = None,
+    progress_callback: Any = None,
 ) -> list[dict[str, Any]]:
     """每条线路独立执行三个不同 ASN 的顺序探针阶段。"""
     if not isinstance(candidates, list):
@@ -1239,6 +1427,22 @@ def check_candidates(
 
     if not isinstance(settings, dict):
         raise TypeError("settings 必须是配置对象。")
+    if (
+        progress_callback is not None
+        and not callable(progress_callback)
+    ):
+        raise TypeError(
+            "progress_callback 必须是可调用对象。"
+        )
+
+    def report_progress(event: dict[str, Any]) -> None:
+        if not callable(progress_callback):
+            return
+
+        try:
+            progress_callback(event)
+        except Exception:
+            pass       
 
     max_probes = settings.get("max_probes")
 
@@ -1402,18 +1606,45 @@ def check_candidates(
 
                 used_asns.add(requested_asn)
 
+                used_asns.add(requested_asn)
+
+                report_progress({
+                    "event": "stage_started",
+                    "stage_name": stage_name,
+                    "asn": requested_asn,
+                    "probe": location,
+                })
+
                 if candidate["media_type"] == "HLS":
-                    stage_result = _run_hls(
-                        candidate,
-                        locations,
-                        budget,
-                    )
+                    if progress_callback is None:
+                        stage_result = _run_hls(
+                            candidate,
+                            locations,
+                            budget,
+                        )
+                    else:
+                        stage_result = _run_hls(
+                            candidate,
+                            locations,
+                            budget,
+                            progress_callback=report_progress,
+                            asn=requested_asn,
+                        )
                 else:
-                    stage_result = _run_direct_ts(
-                        candidate,
-                        locations,
-                        budget,
-                    )
+                    if progress_callback is None:
+                        stage_result = _run_direct_ts(
+                            candidate,
+                            locations,
+                            budget,
+                        )
+                    else:
+                        stage_result = _run_direct_ts(
+                            candidate,
+                            locations,
+                            budget,
+                            progress_callback=report_progress,
+                            asn=requested_asn,
+                        )
 
                 stage_status = _overall_status(
                     stage_result["checks"]
@@ -1463,7 +1694,15 @@ def check_candidates(
 
                 if stage_result.get("error"):
                     errors.append(stage_result["error"])
-
+                report_progress({
+                    "event": "stage_completed",
+                    "stage_name": stage_name,
+                    "asn": requested_asn,
+                    "status": stage_status,
+                    "reason": stage_reason,
+                    "measurement_ids": stage_measurements,
+                    "probe": probe,
+                })
                 if stage_status != PASS:
                     break
 
@@ -1491,8 +1730,16 @@ def check_candidates(
                     "reason": reason,
                     "checks": stage_checks,
                     "sub_stages": {},
-                }
-
+                }         
+                report_progress({
+                    "event": "stage_completed",
+                    "stage_name": stage_name,
+                    "asn": requested_asn,
+                    "status": exc.status,
+                    "reason": reason,
+                    "measurement_ids": [],
+                    "probe": {},
+                })
                 errors.append(reason)
                 break
 
