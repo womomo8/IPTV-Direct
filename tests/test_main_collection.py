@@ -643,7 +643,7 @@ class GlobalpingSummaryTests(unittest.TestCase):
         report = output.getvalue()
 
         self.assertIn("候选 2 条", report)
-        self.assertIn("本地全部通过 1 条", report)
+        self.assertIn("本地 PASS 1 条；FAIL 1 条；INCOMPLETE 0 条", report)
         self.assertIn("Globalping 已提交 1 条", report)
         self.assertIn("未提交 1 条", report)
         self.assertIn("PASS 0 条；FAIL 0 条；INCOMPLETE 1 条", report,)
