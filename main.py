@@ -223,22 +223,26 @@ def _load_historical_candidates(
             f"历史订阅读取失败：{exc}"
         ) from exc
 
-    # 先确认旧订阅两份文件一致、频道有效、URL 有效。
+    # 从历史 M3U 自身提取频道名称，用于校验历史文件完整性。
+    # 不使用当前频道列表校验旧标签，避免旧标签变化阻断整轮运行。
+    historical_channels = list(dict.fromkeys(
+        title
+        for line in m3u_text.splitlines()
+        if line.startswith("#EXTINF:") and "," in line
+        for title in [line.split(",", 1)[1].strip()]
+        if title
+    ))
+
     try:
         publisher.validate_subscriptions(
             m3u_text,
             txt_text,
-            channels,
+            historical_channels,
         )
     except publisher.PublisherError as exc:
         raise publisher.PublisherError(
             f"历史订阅校验失败：{exc}"
         ) from exc
-
-    route_count = sum(
-        line.startswith("#EXTINF:")
-        for line in m3u_text.splitlines()
-    )
 
     limits = settings["collection"]
 
@@ -273,14 +277,15 @@ def _load_historical_candidates(
 
     candidates = normalized.get("candidates", [])
 
-    # 必须确保旧订阅中的每一条线路都成功进入候选池。
+    # 历史线路允许个别频道无法匹配当前配置。
+    # 只要 M3U 格式可识别且没有触发候选上限，
+    # 就保留成功匹配的线路，未匹配线路由 normalizer 跳过。
     if (
         not normalized.get("recognized")
         or normalized.get("limit_reached")
-        or len(candidates) != route_count
     ):
         raise publisher.PublisherError(
-            "历史订阅线路解析数量不完整，不能跳过未解析线路"
+            "历史订阅解析失败或超过候选线路上限"
         )
 
     return candidates
