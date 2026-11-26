@@ -43,7 +43,7 @@ BRTV体育休闲
 
 # 国外频道
 NBA TV
-ESPN 1
+ESPN
 ESPN 2
 The NBA Channel
 Fox Sports 1
