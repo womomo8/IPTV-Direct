@@ -1,4 +1,3 @@
-
 {
   "sources": [
     {
@@ -23,20 +22,6 @@
       "mode": "playlist"
     },
     {
-      "id": "source-004",
-      "name": "DuckKota 在线检测线路",
-      "url": "https://DuckKota.github.io/iptv/playlists/online.m3u",
-      "enabled": true,
-      "mode": "playlist"
-    },
-    {
-      "id": "source-005",
-      "name": "DuckKota 优选线路",
-      "url": "https://DuckKota.github.io/iptv/playlists/best.m3u",
-      "enabled": true,
-      "mode": "playlist"
-    },
-    {
       "id": "source-006",
       "name": "best-fan 国内频道状态列表",
       "url": "https://raw.githubusercontent.com/best-fan/iptv-sources/main/cn_all_status.m3u8",
@@ -52,7 +37,7 @@
     },
     {
       "id": "source-008",
-      "name": "AdeelWajid 体育频道",
+      "name": "AdeelWajid 国际体育频道",
       "url": "https://raw.githubusercontent.com/AdeelWajid/iptv_validated_list/main/playlists/categories/sports.m3u",
       "enabled": true,
       "mode": "playlist"
@@ -79,9 +64,9 @@
       "mode": "playlist"
     },
     {
-      "id": "source-012",
-      "name": "cs3306 多源自动检测",
-      "url": "https://raw.githubusercontent.com/cs3306/IPTV-Sources/main/data/output/iptv_collection.m3u",
+      "id": "source-013",
+      "name": "Chaniug IPTV 全量自动采集",
+      "url": "https://raw.githubusercontent.com/Chaniug/IPTV-Collector/master/iptv.m3u",
       "enabled": true,
       "mode": "playlist"
     }
