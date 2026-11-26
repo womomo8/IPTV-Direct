@@ -332,9 +332,9 @@ def parse_source_content(
             if is_m3u:
                 title, attrs = pending or ("", {})
                 names = [
+                    title,
                     attrs.get("tvg-name", ""),
                     attrs.get("tvg-id", ""),
-                    title,
                 ]
                 raw_url = urljoin(base, line)
             else:
