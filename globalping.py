@@ -1020,24 +1020,6 @@ def _run_hls(
                     stage_name="media_playlist",
                     asn=asn,
                 )
-            else:
-                media_id, media_measurement = _stage(
-                    media_url,
-                    main_id,
-                    budget,
-                    progress_callback=progress_callback,
-                    stage_name="media_playlist",
-                    asn=asn,
-                )
-            else:
-                media_id, media_measurement = _stage(
-                    media_url,
-                    main_id,
-                    budget,
-                    progress_callback=progress_callback,
-                    stage_name="media_playlist",
-                    asn=asn,
-                )
             measurements.append(media_id)
 
             media_results = _result_map(media_measurement, expected_probe_key=selected_key)
@@ -1603,8 +1585,6 @@ def check_candidates(
                     raise GlobalpingError(
                         "本阶段探针不符合中国大陆普通用户网络单探针条件。"
                     )
-
-                used_asns.add(requested_asn)
 
                 used_asns.add(requested_asn)
 
