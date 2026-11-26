@@ -21,6 +21,48 @@
       "url": "https://raw.githubusercontent.com/IPTV-CN/IPTV/master/channels/cctv.m3u",
       "enabled": true,
       "mode": "playlist"
+    },
+    {
+      "id": "source-004",
+      "name": "DuckKota 在线检测线路",
+      "url": "https://DuckKota.github.io/iptv/playlists/online.m3u",
+      "enabled": true,
+      "mode": "playlist"
+    },
+    {
+      "id": "source-005",
+      "name": "DuckKota 优选线路",
+      "url": "https://DuckKota.github.io/iptv/playlists/best.m3u",
+      "enabled": true,
+      "mode": "playlist"
+    },
+    {
+      "id": "source-006",
+      "name": "best-fan 国内频道状态列表",
+      "url": "https://raw.githubusercontent.com/best-fan/iptv-sources/main/cn_all_status.m3u8",
+      "enabled": true,
+      "mode": "playlist"
+    },
+    {
+      "id": "source-007",
+      "name": "iptvjs 中国频道补充",
+      "url": "https://raw.githubusercontent.com/iptvjs/iptv/main/txt/ew_cn.txt",
+      "enabled": true,
+      "mode": "playlist"
+    },
+    {
+      "id": "source-008",
+      "name": "AdeelWajid 体育频道",
+      "url": "https://raw.githubusercontent.com/AdeelWajid/iptv_validated_list/main/playlists/categories/sports.m3u",
+      "enabled": true,
+      "mode": "playlist"
+    },
+    {
+      "id": "source-009",
+      "name": "iptv-org 全球体育频道",
+      "url": "https://iptv-org.github.io/iptv/categories/sports.m3u",
+      "enabled": true,
+      "mode": "playlist"
     }
   ]
 }
