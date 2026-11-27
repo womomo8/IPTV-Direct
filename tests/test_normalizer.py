@@ -1,11 +1,12 @@
 
 """normalizer.py：解析、频道匹配、URL 归一和去重专项测试。"""
 
-import json
 import tempfile
 import unittest
 from pathlib import Path
+from urllib.parse import urljoin
 
+from main import load_configuration
 from normalizer import (
     ChannelConfigError,
     _channel_match,
@@ -17,17 +18,12 @@ from normalizer import (
 )
 
 
-CHANNELS = ["CCTV-1", "CCTV-5", "湖南卫视"]
+ROOT = Path(__file__).resolve().parents[1]
+CONFIG = load_configuration(ROOT)
 
-SOURCE = {
-    "id": "test-001",
-    "name": "模拟测试来源",
-    "url": "https://example.test/list.m3u",
-    "final_url": "https://example.test/list.m3u",
-    "source_type": "manual",
-    "priority": 0,
-    "order": 3,
-}
+CHANNELS = CONFIG["channels"]
+ALIASES = CONFIG["settings"]["aliases"]
+SOURCE = CONFIG["manual_sources"][0]
 
 
 class ChannelConfigTests(unittest.TestCase):
@@ -115,7 +111,7 @@ class URLNormalizationTests(unittest.TestCase):
             "%E9%A2%91%E9%81%93.m3u"
             "?token=%E4%B8%AD%E6%96%87&part=%2F",
         )
-    
+
     def test_removes_fragment(self):
         self.assertEqual(
             normalize_url("https://example.com/live#section"),
@@ -258,14 +254,7 @@ class SourceParsingTests(unittest.TestCase):
         )
 
     def test_ibert_txt_aliases_use_actual_settings(self):
-        root = Path(__file__).resolve().parents[1]
-
-        settings = json.loads(
-            (root / "settings.json").read_text(encoding="utf-8")
-        )
-        channels = load_channels(root / "channels.txt")
-
-        items = list(settings["aliases"].items())
+        items = list(ALIASES.items())
         self.assertTrue(items, "settings.json 没有配置频道别名")
 
         content = "\n".join(
@@ -276,8 +265,8 @@ class SourceParsingTests(unittest.TestCase):
         result = parse_source_content(
             content,
             SOURCE,
-            channels,
-            aliases=settings["aliases"],
+            CHANNELS,
+            aliases=ALIASES,
         )
 
         actual = {
@@ -288,14 +277,7 @@ class SourceParsingTests(unittest.TestCase):
         self.assertEqual(actual, dict(items))
 
     def test_iptv_org_aliases_use_actual_settings(self):
-        root = Path(__file__).resolve().parents[1]
-
-        settings = json.loads(
-            (root / "settings.json").read_text(encoding="utf-8")
-        )
-        channels = load_channels(root / "channels.txt")
-
-        items = list(settings["aliases"].items())
+        items = list(ALIASES.items())
         self.assertTrue(items, "settings.json 没有配置频道别名")
 
         lines = ["#EXTM3U"]
@@ -308,8 +290,8 @@ class SourceParsingTests(unittest.TestCase):
         result = parse_source_content(
             "\n".join(lines),
             SOURCE,
-            channels,
-            aliases=settings["aliases"],
+            CHANNELS,
+            aliases=ALIASES,
         )
 
         actual = {
@@ -320,19 +302,11 @@ class SourceParsingTests(unittest.TestCase):
         self.assertEqual(actual, dict(items))
 
     def test_jiandantv_aliases_use_actual_settings(self):
-        root = Path(__file__).resolve().parents[1]
+        alias_names = ("凤凰中文", "凤凰资讯", "TVB翡翠", "澳门莲花")
+        for alias in alias_names:
+            self.assertIn(alias, ALIASES, f"settings.json 缺少别名：{alias}")
 
-        settings = json.loads(
-            (root / "settings.json").read_text(encoding="utf-8")
-        )
-        channels = load_channels(root / "channels.txt")
-
-        items = [
-            ("凤凰中文", "凤凰卫视中文台"),
-            ("凤凰资讯", "凤凰资讯台"),
-            ("TVB翡翠", "翡翠台"),
-            ("澳门莲花", "澳门莲花卫视"),
-        ]
+        items = [(alias, ALIASES[alias]) for alias in alias_names]
 
         lines = ["#EXTM3U"]
         for index, (name, _) in enumerate(items):
@@ -344,26 +318,19 @@ class SourceParsingTests(unittest.TestCase):
         result = parse_source_content(
             "\n".join(lines),
             SOURCE,
-            channels,
-            aliases=settings["aliases"],
+            CHANNELS,
+            aliases=ALIASES,
         )
 
         self.assertEqual(
             [item["channel"] for item in result["candidates"]],
             [channel for _, channel in items],
         )
-    
+
     def test_o0i_txt_aliases_use_actual_settings(self):
-        root = Path(__file__).resolve().parents[1]
-
-        settings = json.loads(
-            (root / "settings.json").read_text(encoding="utf-8")
-        )
-        channels = load_channels(root / "channels.txt")
-
         items = [
             (alias, canonical)
-            for alias, canonical in settings["aliases"].items()
+            for alias, canonical in ALIASES.items()
             if "蓝光" in alias
         ]
         self.assertTrue(items, "settings.json 没有配置蓝光别名")
@@ -376,8 +343,8 @@ class SourceParsingTests(unittest.TestCase):
         result = parse_source_content(
             content,
             SOURCE,
-            channels,
-            aliases=settings["aliases"],
+            CHANNELS,
+            aliases=ALIASES,
         )
 
         actual = {
@@ -386,7 +353,7 @@ class SourceParsingTests(unittest.TestCase):
         }
 
         self.assertEqual(actual, dict(items))
-    
+
     def test_parse_m3u_and_extract_channel_attributes(self):
         content = (
             "#EXTM3U\n"
@@ -454,22 +421,15 @@ class SourceParsingTests(unittest.TestCase):
             result["candidates"][0]["channel"],
             "CCTV-5",
         )
-    
+
     def test_parse_m3u_title_with_commas_in_quoted_attributes(self):
-        root = Path(__file__).resolve().parents[1]
-
-        settings = json.loads(
-            (root / "settings.json").read_text(encoding="utf-8")
-        )
-        channels = load_channels(root / "channels.txt")
-
         content = (
             "#EXTM3U\n"
             '#EXTINF:-1 tvg-id="SkySportsF1.uk@SD" '
             'http-referrer="https://stmify.com/" '
             'http-user-agent="Mozilla/5.0 (Windows, NT 10.0; Win64; x64) '
             'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 '
-            'Safari/537.36" group-title="Sports",Sky Sport F1\n'
+            'Safari/537.36" group-title="Sports",Sky Sports F1\n'
             '#EXTVLCOPT:http-referrer=https://stmify.com/\n'
             '#EXTVLCOPT:http-user-agent=Mozilla/5.0 test\n'
             "https://example.test/sky.m3u8\n"
@@ -484,13 +444,13 @@ class SourceParsingTests(unittest.TestCase):
         result = parse_source_content(
             content,
             SOURCE,
-            channels,
-            aliases=settings["aliases"],
+            CHANNELS,
+            aliases=ALIASES,
         )
 
         self.assertEqual(
             [item["channel"] for item in result["candidates"]],
-            ["Sky Sport F1", "澳门莲花卫视"],
+            ["Sky Sports F1", "澳门莲花卫视"],
         )
         self.assertEqual(
             [item["raw_url"] for item in result["candidates"]],
@@ -499,7 +459,7 @@ class SourceParsingTests(unittest.TestCase):
                 "https://example.test/lotus.m3u8",
             ],
         )
-    
+
     def test_parse_m3u_relative_url(self):
         content = (
             "#EXTM3U\n"
@@ -511,11 +471,12 @@ class SourceParsingTests(unittest.TestCase):
             content,
             SOURCE,
             CHANNELS,
+            aliases=ALIASES,
         )
 
         self.assertEqual(
             result["candidates"][0]["raw_url"],
-            "https://example.test/live/stream.ts",
+            urljoin(SOURCE["url"], "../live/stream.ts"),
         )
 
     def test_parse_m3u_ignores_leading_hyphen_url(self):
@@ -665,6 +626,7 @@ class SourceParsingTests(unittest.TestCase):
 class SourceNormalizationTests(unittest.TestCase):
 
     def normalize(self, content, seen_urls=None, **kwargs):
+        kwargs.setdefault("aliases", ALIASES)
         return normalize_source_content(
             content=content,
             source=SOURCE,
@@ -686,9 +648,9 @@ class SourceNormalizationTests(unittest.TestCase):
             candidate["normalized_url"],
             "https://example.test/live.ts",
         )
-        self.assertEqual(candidate["source_type"], "manual")
-        self.assertEqual(candidate["priority"], 0)
-        self.assertEqual(candidate["source_order"], 3)
+        self.assertEqual(candidate["source_type"], SOURCE["source_type"])
+        self.assertEqual(candidate["priority"], SOURCE["priority"])
+        self.assertEqual(candidate["source_order"], SOURCE["order"])
 
     def test_global_duplicate_url_is_removed(self):
         seen = set()
@@ -751,6 +713,7 @@ class SourceNormalizationTests(unittest.TestCase):
             channels=CHANNELS,
             max_candidates_per_source=1,
             seen_urls=seen,
+            aliases=ALIASES,
         )
 
         self.assertEqual(
@@ -773,6 +736,7 @@ class SourceNormalizationTests(unittest.TestCase):
             channels=CHANNELS,
             max_candidates_per_source=1,
             seen_urls=set(),
+            aliases=ALIASES,
         )
 
         self.assertEqual(
@@ -783,7 +747,7 @@ class SourceNormalizationTests(unittest.TestCase):
         self.assertTrue(
             any("无效线路 URL" in error for error in result["errors"])
         )
-    
+
     def test_channel_category_comes_from_channels_file(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "channels.txt"
@@ -815,6 +779,7 @@ class SourceNormalizationTests(unittest.TestCase):
             channels=CHANNELS,
             max_candidates_per_source=1,
             seen_urls=set(),
+            aliases=ALIASES,
         )
 
         self.assertEqual(len(result["candidates"]), 1)
@@ -834,6 +799,7 @@ class SourceNormalizationTests(unittest.TestCase):
             max_candidates_per_source=100,
             max_candidates_remaining=1,
             seen_urls=set(),
+            aliases=ALIASES,
         )
 
         self.assertEqual(len(result["candidates"]), 1)
@@ -854,6 +820,7 @@ class SourceNormalizationTests(unittest.TestCase):
                 channels=CHANNELS,
                 max_candidates_per_source=0,
                 seen_urls=set(),
+                aliases=ALIASES,
             )
 
 
