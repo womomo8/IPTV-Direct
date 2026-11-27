@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from datetime import datetime
 import sys
 import time
 import unittest
@@ -38,6 +39,30 @@ PASS = "PASS"
 FAIL = "FAIL"
 INCOMPLETE = "INCOMPLETE"
 
+def _log_event(
+    stage: str,
+    obj: str,
+    status: str,
+    detail: str,
+    *,
+    error: bool = False,
+) -> None:
+    """统一正式运行日志格式；不参与业务判断。"""
+
+    timestamp = datetime.now().astimezone().isoformat(
+        timespec="seconds"
+    )
+
+    message = (
+        f"{timestamp}｜{stage}｜{obj}｜{status}｜"
+        f"{_safe_diagnostic_text(detail)}"
+    )
+
+    print(
+        message,
+        file=sys.stderr if error else sys.stdout,
+        flush=True,
+    )
 
 def _read_text(path: Path) -> str:
     try:
@@ -668,6 +693,7 @@ def run_source_batch_pipeline(
     _print_detection_summary(
         completed_results,
         submitted_candidates,
+        attempted_count=len(pending),
     )
 
     print(
@@ -813,6 +839,7 @@ def _local_detection_outcome(
 def _print_detection_summary(
     results: list[dict[str, Any]],
     submitted_candidates: list[dict[str, Any]] | None = None,
+    attempted_count: int | None = None,
 ) -> None:
     """输出本地、视频及远程检测汇总，避免重复异常日志。"""
 
@@ -838,6 +865,26 @@ def _print_detection_summary(
         ]
     )
 
+    measurement_count = len(submitted_items)
+
+    if attempted_count is None:
+        attempted_count = measurement_count
+
+    if attempted_count < measurement_count:
+        raise ValueError(
+            "Globalping 统计异常：创建测量数超过实际尝试数"
+        )
+
+    if attempted_count > len(results):
+        raise ValueError(
+            "Globalping 统计异常：实际尝试数超过候选总数"
+        )
+
+    attempted_without_measurement = (
+        attempted_count - measurement_count
+    )
+    not_entered_count = len(results) - attempted_count
+
     remote_counts = {state: 0 for state in (PASS, FAIL, INCOMPLETE)}
     for item in submitted_items:
         remote = item.get("globalping", {})
@@ -849,8 +896,10 @@ def _print_detection_summary(
         f"本地 PASS {local_counts[PASS]} 条；"
         f"FAIL {local_counts[FAIL]} 条；"
         f"INCOMPLETE {local_counts[INCOMPLETE]} 条；"
-        f"Globalping 已提交 {len(submitted_items)} 条、"
-        f"未提交 {len(results) - len(submitted_items)} 条；"
+        f"Globalping 实际尝试 {attempted_count} 条；"
+        f"创建测量 {measurement_count} 条；"
+        f"尝试但未创建测量 {attempted_without_measurement} 条；"
+        f"未进入检测 {not_entered_count} 条；"
         f"PASS {remote_counts[PASS]} 条；"
         f"FAIL {remote_counts[FAIL]} 条；"
         f"INCOMPLETE {remote_counts[INCOMPLETE]} 条。"
@@ -981,7 +1030,7 @@ def _safe_host(candidate: dict[str, Any]) -> str:
     return _safe_host_from_url(candidate.get("normalized_url", ""))
 
 def _safe_diagnostic_text(value: Any) -> str:
-    """保留错误原因，同时将其中的完整 URL 替换为主机名。"""
+    """清理换行并隐藏 URL 和常见凭据字段。"""
     text = str(value).replace("\r", " ").replace("\n", " ")
     pattern = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 
@@ -993,7 +1042,30 @@ def _safe_diagnostic_text(value: Any) -> str:
             raw = raw[:-1]
         return _safe_host_from_url(raw) + suffix
 
-    return pattern.sub(hide_url, text)
+    text = pattern.sub(hide_url, text)
+
+    secret_pattern = re.compile(
+        r"(?i)\b("
+        r"access[_-]?token|refresh[_-]?token|"
+        r"api[_-]?key|client[_-]?secret|"
+        r"token|password|passwd|secret|authorization"
+        r")(\s*[:=]\s*)([^&\s,;]+)"
+    )
+
+    text = secret_pattern.sub(
+        lambda match: (
+            f"{match.group(1)}{match.group(2)}[REDACTED]"
+        ),
+        text,
+    )
+
+    text = re.sub(
+        r"(?i)\bBearer\s+\S+",
+        "Bearer [REDACTED]",
+        text,
+    )
+
+    return text
 
 def _print_admission_results(results: list[dict[str, Any]]) -> None:
     """逐条输出最终准入状态和拒绝原因。"""
