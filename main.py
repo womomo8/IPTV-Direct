@@ -1145,11 +1145,20 @@ def run_formal_flow(config: dict[str, Any]) -> int:
             settings,
         )
     except publisher.PublisherError as exc:
-        print(
-            f"历史订阅读取或校验失败，停止本轮处理：{exc}",
-            file=sys.stderr,
+        _log_event(
+            "历史订阅检查",
+            "历史订阅文件",
+            "FAIL",
+            f"读取或校验失败，停止本轮处理：{exc}",
+            error=True,
         )
-        print("正式订阅未修改。", file=sys.stderr)
+        _log_event(
+            "历史订阅检查",
+            "正式订阅文件",
+            "UNMODIFIED",
+            "历史订阅读取或校验失败，正式订阅未修改",
+            error=True,
+        )
         return 1    
     # 历史线路作为普通候选重新检测。
     # 先加入统一候选池，避免新来源重复线路再次占用总额度。
@@ -1188,9 +1197,15 @@ def run_formal_flow(config: dict[str, Any]) -> int:
         if item.get("errors"):
             if source.get("source_type") == "manual":
                 for message in item["errors"]:
-                    print(
-                        f"人工来源下载失败：{source.get('name', '未命名来源')}；"
-                        f"原因：{_safe_diagnostic_text(message)}"
+                    _log_event(
+                        "来源采集",
+                        "人工来源",
+                        "INCOMPLETE",
+                        (
+                            f"{source.get('name', '未命名来源')}；"
+                            f"下载失败：{message}"
+                        ),
+                        error=True,
                     )
             else:
                 errors.extend(
@@ -1203,7 +1218,13 @@ def run_formal_flow(config: dict[str, Any]) -> int:
         if not isinstance(downloaded, dict):
             message = "采集器未返回下载内容"
             if source.get("source_type") == "manual":
-                print(f"人工来源采集异常：{label}；原因：{message}")
+                _log_event(
+                    "来源采集",
+                    "人工来源",
+                    "INCOMPLETE",
+                    f"{label}；原因：{message}",
+                    error=True,
+                )
             else:
                 errors.append(f"{label}：{message}")
             continue
@@ -1211,12 +1232,17 @@ def run_formal_flow(config: dict[str, Any]) -> int:
         content = downloaded.get("content")
         content_size = len(content) if isinstance(content, (bytes, str)) else 0
         if source.get("source_type") == "manual":
-            print(
-                f"人工来源下载成功：{label}；"
-                f"HTTP {downloaded.get('http_status', '未知')}；"
-                f"内容 {content_size} 字节；"
-                f"类型 {downloaded.get('content_type') or '未提供'}；"
-                f"最终主机 {_safe_host_from_url(downloaded.get('final_url'))}。"
+            _log_event(
+                "来源采集",
+                "人工来源",
+                "SUCCESS",
+                (
+                    f"{label}；"
+                    f"HTTP {downloaded.get('http_status', '未知')}；"
+                    f"内容 {content_size} 字节；"
+                    f"类型 {downloaded.get('content_type') or '未提供'}；"
+                    f"最终主机 {_safe_host_from_url(downloaded.get('final_url'))}"
+                ),
             )
 
         remaining = limits["max_candidates_total"] - extracted_total
@@ -1224,7 +1250,12 @@ def run_formal_flow(config: dict[str, Any]) -> int:
         if remaining <= 0:
             stopped = f"达到全部候选总上限 {limits['max_candidates_total']}"
             if source.get("source_type") == "manual":
-                print(f"人工来源停止解析：{label}；原因：{stopped}。")
+                _log_event(
+                    "来源采集",
+                    "人工来源",
+                    "INCOMPLETE",
+                    f"{label}；停止解析：{stopped}",
+                )
             break
 
         source_info = {
@@ -1250,7 +1281,13 @@ def run_formal_flow(config: dict[str, Any]) -> int:
         except Exception as exc:
             safe_message = _safe_diagnostic_text(exc)
             if source.get("source_type") == "manual":
-                print(f"人工来源解析异常：{label}；原因：{safe_message}")
+                _log_event(
+                    "来源解析",
+                    "人工来源",
+                    "INCOMPLETE",
+                    f"{label}；归一解析异常：{safe_message}",
+                    error=True,
+                )
             else:
                 errors.append(f"{label}：归一解析异常：{safe_message}")
             continue
@@ -1284,12 +1321,17 @@ def run_formal_flow(config: dict[str, Any]) -> int:
                 source, normalized, [], []
             )
 
-        print(
-            f"来源处理：{label}；"
-            f"识别格式 {normalized['format']}；"
-            f"匹配目标频道 {normalized['matched_target_candidates']} 条；"
-            f"本批去重 {normalized['duplicate_candidates']} 条；"
-            f"进入全局候选池 {len(candidates)} 条。"
+        _log_event(
+            "来源采集",
+            "来源处理",
+            "SUCCESS",
+            (
+                f"{label}；"
+                f"识别格式 {normalized['format']}；"
+                f"匹配目标频道 {normalized['matched_target_candidates']} 条；"
+                f"本批去重 {normalized['duplicate_candidates']} 条；"
+                f"进入全局候选池 {len(candidates)} 条"
+            ),
         )
 
         stop_reason = _collection_stop_reason(
