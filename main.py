@@ -1078,17 +1078,21 @@ def _print_admission_results(results: list[dict[str, Any]]) -> None:
         channel = candidate.get("channel", "未知频道")
         host = _safe_host(candidate)
         status = item.get("status", "UNKNOWN")
-        reason = _safe_diagnostic_text(
-            item.get("reason") or "未提供"
+        reason = item.get("reason") or "未提供"
+
+        _log_event(
+            "线路准入",
+            "候选线路",
+            str(status),
+            (
+                f"第 {index} 条；"
+                f"频道 {channel}；"
+                f"主机 {host}；"
+                f"原因：{reason}"
+            ),
+            error=status == publisher.REJECTED,
         )
 
-        print(
-            f"[最终准入] 第 {index} 条；"
-            f"频道 {channel}；"
-            f"主机 {host}；"
-            f"结果 {status}；"
-            f"原因：{reason}"
-        )
 
 def _print_manual_source_details(
     source: dict[str, Any],
@@ -1099,9 +1103,12 @@ def _print_manual_source_details(
     """只输出来源解析异常，不重复打印候选检测和准入明细。"""
 
     for error in normalized.get("errors", []):
-        print(
-            f"来源解析提示：{_safe_diagnostic_text(error)}",
-            file=sys.stderr,
+        _log_event(
+            "来源解析",
+            "来源处理",
+            "WARNING",
+            str(error),
+            error=True,
         )
 
 # ----------------------------------------------------------------------
