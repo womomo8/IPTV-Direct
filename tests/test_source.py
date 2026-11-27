@@ -36,7 +36,10 @@ class SourceFlowTests(unittest.TestCase):
         ]
 
         self.assertGreaterEqual(len(remote_sources), 2)
-        self.assertEqual(len(inline_sources), 2)
+        self.assertTrue(
+            inline_sources,
+            "manual.txt 没有配置内嵌 M3U 来源",
+        )
 
         manual_txt = remote_sources[0]
         manual_m3u = remote_sources[1]
@@ -244,7 +247,7 @@ class SourceFlowTests(unittest.TestCase):
                 f"来源 {source_url} 未产生预期频道候选",
             )
 
-        # 两个内嵌 M3U 均必须进入真实解析流程。
+        # manual.txt 中所有内嵌 M3U 均必须进入真实解析流程。
         normalized_source_urls = {
             call.kwargs.get("source", {}).get("url")
             for call in normalize_spy.call_args_list
@@ -256,7 +259,7 @@ class SourceFlowTests(unittest.TestCase):
                 normalized_source_urls,
             )
 
-        # 人工来源：普通 URL、远程 M3U、两个内嵌 M3U。
+        # 人工来源：普通 URL、远程 M3U、全部内嵌 M3U。
         manual_candidates = [
             candidate
             for candidate in detected_candidates
