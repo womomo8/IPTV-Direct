@@ -338,16 +338,20 @@ def run_source_batch_pipeline(
     target_channels = {channel.casefold() for channel in channels}
     originals = [_identity(item) for item in candidates]
 
-    print(
-        f"[本地检测] 开始：待检测 {len(candidates)} 条。",
-        flush=True,
+    _log_event(
+        "本地检测",
+        "本地检测阶段",
+        "STARTED",
+        f"待检测 {len(candidates)} 条",
     )
     local_started = time.perf_counter()
 
     def report_local_progress(completed, total):
-        print(
-            f"[本地检测] 进度：已完成 {completed}/{total} 条。",
-            flush=True,
+        _log_event(
+            "本地检测",
+            "本地检测阶段",
+            "PROGRESS",
+            f"已完成 {completed}/{total} 条",
         )
 
     try:
@@ -380,11 +384,15 @@ def run_source_batch_pipeline(
             for item in candidates
         ]
 
-    print(
-        f"[本地检测] 完成：返回 {len(local_results)} 条；"
-        f"耗时 {time.perf_counter() - local_started:.2f} 秒。",
-        flush=True,
-    )    
+    _log_event(
+        "本地检测",
+        "本地检测阶段",
+        "COMPLETED",
+        (
+            f"返回 {len(local_results)} 条；"
+            f"耗时 {time.perf_counter() - local_started:.2f} 秒"
+        ),
+    )
     stream_indices = [
         index
         for index, item in enumerate(local_results)
@@ -400,9 +408,11 @@ def run_source_batch_pipeline(
     ]
 
     if stream_candidates:
-        print(
-            f"[视频检测] 开始：待检测 {len(stream_candidates)} 条。",
-            flush=True,
+        _log_event(
+            "视频检测",
+            "视频检测阶段",
+            "STARTED",
+            f"待检测 {len(stream_candidates)} 条",
         )
         stream_started = time.perf_counter()
         try:
@@ -437,11 +447,15 @@ def run_source_batch_pipeline(
                     },
                 }
 
-        print(
-            f"[视频检测] 完成：处理 {len(stream_candidates)} 条；"
-            f"耗时 {time.perf_counter() - stream_started:.2f} 秒。",
-            flush=True,
-        )   
+        _log_event(
+            "视频检测",
+            "视频检测阶段",
+            "COMPLETED",
+            (
+                f"处理 {len(stream_candidates)} 条；"
+                f"耗时 {time.perf_counter() - stream_started:.2f} 秒"
+            ),
+        )
     output: list[dict[str, Any] | None] = [None] * len(candidates)
     pending: list[tuple[int, dict[str, Any]]] = []
 
@@ -513,11 +527,15 @@ def run_source_batch_pipeline(
 
     for progress_index, (original_index, candidate) in enumerate(pending, 1):
         globalping_started = time.perf_counter()
-        print(
-            f"[Globalping] 进度 {progress_index}/{len(pending)}："
-            f"{candidate.get('channel', '未知频道')}；"
-            f"目标主机 {_safe_host(candidate)}。",
-            flush=True,
+        _log_event(
+            "Globalping检测",
+            "候选线路",
+            "PROGRESS",
+            (
+                f"进度 {progress_index}/{len(pending)}；"
+                f"频道 {candidate.get('channel', '未知频道')}；"
+                f"目标主机 {_safe_host(candidate)}"
+            ),
         )
 
         if not session_created:
@@ -596,7 +614,12 @@ def run_source_batch_pipeline(
                     else:
                         return
 
-                    print(f"{prefix}{asn_text}；{message}", flush=True)
+                    _log_event(
+                        "Globalping事件",
+                        "候选线路",
+                        "EVENT",
+                        f"{prefix}{asn_text}；{message}",
+                    )
 
                 remote_results = globalping.check_candidates(
                     [candidate],
