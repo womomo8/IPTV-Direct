@@ -207,23 +207,23 @@ class SourceFlowTests(unittest.TestCase):
             for candidate in detected_candidates
         }
 
+        # 四条模拟来源分别提供 CCTV-2 至 CCTV-5。
+        # 这些频道必须进入检测；其他候选必须符合正式频道配置。
         self.assertTrue({
-            "CCTV-1",
             "CCTV-2",
             "CCTV-3",
             "CCTV-4",
             "CCTV-5",
-            "CCTV-5+",
-            "CCTV-7",
-            "CCTV-9",
-            "广东体育",
-            "睛彩竞技",
-            "睛彩篮球",
-            "凤凰卫视中文台",
-            "凤凰资讯台",
-            "翡翠台",
-            "澳门莲花卫视",
         }.issubset(channels))
+
+        configured_channels = set(config["channels"])
+        self.assertTrue(
+            all(
+                channel is None or channel in configured_channels
+                for channel in channels
+            ),
+            "检测候选包含 channels.txt 之外的非空频道名称",
+        )
 
         # 人工来源：普通 URL、远程 M3U、两个内嵌 M3U。
         manual_candidates = [
