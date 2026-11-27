@@ -346,6 +346,60 @@ class PublisherReleaseTests(unittest.TestCase):
         ):
             self.publish(invalid)
 
+    def test_publish_callback_reports_release_stages(self):
+        """发布回调应报告关键阶段，但不改变发布结果。"""
+        events = []
+
+        subscriptions = make_subscriptions([
+            ("CCTV-1", "https://example.com/cctv1.m3u8"),
+            ("CCTV-5", "https://example.com/cctv5.m3u8"),
+        ])
+
+        result = publisher.publish_subscriptions(
+            subscriptions,
+            CHANNELS,
+            output_dir=self.output_dir,
+            event_callback=lambda stage, status, detail: (
+                events.append((stage, status, detail))
+            ),
+        )
+
+        self.assertTrue(result["published"])
+
+        stages = [event[0] for event in events]
+
+        self.assertIn("发布检查", stages)
+        self.assertIn("旧订阅检查", stages)
+        self.assertIn("临时文件准备", stages)
+        self.assertIn("正式文件替换", stages)
+        self.assertIn("发布后校验", stages)
+        self.assertIn("发布流程", stages)
+
+    def test_callback_exception_does_not_affect_publish(self):
+        """日志回调异常不得阻止正式订阅发布。"""
+        subscriptions = make_subscriptions([
+            ("CCTV-1", "https://example.com/cctv1.m3u8"),
+            ("CCTV-5", "https://example.com/cctv5.m3u8"),
+        ])
+
+        def broken_callback(stage, status, detail):
+            raise RuntimeError("模拟日志回调异常")
+
+        result = publisher.publish_subscriptions(
+            subscriptions,
+            CHANNELS,
+            output_dir=self.output_dir,
+            event_callback=broken_callback,
+        )
+
+        self.assertTrue(result["published"])
+        self.assertTrue(
+            (self.output_dir / "iptv.m3u").is_file()
+        )
+        self.assertTrue(
+            (self.output_dir / "iptv.txt").is_file()
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
