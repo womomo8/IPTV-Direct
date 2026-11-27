@@ -131,8 +131,38 @@ def normalize_url(value):
         "",
     ))
 
+_CHANNEL_METADATA_LABEL = (
+    r"(?:\d{3,4}\s*[pi]"
+    r"(?:\s*/\s*\d{3,4}\s*[pi])?"
+    r"(?:\s*\d{2,3})?"
+    r"|4k(?:\s*uhd)?|8k|uhd|fhd|hd|sd"
+    r"|geo[- ]?blocked|not\s+24/7)"
+)
+
+_CHANNEL_METADATA_SUFFIX = re.compile(
+    rf"\s*(?:\({_CHANNEL_METADATA_LABEL}\)"
+    rf"|\[{_CHANNEL_METADATA_LABEL}\])\s*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_channel_metadata(name):
+    """只移除频道名称末尾明确的清晰度和状态标记。"""
+    name = (name or "").strip()
+
+    while name:
+        match = _CHANNEL_METADATA_SUFFIX.search(name)
+
+        if not match:
+            break
+
+        name = name[:match.start()].rstrip()
+
+    return name
+
+
 def _channel_match(names, channels, aliases):
-    """只按标准名称或明确别名精确匹配。"""
+    """移除末尾元数据后，只按标准名称或明确别名精确匹配。"""
     targets = {name.casefold(): name for name in channels}
 
     if aliases is not None and not isinstance(aliases, dict):
@@ -144,7 +174,7 @@ def _channel_match(names, channels, aliases):
     }
 
     for name in names:
-        name = (name or "").strip()
+        name = _strip_channel_metadata(name)
 
         if not name:
             continue
@@ -156,7 +186,6 @@ def _channel_match(names, channels, aliases):
             return matched
 
     return None
-
 
 def _parse_attributes(text):
     return dict(re.findall(r'([\w-]+)="([^"]*)"', text))
