@@ -10,7 +10,11 @@ import socket
 import ssl
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import (
+    ThreadPoolExecutor,
+    wait,
+    FIRST_COMPLETED,
+)
 from urllib.parse import quote, urljoin, urlsplit
 
 PASS, FAIL, INCOMPLETE = "PASS", "FAIL", "INCOMPLETE"
@@ -935,51 +939,104 @@ def check_candidates(candidates, settings, progress_callback=None):
     for start in range(0, len(items), queue_limit):
         batch = items[start:start + queue_limit]
         submitted_at = time.monotonic()
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = [
-                pool.submit(
-                    detector.check_one,
-                    item,
-                    submitted_at,
+        batch_results = [None] * len(batch)
+        batch_completed = 0
+        per_host_limit = settings["per_host_concurrency"]
+
+        pending = []
+        for index, item in enumerate(batch):
+            try:
+                raw_url = (
+                    item.get("normalized_url")
+                    if isinstance(item, dict)
+                    else None
                 )
-                for item in batch
-            ]
-            future_indices = {
-                future: index
-                for index, future in enumerate(futures)
-            }
-            batch_results = [None] * len(batch)
-            batch_completed = 0
+                host = urlsplit(str(raw_url or "")).hostname
+            except (TypeError, ValueError):
+                host = None
 
-            for future in as_completed(future_indices):
-                index = future_indices[future]
-                try:
-                    batch_results[index] = future.result()
-                except Exception as exc:
-                    batch_results[index] = {
-                        **batch[index],
-                        "media_type": "UNKNOWN",
-                        "checks": {
-                            key: {
-                                "status": INCOMPLETE,
-                                "reason": f"检测程序异常：{exc}",
-                            }
-                            for key in (
-                                "ipv4", "http", "hls", "ts"
-                            )
-                        },
-                    }
+            host_key = (
+                host.lower()
+                if host
+                else f"__invalid_candidate_{index}"
+            )
+            pending.append((index, item, host_key))
 
-                batch_completed += 1
-                if progress_callback is not None:
-                    try:
-                        progress_callback(
-                            start + batch_completed,
-                            len(items),
+        inflight_by_host = {}
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            future_indices = {}
+
+            while pending or future_indices:
+                scan_count = len(pending)
+
+                while (
+                    scan_count
+                    and len(future_indices) < workers
+                ):
+                    index, item, host_key = pending.pop(0)
+
+                    if (
+                        inflight_by_host.get(host_key, 0)
+                        >= per_host_limit
+                    ):
+                        pending.append((index, item, host_key))
+                    else:
+                        future = pool.submit(
+                            detector.check_one,
+                            item,
+                            submitted_at,
                         )
-                    except Exception:
-                        pass
+                        future_indices[future] = (
+                            index,
+                            host_key,
+                        )
+                        inflight_by_host[host_key] = (
+                            inflight_by_host.get(host_key, 0) + 1
+                        )
 
-            results.extend(batch_results)
+                    scan_count -= 1
+
+                if not future_indices:
+                    break
+
+                completed, _ = wait(
+                    tuple(future_indices),
+                    return_when=FIRST_COMPLETED,
+                )
+
+                for future in completed:
+                    index, host_key = future_indices.pop(future)
+                    inflight_by_host[host_key] -= 1
+
+                    try:
+                        batch_results[index] = future.result()
+                    except Exception as exc:
+                        batch_results[index] = {
+                            **batch[index],
+                            "media_type": "UNKNOWN",
+                            "checks": {
+                                key: {
+                                    "status": INCOMPLETE,
+                                    "reason": f"检测程序异常：{exc}",
+                                }
+                                for key in (
+                                    "ipv4", "http", "hls", "ts"
+                                )
+                            },
+                        }
+
+                    batch_completed += 1
+
+                    if progress_callback is not None:
+                        try:
+                            progress_callback(
+                                start + batch_completed,
+                                len(items),
+                            )
+                        except Exception:
+                            pass
+
+        results.extend(batch_results)
 
     return results
