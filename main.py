@@ -1492,7 +1492,7 @@ def run_formal_flow(config: dict[str, Any]) -> int:
         "SUCCESS",
         f"正式文件路径：{publish_result['m3u_path']}",
     )
-        _log_event(
+    _log_event(
         "订阅发布",
         "TXT 文件",
         "SUCCESS",
