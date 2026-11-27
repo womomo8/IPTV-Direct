@@ -1605,11 +1605,21 @@ def run_formal_flow(config: dict[str, Any]) -> int:
     )
 
     # 第9阶段：执行正式订阅安全发布。
+    def report_publish_progress(stage, status, detail):
+        _log_event(
+            "订阅发布",
+            stage,
+            status,
+            detail,
+            error=status in ("FAIL", "ROLLBACK_FAILED"),
+        )
+
     try:
         publish_result = publisher.publish_subscriptions(
             subscriptions,
             channels,
             output_dir=ROOT / "output",
+            event_callback=report_publish_progress,
         )
     except Exception as exc:
         subscription_state = getattr(
