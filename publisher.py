@@ -917,11 +917,11 @@ def _restore_subscription_files(targets, old_data, directory):
 
     return errors
 
-
 def publish_subscriptions(
     subscriptions,
     channels,
     output_dir="output",
+    event_callback=None,
 ):
     """
     安全发布正式订阅。
@@ -933,7 +933,24 @@ def publish_subscriptions(
     5. 替换正式文件。
     6. 重新读取并校验。
     7. 失败时恢复旧文件。
+
+    event_callback 仅用于报告发布事件，不参与发布判断。
     """
+
+    def emit(stage, status, detail):
+        if event_callback is None:
+            return
+
+        try:
+            event_callback(stage, status, detail)
+        except Exception:
+            pass
+
+    emit(
+        "发布检查",
+        "STARTED",
+        "开始检查新订阅内容和发布条件",
+    )
 
     if not isinstance(subscriptions, dict):
         raise PublisherError("订阅数据格式错误")
@@ -1022,6 +1039,16 @@ def publish_subscriptions(
             new_channel_count * 2
             < old_channel_count
         ):
+            emit(
+                "发布保护",
+                "FAIL",
+                (
+                    f"频道数量下降超过50%；"
+                    f"旧频道 {old_channel_count} 个；"
+                    f"新频道 {new_channel_count} 个；"
+                    f"下降 {channel_drop:.1f}%"
+                ),
+            )
             raise PublisherError(
                 f"频道数量下降超过50%，阻止发布；"
                 f"旧频道 {old_channel_count} 个；"
@@ -1036,6 +1063,16 @@ def publish_subscriptions(
             new_route_count * 2
             < old_route_count
         ):
+            emit(
+                "发布保护",
+                "FAIL",
+                (
+                    f"线路数量下降超过50%；"
+                    f"旧线路 {old_route_count} 条；"
+                    f"新线路 {new_route_count} 条；"
+                    f"下降 {route_drop:.1f}%"
+                ),
+            )
             raise PublisherError(
                 f"线路数量下降超过50%，阻止发布；"
                 f"旧线路 {old_route_count} 条；"
@@ -1046,6 +1083,16 @@ def publish_subscriptions(
                 subscription_state="UNMODIFIED",
             )
 
+    emit(
+        "旧订阅检查",
+        "COMPLETED",
+        (
+            "首次发布，没有旧订阅文件"
+            if first_publish
+            else "旧 M3U/TXT 文件均存在，检查通过"
+        ),
+    )
+
     new_data = [
         m3u_text.encode("utf-8"),
         txt_text.encode("utf-8"),
@@ -1054,6 +1101,12 @@ def publish_subscriptions(
     staged = []
 
     try:
+        emit(
+            "临时文件准备",
+            "STARTED",
+            "开始准备两份正式订阅临时文件",
+        )
+
         # 先准备好两份临时文件。
         for target, data in zip(targets, new_data):
             staged.append(
@@ -1064,12 +1117,41 @@ def publish_subscriptions(
                 )
             )
 
+        emit(
+            "临时文件准备",
+            "COMPLETED",
+            "两份临时文件均已写入并完成落盘",
+        )
+
         try:
             # 依次替换正式文件。
+            emit(
+                "正式文件替换",
+                "STARTED",
+                "开始替换正式 M3U/TXT 文件",
+            )
+
             for temp_file, target in zip(staged, targets):
                 os.replace(temp_file, target)
+                emit(
+                    "正式文件替换",
+                    "PROGRESS",
+                    f"已替换 {target.name}",
+                )
+
+            emit(
+                "正式文件替换",
+                "COMPLETED",
+                "两份正式文件均已完成替换",
+            )
 
             # 重新读取正式文件。
+            emit(
+                "发布后校验",
+                "STARTED",
+                "开始重新读取正式 M3U/TXT 文件",
+            )
+
             actual_m3u = targets[0].read_text(
                 encoding="utf-8-sig"
             )
@@ -1099,7 +1181,19 @@ def publish_subscriptions(
                     "正式文件数量核验失败"
                 )
 
+            emit(
+                "发布后校验",
+                "COMPLETED",
+                "正式 M3U/TXT 内容及线路数量核验通过",
+            )
+
         except Exception as publish_error:
+            emit(
+                "正式订阅回滚",
+                "STARTED",
+                "发布过程发生异常，开始恢复旧文件",
+            )
+
             rollback_errors = _restore_subscription_files(
                 targets,
                 old_data,
@@ -1107,11 +1201,22 @@ def publish_subscriptions(
             )
 
             if rollback_errors:
+                emit(
+                    "正式订阅回滚",
+                    "FAIL",
+                    "；".join(rollback_errors),
+                )
                 raise PublisherError(
                     f"发布失败：{publish_error}；"
                     f"回滚失败：{'；'.join(rollback_errors)}",
                     subscription_state="ROLLBACK_FAILED",
                 ) from publish_error
+
+            emit(
+                "正式订阅回滚",
+                "COMPLETED",
+                "旧订阅文件已恢复",
+            )
 
             raise PublisherError(
                 f"发布失败，旧文件已恢复：{publish_error}",
@@ -1122,6 +1227,15 @@ def publish_subscriptions(
         for temp_file in staged:
             temp_file.unlink(missing_ok=True)
 
+    emit(
+        "发布流程",
+        "COMPLETED",
+        (
+            f"频道 {new_snapshot['channel_count']} 个；"
+            f"线路 {new_snapshot['route_count']} 条"
+        ),
+    )
+
     return {
         "published": True,
         "channel_count": new_snapshot["channel_count"],
@@ -1130,3 +1244,5 @@ def publish_subscriptions(
         "txt_path": str(targets[1]),
         "first_publish": first_publish,
     }
+
+
