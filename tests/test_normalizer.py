@@ -215,19 +215,13 @@ class SourceParsingTests(unittest.TestCase):
         )
         channels = load_channels(root / "channels.txt")
 
-        content = "\n".join([
-            "CCTV-1_(1080p),https://example.test/cctv1",
-            "CCTV-5+_(1080p),https://example.test/cctv5plus",
-            "Hunan_TV_(2160p),https://example.test/hunan",
-            "BRTV_北京卫视_(1080p),https://example.test/beijing",
-            "江苏卫视_(1080p),https://example.test/jiangsu",
-            "浙江卫视_(1080p),https://example.test/zhejiang",
-            "五星体育_(720p),https://example.test/sports",
-            "凤凰中文_(720p),https://example.test/phoenix",
-            "[BD]广东卫视[ipv6],https://example.test/guangdong",
-            "[SD]江苏卫视[ipv6],https://example.test/jiangsu2",
-            "CCTV-4K_(1080p),https://example.test/cctv4k",
-        ])
+        items = list(settings["aliases"].items())
+        self.assertTrue(items, "settings.json 没有配置频道别名")
+
+        content = "\n".join(
+            f"{alias},https://example.test/{index}.m3u8"
+            for index, (alias, _) in enumerate(items)
+        )
 
         result = parse_source_content(
             content,
@@ -241,17 +235,7 @@ class SourceParsingTests(unittest.TestCase):
             for item in result["candidates"]
         }
 
-        self.assertEqual(actual["CCTV-1_(1080p)"], "CCTV-1")
-        self.assertEqual(actual["CCTV-5+_(1080p)"], "CCTV-5+")
-        self.assertEqual(actual["Hunan_TV_(2160p)"], "湖南卫视")
-        self.assertEqual(actual["BRTV_北京卫视_(1080p)"], "北京卫视")
-        self.assertEqual(actual["江苏卫视_(1080p)"], "江苏卫视")
-        self.assertEqual(actual["浙江卫视_(1080p)"], "浙江卫视")
-        self.assertEqual(actual["五星体育_(720p)"], "五星体育")
-        self.assertEqual(actual["凤凰中文_(720p)"], "凤凰卫视中文台")
-        self.assertEqual(actual["[BD]广东卫视[ipv6]"], "广东卫视")
-        self.assertEqual(actual["[SD]江苏卫视[ipv6]"], "江苏卫视")
-        self.assertIsNone(actual["CCTV-4K_(1080p)"])
+        self.assertEqual(actual, dict(items))
 
     def test_iptv_org_aliases_use_actual_settings(self):
         root = Path(__file__).resolve().parents[1]
@@ -261,22 +245,8 @@ class SourceParsingTests(unittest.TestCase):
         )
         channels = load_channels(root / "channels.txt")
 
-        items = [
-            ("beIN SPORTS XTRA (1080p)", "beIN SPORTS XTRA"),
-            ("ESPN (United States) HD (720p)", "ESPN"),
-            ("ESPN 2 (United States) HD (720p)", "ESPN 2"),
-            ("CCTV-5+ (1080p)", "CCTV-5+"),
-            ("Eurosport 1 (1080p)", "Eurosport 1"),
-            ("Eurosport 2 (1080p)", "Eurosport 2"),
-            ("Fox Sports 1 (720p)", "Fox Sports 1"),
-            ("NBA TV (720p)", "NBA TV"),
-            ("Sky Sports F1 (720p)", "Sky Sports F1"),
-            ("Jade (1080p)", "翡翠台"),
-            ("Phoenix Chinese Channel (720p)", "凤凰卫视中文台"),
-            ("Phoenix InfoNews Channel (720p)", "凤凰资讯台"),
-            ("Lotus TV (720p)", "澳门莲花卫视"),
-            ("TVB明珠", "明珠台"),
-        ]
+        items = list(settings["aliases"].items())
+        self.assertTrue(items, "settings.json 没有配置频道别名")
 
         lines = ["#EXTM3U"]
         for index, (name, _) in enumerate(items):
@@ -292,10 +262,12 @@ class SourceParsingTests(unittest.TestCase):
             aliases=settings["aliases"],
         )
 
-        self.assertEqual(
-            [item["channel"] for item in result["candidates"]],
-            [channel for _, channel in items],
-        )   
+        actual = {
+            item["tvg_name"]: item["channel"]
+            for item in result["candidates"]
+        }
+
+        self.assertEqual(actual, dict(items))
 
     def test_jiandantv_aliases_use_actual_settings(self):
         root = Path(__file__).resolve().parents[1]
@@ -339,11 +311,17 @@ class SourceParsingTests(unittest.TestCase):
         )
         channels = load_channels(root / "channels.txt")
 
-        content = "\n".join([
-            "CCTV-5蓝光,https://example.test/cctv5.m3u8",
-            "CCTV-5+蓝光,https://example.test/cctv5plus.m3u8",
-            "五星体育蓝光,https://example.test/wuxing.m3u8",
-        ])
+        items = [
+            (alias, canonical)
+            for alias, canonical in settings["aliases"].items()
+            if "蓝光" in alias
+        ]
+        self.assertTrue(items, "settings.json 没有配置蓝光别名")
+
+        content = "\n".join(
+            f"{alias},https://example.test/{index}.m3u8"
+            for index, (alias, _) in enumerate(items)
+        )
 
         result = parse_source_content(
             content,
@@ -352,10 +330,12 @@ class SourceParsingTests(unittest.TestCase):
             aliases=settings["aliases"],
         )
 
-        self.assertEqual(
-            [item["channel"] for item in result["candidates"]],
-            ["CCTV-5", "CCTV-5+", "五星体育"],
-        )
+        actual = {
+            item["tvg_name"]: item["channel"]
+            for item in result["candidates"]
+        }
+
+        self.assertEqual(actual, dict(items))
     
     def test_parse_m3u_and_extract_channel_attributes(self):
         content = (
@@ -437,16 +417,16 @@ class SourceParsingTests(unittest.TestCase):
             "#EXTM3U\n"
             '#EXTINF:-1 tvg-id="SkySportsF1.uk@SD" '
             'http-referrer="https://stmify.com/" '
-            'http-user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+            'http-user-agent="Mozilla/5.0 (Windows, NT 10.0; Win64; x64) '
             'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 '
-            'Safari/537.36" group-title="Sports",Sky Sports F1 (720p)\n'
+            'Safari/537.36" group-title="Sports",Sky Sport F1\n'
             '#EXTVLCOPT:http-referrer=https://stmify.com/\n'
             '#EXTVLCOPT:http-user-agent=Mozilla/5.0 test\n'
             "https://example.test/sky.m3u8\n"
             '#EXTINF:-1 tvg-id="LotusTV.mo@SD" '
-            'http-user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+            'http-user-agent="Mozilla/5.0 (Windows, NT 10.0; Win64; x64) '
             'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 '
-            'Safari/537.36" group-title="General",Lotus TV (720p)\n'
+            'Safari/537.36" group-title="General",澳门莲花\n'
             '#EXTVLCOPT:http-user-agent=Mozilla/5.0 test\n'
             "https://example.test/lotus.m3u8\n"
         )
@@ -460,7 +440,7 @@ class SourceParsingTests(unittest.TestCase):
 
         self.assertEqual(
             [item["channel"] for item in result["candidates"]],
-            ["Sky Sports F1", "澳门莲花卫视"],
+            ["Sky Sport F1", "澳门莲花卫视"],
         )
         self.assertEqual(
             [item["raw_url"] for item in result["candidates"]],
