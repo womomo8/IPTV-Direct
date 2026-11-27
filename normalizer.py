@@ -174,12 +174,21 @@ def _channel_match(names, channels, aliases):
     }
 
     for name in names:
-        name = _strip_channel_metadata(name)
+        raw_name = (name or "").strip()
 
-        if not name:
+        if not raw_name:
             continue
 
-        canonical = alias_map.get(name.casefold(), name)
+        if raw_name.casefold() in alias_map:
+            canonical = alias_map[raw_name.casefold()]
+        else:
+            name = _strip_channel_metadata(raw_name)
+
+            if not name:
+                continue
+
+            canonical = alias_map.get(name.casefold(), name)
+
         matched = targets.get(str(canonical).casefold())
 
         if matched:
