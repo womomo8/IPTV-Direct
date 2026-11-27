@@ -181,7 +181,14 @@ class MainFormalFailureTests(unittest.TestCase):
 
         self.assertEqual(result, 1)
         publish_mock.assert_called_once()
-        self.assertIn("正式订阅发布失败", errors)
+        self.assertIn(
+            "｜订阅发布｜正式订阅｜FAIL｜模拟文件替换异常",
+            errors,
+        )
+        self.assertIn(
+            "｜订阅发布｜正式订阅文件｜UNKNOWN｜正式订阅状态无法确认",
+            errors,
+        )
 
     def test_admission_results_are_printed_individually(self):
         """最终准入日志必须逐条输出状态和原因。"""
@@ -206,11 +213,15 @@ class MainFormalFailureTests(unittest.TestCase):
         ]
 
         output = io.StringIO()
+        errors = io.StringIO()
 
-        with contextlib.redirect_stdout(output):
+        with (
+            contextlib.redirect_stdout(output),
+            contextlib.redirect_stderr(errors),
+        ):
             main._print_admission_results(results)
 
-        content = output.getvalue()
+        content = output.getvalue() + errors.getvalue()
 
         self.assertIn("第 1 条", content)
         self.assertIn("第 2 条", content)
