@@ -371,28 +371,50 @@ class SourceBatchPipelineTests(unittest.TestCase):
             "reason": "请求超时",
         }
 
-        with patch("builtins.print") as print_mock:
+        with patch("main._log_event") as log_mock:
             main._print_detection_summary(
                 [passed, failed, incomplete, mixed],
                 [],
             )
 
-        output = "\n".join(
-            str(call.args[0])
-            for call in print_mock.call_args_list
-        )
+        events = [
+            call.args[:4]
+            for call in log_mock.call_args_list
+        ]
 
         self.assertIn(
-            "候选 4 条；本地 PASS 1 条；FAIL 2 条；INCOMPLETE 1 条",
-            output,
+            (
+                "检测汇总",
+                "本地及Globalping统计",
+                "SUCCESS",
+                (
+                    "候选 4 条；本地 PASS 1 条；"
+                    "FAIL 2 条；INCOMPLETE 1 条；"
+                    "Globalping 实际尝试 0 条；"
+                    "创建测量 0 条；尝试但未创建测量 0 条；"
+                    "未进入检测 4 条；Globalping PASS 0 条；"
+                    "FAIL 0 条；INCOMPLETE 0 条"
+                ),
+            ),
+            events,
         )
         self.assertIn(
-            "本地 FAIL 主要原因：HTTP：连接被拒绝 × 2 条",
-            output,
+            (
+                "本地检测",
+                "FAIL原因汇总",
+                "FAIL",
+                "HTTP：连接被拒绝 × 2 条",
+            ),
+            events,
         )
         self.assertIn(
-            "本地 INCOMPLETE 主要原因：TS：请求超时 × 1 条",
-            output,
+            (
+                "本地检测",
+                "INCOMPLETE原因汇总",
+                "INCOMPLETE",
+                "TS：请求超时 × 1 条",
+            ),
+            events,
         )
     
     def test_only_stream_pass_can_enter_globalping(self):
