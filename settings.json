@@ -25,10 +25,6 @@
   "selection": {
     "max_routes_per_channel": 2
   },
-  "schedule": {
-    "timezone": "Asia/Shanghai",
-    "daily_time": "00:00"
-  },
   "aliases": {
     "CCTV1": "CCTV-1",
     "CCTV-1综合": "CCTV-1",
