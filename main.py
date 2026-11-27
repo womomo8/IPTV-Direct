@@ -674,12 +674,18 @@ def run_source_batch_pipeline(
             if isinstance(result.get("globalping"), dict)
             else "未知"
         )
-        print(
-            f"[Globalping] 完成 {progress_index}/{len(pending)}："
-            f"状态 {remote_status}；"
-            f"耗时 {time.perf_counter() - globalping_started:.2f} 秒。",
-            flush=True,
-        )    
+        _log_event(
+            "Globalping检测",
+            "候选线路",
+            str(remote_status),
+            (
+                f"进度 {progress_index}/{len(pending)}；"
+                f"频道 {candidate.get('channel', '未知频道')}；"
+                f"主机 {_safe_host(candidate)}；"
+                f"耗时 {time.perf_counter() - globalping_started:.2f} 秒"
+            ),
+            error=remote_status != PASS,
+        )
     completed_results = []
 
     for index, result in enumerate(output):
@@ -696,9 +702,11 @@ def run_source_batch_pipeline(
         attempted_count=len(pending),
     )
 
-    print(
-        f"[准入] 开始：待处理候选 {len(completed_results)} 条。",
-        flush=True,
+    _log_event(
+        "线路准入",
+        "批量准入",
+        "STARTED",
+        f"待处理候选 {len(completed_results)} 条",
     )
     admission_started = time.perf_counter()
 
@@ -713,9 +721,11 @@ def run_source_batch_pipeline(
         exc.detection_results = completed_results
         raise
 
-    print(
-        f"[准入] 完成：耗时 {time.perf_counter() - admission_started:.2f} 秒。",
-        flush=True,
+    _log_event(
+        "线路准入",
+        "批量准入",
+        "SUCCESS",
+        f"处理完成；耗时 {time.perf_counter() - admission_started:.2f} 秒",
     )
 
     returned = admission.get("results")
