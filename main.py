@@ -960,22 +960,32 @@ def _print_detection_summary(
         if status == PASS:
             continue
 
-        print(
-            f"视频检测异常：频道 {item.get('channel', '未知频道')}；"
-            f"主机 {_safe_host(item)}；"
-            f"状态 {status}；"
-            f"分辨率 {quality.get('width', '未知')}×{quality.get('height', '未知')}；"
-            f"编码 {quality.get('codec') or '未知'}；"
-            f"帧率 {quality.get('fps') or '未知'}；"
-            f"原因：{_safe_diagnostic_text(quality.get('reason') or '未提供')}"
+        _log_event(
+            "视频检测",
+            "候选线路",
+            str(status),
+            (
+                f"频道 {item.get('channel', '未知频道')}；"
+                f"主机 {_safe_host(item)}；"
+                f"分辨率 {quality.get('width', '未知')}×{quality.get('height', '未知')}；"
+                f"编码 {quality.get('codec') or '未知'}；"
+                f"帧率 {quality.get('fps') or '未知'}；"
+                f"原因：{quality.get('reason') or '未提供'}"
+            ),
+            error=True,
         )
 
-    print(
-        f"视频质量统计：实际检测 {stream_checked} 条；"
-        f"PASS {stream_counts[PASS]} 条；"
-        f"FAIL {stream_counts[FAIL]} 条；"
-        f"INCOMPLETE {stream_counts[INCOMPLETE]} 条；"
-        f"未进入视频检测 {len(results) - stream_checked} 条。"
+    _log_event(
+        "视频检测",
+        "视频质量汇总",
+        "SUCCESS",
+        (
+            f"实际检测 {stream_checked} 条；"
+            f"PASS {stream_counts[PASS]} 条；"
+            f"FAIL {stream_counts[FAIL]} 条；"
+            f"INCOMPLETE {stream_counts[INCOMPLETE]} 条；"
+            f"未进入视频检测 {len(results) - stream_checked} 条"
+        ),
     )
 
     for item in submitted_items:
