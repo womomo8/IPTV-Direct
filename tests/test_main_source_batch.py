@@ -237,12 +237,14 @@ class SourceBatchPipelineTests(unittest.TestCase):
         )
         self.assertTrue(callable(callback))
 
-        with patch("builtins.print") as print_mock:
+        with patch("main._log_event") as log_mock:
             callback(1, 1)
 
-        print_mock.assert_called_once_with(
-            "[本地检测] 进度：已完成 1/1 条。",
-            flush=True,
+        log_mock.assert_called_once_with(
+            "本地检测",
+            "本地检测阶段",
+            "PROGRESS",
+            "已完成 1/1 条",
         )
 
     def test_globalping_progress_callback_logs_probe_stage(self):
@@ -263,16 +265,21 @@ class SourceBatchPipelineTests(unittest.TestCase):
         )
         self.assertTrue(callable(callback))
 
-        with patch("builtins.print") as print_mock:
+        with patch("main._log_event") as log_mock:
             callback({
                 "event": "stage_started",
                 "stage": "probe_1",
                 "asn": 12345,
             })
 
-        print_mock.assert_called_once_with(
-            "[Globalping] 频道一；主机 example.test；第一 ASN 探针阶段；ASN 12345；探针阶段开始。",
-            flush=True,
+        log_mock.assert_called_once_with(
+            "Globalping事件",
+            "候选线路",
+            "EVENT",
+            (
+                "[Globalping] 频道一；主机 example.test；"
+                "第一 ASN 探针阶段；ASN 12345；探针阶段开始。"
+            ),
         )
 
     def test_detection_summary_is_printed_before_admission(self):
