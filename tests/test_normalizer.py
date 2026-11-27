@@ -248,6 +248,8 @@ class SourceParsingTests(unittest.TestCase):
         items = list(settings["aliases"].items())
         self.assertTrue(items, "settings.json 没有配置频道别名")
 
+        lines = ["#EXTM3U"]
+        for index, (name, _) in enumerate(items):
             lines.extend([
                 f'#EXTINF:-1 tvg-id="external-{index}" tvg-name="{name}",{name}',
                 f"https://example.test/{index}.m3u8",
