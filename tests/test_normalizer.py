@@ -163,8 +163,57 @@ class ChannelMatchingTests(unittest.TestCase):
             "CCTV-5",
         )
 
+    def test_matches_channel_with_resolution_suffix(self):
+        self.assertEqual(
+            _channel_match(
+                ["ESPN (1080p)"],
+                ["ESPN"],
+                None,
+            ),
+            "ESPN",
+        )
+
+    def test_matches_channel_with_multiple_metadata_suffixes(self):
+        self.assertEqual(
+            _channel_match(
+                ["ESPN (720p) [Geo-blocked]"],
+                ["ESPN"],
+                None,
+            ),
+            "ESPN",
+        )
+
+    def test_matches_channel_with_status_suffix(self):
+        self.assertEqual(
+            _channel_match(
+                ["ESPN [Not 24/7]"],
+                ["ESPN"],
+                None,
+            ),
+            "ESPN",
+        )
+
+    def test_metadata_suffix_is_removed_before_alias_matching(self):
+        self.assertEqual(
+            _channel_match(
+                ["ESPN 2 HD (1080p)"],
+                ["ESPN 2"],
+                {"ESPN 2 HD": "ESPN 2"},
+            ),
+            "ESPN 2",
+        )
+
+    def test_preserves_official_hd_channel_name(self):
+        self.assertEqual(
+            _channel_match(
+                ["DD Sports HD"],
+                ["DD Sports HD"],
+                None,
+            ),
+            "DD Sports HD",
+        )
+
     def test_unknown_alias_does_not_match(self):
-        self.assertIsNone(
             _channel_match(
                 ["CCTV5"],
                 CHANNELS,
