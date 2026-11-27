@@ -891,18 +891,23 @@ def _print_detection_summary(
         if isinstance(remote, dict) and remote.get("status") in remote_counts:
             remote_counts[remote["status"]] += 1
 
-    print(
-        f"检测统计：候选 {len(results)} 条；"
-        f"本地 PASS {local_counts[PASS]} 条；"
-        f"FAIL {local_counts[FAIL]} 条；"
-        f"INCOMPLETE {local_counts[INCOMPLETE]} 条；"
-        f"Globalping 实际尝试 {attempted_count} 条；"
-        f"创建测量 {measurement_count} 条；"
-        f"尝试但未创建测量 {attempted_without_measurement} 条；"
-        f"未进入检测 {not_entered_count} 条；"
-        f"PASS {remote_counts[PASS]} 条；"
-        f"FAIL {remote_counts[FAIL]} 条；"
-        f"INCOMPLETE {remote_counts[INCOMPLETE]} 条。"
+    _log_event(
+        "检测汇总",
+        "本地及Globalping统计",
+        "SUCCESS",
+        (
+            f"候选 {len(results)} 条；"
+            f"本地 PASS {local_counts[PASS]} 条；"
+            f"FAIL {local_counts[FAIL]} 条；"
+            f"INCOMPLETE {local_counts[INCOMPLETE]} 条；"
+            f"Globalping 实际尝试 {attempted_count} 条；"
+            f"创建测量 {measurement_count} 条；"
+            f"尝试但未创建测量 {attempted_without_measurement} 条；"
+            f"未进入检测 {not_entered_count} 条；"
+            f"Globalping PASS {remote_counts[PASS]} 条；"
+            f"FAIL {remote_counts[FAIL]} 条；"
+            f"INCOMPLETE {remote_counts[INCOMPLETE]} 条"
+        ),
     )
 
     for status in (FAIL, INCOMPLETE):
@@ -928,7 +933,13 @@ def _print_detection_summary(
                 f"共 {remaining_count} 条"
             )
 
-        print(f"本地 {status} 主要原因：{summary}。")
+        _log_event(
+            "本地检测",
+            f"{status}原因汇总",
+            status,
+            summary,
+            error=True,
+        )
 
     stream_counts = {state: 0 for state in (PASS, FAIL, INCOMPLETE)}
     stream_checked = 0
@@ -941,11 +952,17 @@ def _print_detection_summary(
                     continue
                 if detail.get("status") == PASS:
                     continue
-                print(
-                    f"本地检测异常：频道 {item.get('channel', '未知频道')}；"
-                    f"主机 {_safe_host(item)}；"
-                    f"{check_name.upper()} {detail.get('status', '未知')}；"
-                    f"原因：{_safe_diagnostic_text(detail.get('reason') or '未提供')}"
+                _log_event(
+                    "本地检测",
+                    "候选线路",
+                    str(detail.get("status", "未知")),
+                    (
+                        f"频道 {item.get('channel', '未知频道')}；"
+                        f"主机 {_safe_host(item)}；"
+                        f"{check_name.upper()}；"
+                        f"原因：{detail.get('reason') or '未提供'}"
+                    ),
+                    error=True,
                 )
 
         quality = item.get("stream_quality")
