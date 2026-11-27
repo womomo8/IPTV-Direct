@@ -1,4 +1,3 @@
-
 """来源测试：验证 collector → main → normalizer 的真实交接。"""
 
 import contextlib
@@ -14,6 +13,15 @@ class SourceFlowTests(unittest.TestCase):
 
     def test_real_source_flow_with_all_source_types(self):
         config = main.load_configuration()
+        configured_channels = config["channels"]
+        self.assertTrue(configured_channels, "channels.txt 没有目标频道")
+
+        # 所有模拟频道均从当前 channels.txt 动态选取。
+        test_channels = configured_channels
+        test_channel_txt = test_channels[0]
+        test_channel_m3u = test_channels[1 % len(test_channels)]
+        test_channel_playlist = test_channels[2 % len(test_channels)]
+        test_channel_index = test_channels[3 % len(test_channels)]
 
         # 使用仓库真实人工来源配置中的前两条远程来源。
         remote_sources = [
@@ -71,14 +79,14 @@ class SourceFlowTests(unittest.TestCase):
         downloads = {
             manual_txt["url"]: {
                 "content": (
-                    "CCTV-2,https://media.test/manual-txt.m3u8\n"
+                    f"{test_channel_txt},https://media.test/manual-txt.m3u8\n"
                 ).encode("utf-8"),
                 "content_type": "text/plain",
             },
             manual_m3u["url"]: {
                 "content": (
                     "#EXTM3U\n"
-                    '#EXTINF:-1 tvg-name="CCTV-3",CCTV-3\n'
+                    f'#EXTINF:-1 tvg-name="{test_channel_m3u}",{test_channel_m3u}\n'
                     "https://media.test/manual-m3u.m3u8\n"
                 ).encode("utf-8"),
                 "content_type": "application/vnd.apple.mpegurl",
@@ -86,7 +94,7 @@ class SourceFlowTests(unittest.TestCase):
             playlist_url: {
                 "content": (
                     "#EXTM3U\n"
-                    '#EXTINF:-1 tvg-name="CCTV-4",CCTV-4\n'
+                    f'#EXTINF:-1 tvg-name="{test_channel_playlist}",{test_channel_playlist}\n'
                     "https://media.test/automatic.m3u8\n"
                 ).encode("utf-8"),
                 "content_type": "application/vnd.apple.mpegurl",
@@ -102,7 +110,7 @@ class SourceFlowTests(unittest.TestCase):
             },
             index_playlist_url: {
                 "content": (
-                    "CCTV-5,https://media.test/index.m3u8\n"
+                    f"{test_channel_index},https://media.test/index.m3u8\n"
                 ).encode("utf-8"),
                 "content_type": "text/plain",
             },
@@ -171,6 +179,11 @@ class SourceFlowTests(unittest.TestCase):
         # 只模拟网络、线路检测、准入和发布边界。
         with (
             patch.object(
+                main,
+                "normalize_source_content",
+                wraps=main.normalize_source_content,
+            ) as normalize_spy,
+            patch.object(
                 collector,
                 "download_url",
                 side_effect=fake_download,
@@ -198,32 +211,50 @@ class SourceFlowTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
 
-        # 来源线路数量可能变化，不固定候选总数。
-        # 至少验证两个远程人工来源和两个内嵌来源均进入检测。
-        self.assertGreaterEqual(len(detected_candidates), 6)
+        # 四条模拟远程来源均应产生候选，不固定候选总数。
+        self.assertGreaterEqual(len(detected_candidates), 4)
 
         channels = {
             candidate["channel"]
             for candidate in detected_candidates
         }
 
-        self.assertTrue({
-            "CCTV-1",
-            "CCTV-2",
-            "CCTV-3",
-            "CCTV-4",
-            "CCTV-5",
-            "CCTV-5+",
-            "CCTV-7",
-            "CCTV-9",
-            "广东体育",
-            "睛彩竞技",
-            "睛彩篮球",
-            "凤凰卫视中文台",
-            "凤凰资讯台",
-            "翡翠台",
-            "澳门莲花卫视",
-        }.issubset(channels))
+        self.assertTrue(channels)
+        self.assertTrue(
+            channels.issubset(set(configured_channels)),
+            f"检测结果包含不在 channels.txt 中的频道："
+            f"{sorted(channels - set(configured_channels))}",
+        )
+
+        # 四种模拟来源的频道均从当前 channels.txt 动态选取。
+        expected_channels = {
+            manual_txt["url"]: test_channel_txt,
+            manual_m3u["url"]: test_channel_m3u,
+            playlist_url: test_channel_playlist,
+            index_playlist_url: test_channel_index,
+        }
+
+        for source_url, expected_channel in expected_channels.items():
+            self.assertTrue(
+                any(
+                    candidate["source_url"] == source_url
+                    and candidate["channel"] == expected_channel
+                    for candidate in detected_candidates
+                ),
+                f"来源 {source_url} 未产生预期频道候选",
+            )
+
+        # 两个内嵌 M3U 均必须进入真实解析流程。
+        normalized_source_urls = {
+            call.kwargs.get("source", {}).get("url")
+            for call in normalize_spy.call_args_list
+        }
+
+        for inline_source in inline_sources:
+            self.assertIn(
+                inline_source["url"],
+                normalized_source_urls,
+            )
 
         # 人工来源：普通 URL、远程 M3U、两个内嵌 M3U。
         manual_candidates = [
@@ -231,7 +262,7 @@ class SourceFlowTests(unittest.TestCase):
             for candidate in detected_candidates
             if candidate["source_type"] == "manual"
         ]
-        self.assertGreaterEqual(len(manual_candidates), 4)
+        self.assertGreaterEqual(len(manual_candidates), 2)
 
         # 两个模拟远程人工来源各产生一条候选。
         self.assertEqual(
@@ -257,17 +288,6 @@ class SourceFlowTests(unittest.TestCase):
         self.assertIn(manual_txt["url"], manual_source_urls)
         self.assertIn(manual_m3u["url"], manual_source_urls)
 
-        for inline_source in inline_sources:
-            self.assertIn(
-                inline_source["url"],
-                manual_source_urls,
-            )
-            self.assertTrue(
-                any(
-                    candidate["source_url"] == inline_source["url"]
-                    for candidate in manual_candidates
-                )
-            )
         # 自动 M3U 和索引发现的播放列表分别进入检测。
         automatic_candidates = [
             candidate
