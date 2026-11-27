@@ -1458,29 +1458,54 @@ def run_formal_flow(config: dict[str, Any]) -> int:
             "UNKNOWN": "正式订阅状态无法确认，需要检查正式文件。",
         }
 
-        print(
-            f"第9阶段正式订阅发布失败：{exc}",
-            file=sys.stderr,
+        _log_event(
+            "订阅发布",
+            "正式订阅",
+            "FAIL",
+            str(exc),
+            error=True,
         )
-        print(
+        _log_event(
+            "订阅发布",
+            "正式订阅文件",
+            subscription_state,
             state_messages.get(
                 subscription_state,
                 state_messages["UNKNOWN"],
             ),
-            file=sys.stderr,
+            error=True,
         )
         return 1
 
-    print(
-        "第9阶段正式订阅发布成功："
-        f"频道 {publish_result['channel_count']} 个；"
-        f"线路 {publish_result['route_count']} 条。"
+    _log_event(
+        "订阅发布",
+        "正式订阅",
+        "SUCCESS",
+        (
+            f"频道 {publish_result['channel_count']} 个；"
+            f"线路 {publish_result['route_count']} 条"
+        ),
     )
-    print(f"M3U 文件：{publish_result['m3u_path']}")
-    print(f"TXT 文件：{publish_result['txt_path']}")
+    _log_event(
+        "订阅发布",
+        "M3U 文件",
+        "SUCCESS",
+        f"正式文件路径：{publish_result['m3u_path']}",
+    )
+        _log_event(
+        "订阅发布",
+        "TXT 文件",
+        "SUCCESS",
+        f"正式文件路径：{publish_result['txt_path']}",
+    )
 
     if publish_result["first_publish"]:
-        print("本次属于首次发布。")
+        _log_event(
+            "订阅发布",
+            "正式订阅",
+            "SUCCESS",
+            "本次属于首次发布",
+        )
 
     return 0
 
@@ -1512,7 +1537,13 @@ def main(argv: list[str] | None = None) -> int:
             test_mode=args.mode == "test"
         )
     except ValueError as exc:
-        print(f"配置检查失败：{exc}", file=sys.stderr)
+        _log_event(
+            "配置检查",
+            "运行配置",
+            "FAIL",
+            str(exc),
+            error=True,
+        )
         return 1
 
     mode_name = (
@@ -1521,16 +1552,32 @@ def main(argv: list[str] | None = None) -> int:
         else "测试运行"
     )
 
-    print(f"IPTV-Direct：{mode_name}")
+    _log_event(
+        "程序入口",
+        "IPTV-Direct",
+        "STARTED",
+        mode_name,
+    )
 
-    print(
-        f"配置读取成功：目标频道 {len(config['channels'])} 个；"
-        f"人工来源 {len(config['manual_sources'])} 条；"
-        f"启用自动来源 {len(config['automatic_sources'])} 条。"
+    _log_event(
+        "配置检查",
+        "运行配置",
+        "SUCCESS",
+        (
+            f"目标频道 {len(config['channels'])} 个；"
+            f"人工来源 {len(config['manual_sources'])} 条；"
+            f"启用自动来源 {len(config['automatic_sources'])} 条"
+        ),
     )
 
     for error in config.get("errors", []):
-        print(f"来源配置警告：{error}", file=sys.stderr)
+        _log_event(
+            "配置检查",
+            "来源配置",
+            "WARNING",
+            error,
+            error=True,
+        )
 
     if args.mode == "test":
         suite = unittest.defaultTestLoader.discover(str(ROOT / "tests"))
