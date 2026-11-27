@@ -1375,7 +1375,7 @@ def run_formal_flow(config: dict[str, Any]) -> int:
             _log_event(
                 "线路准入",
                 "全局准入统计",
-                "SUMMARY",
+                "SUCCESS",
                 (
                     f"本轮准入 {accepted_now} 条；"
                     f"本轮拒绝 {rejected_now} 条；"
@@ -1386,7 +1386,7 @@ def run_formal_flow(config: dict[str, Any]) -> int:
             _log_event(
                 "线路准入",
                 "频道有效线路统计",
-                "SUMMARY",
+                "SUCCESS",
                 "；".join(
                     f"{channel} {count}/2"
                     for channel, count in admission["channel_counts"].items()
@@ -1395,7 +1395,7 @@ def run_formal_flow(config: dict[str, Any]) -> int:
     _log_event(
         "来源采集",
         "采集结果汇总",
-        "SUMMARY",
+        "SUCCESS",
         (
             f"有效来源 {valid_sources}；"
             f"累计提取候选 {extracted_total}；"
@@ -1406,7 +1406,7 @@ def run_formal_flow(config: dict[str, Any]) -> int:
     _log_event(
         "来源采集",
         "采集停止情况",
-        "SUMMARY",
+        "SUCCESS",
         f"停止原因：{stopped}",
     )
 
@@ -1466,7 +1466,7 @@ def run_formal_flow(config: dict[str, Any]) -> int:
     _log_event(
         "订阅生成",
         "频道线路统计",
-        "SUMMARY",
+        "SUCCESS",
         "；".join(
             f"{channel} {count}/2"
             for channel, count in subscriptions["channel_counts"].items()
