@@ -38,7 +38,7 @@ class Handler(BaseHTTPRequestHandler):
             State.active += 1
             State.maximum = max(State.maximum, State.active)
             delay = State.routes.get(self.path, 0)
-                started_event = State.started_event
+            started_event = State.started_event
             secondary_started_event = State.secondary_started_event
             release_event = State.release_event
 
