@@ -23,6 +23,7 @@ class State:
     maximum = 0
     routes = {}
     started_event = None
+    secondary_started_event = None
     release_event = None
 
 
@@ -37,7 +38,8 @@ class Handler(BaseHTTPRequestHandler):
             State.active += 1
             State.maximum = max(State.maximum, State.active)
             delay = State.routes.get(self.path, 0)
-            started_event = State.started_event
+                started_event = State.started_event
+            secondary_started_event = State.secondary_started_event
             release_event = State.release_event
 
         try:
@@ -46,6 +48,9 @@ class Handler(BaseHTTPRequestHandler):
                     started_event.set()
                 if release_event is not None:
                     release_event.wait(timeout=5)
+            elif self.path == "/other-host.ts":
+                if secondary_started_event is not None:
+                    secondary_started_event.set()
             elif delay:
                 time.sleep(delay)
 
@@ -98,6 +103,7 @@ class CheckerConcurrencyTests(unittest.TestCase):
             State.maximum = 0
             State.routes = {}
             State.started_event = None
+            State.secondary_started_event = None
             State.release_event = None
 
     def settings(self, **overrides):
@@ -401,6 +407,77 @@ class CheckerConcurrencyTests(unittest.TestCase):
             msg=f"第二个请求 HTTP 状态异常：{second_result}",
         )
 
+    def test_same_host_waiters_do_not_block_other_hosts_and_keep_input_order(self):
+        """同主机等待任务不能占满工作线程，且结果保持输入顺序。"""
+        started_event = threading.Event()
+        secondary_started_event = threading.Event()
+        release_event = threading.Event()
+
+        with State.lock:
+            State.routes = {
+                "/other-host.ts": 0,
+            }
+            State.started_event = started_event
+            State.secondary_started_event = secondary_started_event
+            State.release_event = release_event
+
+        candidates = [
+            self.candidate("/occupy-slot.ts"),
+            self.candidate("/queued-same-host.ts"),
+            self.candidate("/other-host.ts", host="localhost"),
+        ]
+
+        with ThreadPoolExecutor(max_workers=1) as runner:
+            future = runner.submit(
+                self.run_candidates,
+                candidates,
+                local_concurrency=2,
+                per_host_concurrency=1,
+                queue_limit=3,
+                max_queue_seconds=3,
+                candidate_active_budget_seconds=4,
+            )
+
+            try:
+                self.assertTrue(
+                    started_event.wait(timeout=2),
+                    "第一个主机请求没有启动",
+                )
+
+                self.assertTrue(
+                    secondary_started_event.wait(timeout=1),
+                    "其他主机的候选被同主机等待任务阻塞",
+                )
+            finally:
+                release_event.set()
+
+            results = future.result(timeout=8)
+
+        self.assertEqual(len(results), 3)
+
+        self.assertEqual(
+            [
+                item["normalized_url"]
+                for item in results
+            ],
+            [
+                item["normalized_url"]
+                for item in candidates
+            ],
+            "调度顺序变化后，结果必须仍保持原始输入顺序",
+        )
+
+        for result in results:
+            self.assertEqual(
+                result["checks"]["http"]["status"],
+                "PASS",
+                msg=f"HTTP 检测未通过：{result}",
+            )
+            self.assertEqual(
+                result["checks"]["ts"]["status"],
+                "PASS",
+                msg=f"TS 检测未通过：{result}",
+            )
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
