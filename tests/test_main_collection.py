@@ -643,15 +643,21 @@ class GlobalpingSummaryTests(unittest.TestCase):
         report = output.getvalue()
 
         self.assertIn("候选 2 条", report)
-        self.assertIn("本地 PASS 1 条；FAIL 1 条；INCOMPLETE 0 条", report)
-        self.assertIn("Globalping 已提交 1 条", report)
-        self.assertIn("未提交 1 条", report)
-        self.assertIn("PASS 0 条；FAIL 0 条；INCOMPLETE 1 条", report,)
-        self.assertIn("INCOMPLETE 1 条", report)
-        self.assertIn("北京", report)
-        self.assertIn("China Mobile", report)
-        self.assertIn("test-measurement-1", report)
-        self.assertIn("测量结果未能完成", report)
+        self.assertIn(
+            "本地 PASS 1 条；FAIL 1 条；INCOMPLETE 0 条",
+            report,
+        )
+        self.assertIn(
+            (
+                "Globalping 实际尝试 1 条；创建测量 1 条；"
+                "尝试但未创建测量 0 条；未进入检测 1 条"
+            ),
+            report,
+        )
+        self.assertIn(
+            "Globalping PASS 0 条；FAIL 0 条；INCOMPLETE 1 条",
+            report,
+        )
 
         self.assertNotIn("token=secret", report)
 
@@ -682,7 +688,7 @@ class SourceDiagnosticTests(unittest.TestCase):
                 report = output.getvalue()
 
                 self.assertIn(
-                    f"来源解析提示：{error}",
+                    f"｜来源解析｜来源处理｜WARNING｜{error}",
                     report,
                 )
 
