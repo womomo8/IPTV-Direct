@@ -85,8 +85,6 @@ def _check_settings(settings: dict[str, Any]) -> None:
         ),
         "globalping": ("max_probes",),
         "selection": ("max_routes_per_channel",),
-        "schedule": ("timezone", "daily_time"),
-    }
 
     for section, keys in required.items():
         data = settings.get(section)
@@ -96,12 +94,7 @@ def _check_settings(settings: dict[str, Any]) -> None:
         for key in keys:
             value = data.get(key)
 
-            if key in ("timezone", "daily_time"):
-                if not isinstance(value, str) or not value.strip():
-                    raise ValueError(
-                        f"settings.json 参数 {section}.{key} 必须是非空文本"
-                    )
-            elif (
+            if (
                 isinstance(value, bool)
                 or not isinstance(value, int)
                 or value <= 0
