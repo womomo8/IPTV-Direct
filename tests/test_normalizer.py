@@ -214,6 +214,7 @@ class ChannelMatchingTests(unittest.TestCase):
         )
 
     def test_unknown_alias_does_not_match(self):
+        self.assertIsNone(
             _channel_match(
                 ["CCTV5"],
                 CHANNELS,
