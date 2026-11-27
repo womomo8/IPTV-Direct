@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from main import load_configuration
 from normalizer import (
     ChannelConfigError,
     _channel_match,
@@ -17,17 +18,12 @@ from normalizer import (
 )
 
 
-CHANNELS = ["CCTV-1", "CCTV-5", "湖南卫视"]
+ROOT = Path(__file__).resolve().parents[1]
+CONFIG = load_configuration(ROOT)
 
-SOURCE = {
-    "id": "test-001",
-    "name": "模拟测试来源",
-    "url": "https://example.test/list.m3u",
-    "final_url": "https://example.test/list.m3u",
-    "source_type": "manual",
-    "priority": 0,
-    "order": 3,
-}
+CHANNELS = CONFIG["channels"]
+ALIASES = CONFIG["settings"]["aliases"]
+SOURCE = CONFIG["manual_sources"][0]
 
 
 class ChannelConfigTests(unittest.TestCase):
