@@ -657,6 +657,11 @@ index：
   "selection": {
     "max_routes_per_channel": 2
   },
+  "schedule": {
+    "timezone": "Asia/Shanghai",
+    "daily_time": "00:00"
+  }
+}
 
 参数规则：
 
@@ -1326,9 +1331,15 @@ GitHub Actions 使用 UTC 定时表达式：
 
 即 UTC 前一天 16:00，对应北京时间当天 00:00。
 
-自动更新的实际触发时间只由 GitHub Actions workflow 的 cron 决定。
-修改自动更新时间时，只修改 workflow 中的 cron，
-并核对对应的北京时间。
+定时配置必须保持一致：
+
+- settings.json：timezone 为 "Asia/Shanghai"。
+- settings.json：daily_time 为 "00:00"。
+- GitHub Actions：cron 为 "0 16 * * *"。
+
+两处分别承担配置记录和实际触发职责。
+
+修改定时时必须同步核对，不能认为修改 settings.json 就会自动改变 GitHub Actions 的 cron。
 
 14.2 手动运行
 

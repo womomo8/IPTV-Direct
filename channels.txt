@@ -1,3 +1,4 @@
+
 # 央视频道
 CCTV-1
 CCTV-2
@@ -17,6 +18,9 @@ CCTV-14
 CCTV-15
 CCTV-16
 CCTV-17
+CCTV-风云足球
+CCTV-央视台球
+CCTV-高尔夫·网球
 
 # 卫视频道
 湖南卫视
@@ -27,7 +31,7 @@ CCTV-17
 广东卫视
 东南卫视
 
-# 港澳台频道
+# 港澳台
 凤凰卫视中文台
 凤凰资讯台
 翡翠台
@@ -35,56 +39,30 @@ CCTV-17
 澳门莲花卫视
 中天新闻
 
-# 国内体育频道
+# 体育频道
 广东体育
+五星体育
+天津体育
 劲爆体育
 BRTV体育休闲
-五星体育
-山东体育
-安徽综艺体育
-福建体育
-纬来体育
-辽宁体育
-魅力足球
+陕西体育休闲
 
-# 美国体育频道
+# 国外频道
 NBA TV
 ESPN
 ESPN 2
-ESPN 4
-ESPN Premium
-ESPN Premium HD
-ESPN8 The Ocho
-ESPN 2 Latin America Colombia
-ESPN Latin America Colombia
+beIN Sports
+Sky Sports F1
+DAZN
+The NBA Channel
 Fox Sports 1
-Fox Sports HD
-Fox Sports News
-FOX Central
-NBC Sports
-CBS Sports Golazo Network
-CBS Sports HQ
-NFL Channel
-MLB
-NHL Network
-
-# 欧洲体育频道
+TNT Sports 1
+beIN SPORTS XTRA
 Eurosport 1
 Eurosport 2
-Eurosport 3 Polska
-Eurosport 4 Polska
-Sky Sports 1
-Sky Sport F1
-TNT Sports
-TNT Sports Premium ArgentinaHD
-Arena Sport 1
-Arena Sport 2
-Canal+ Sport
 
-# 国际体育频道
-beIN Sports 1 Turk
-beIN SPORTS XTRA
-beIN Sports XTRA en Espanol
-Claro Sports
-DD Sports HD
-F1 Channel
+
+
+
+
+

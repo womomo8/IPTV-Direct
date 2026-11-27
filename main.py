@@ -85,6 +85,7 @@ def _check_settings(settings: dict[str, Any]) -> None:
         ),
         "globalping": ("max_probes",),
         "selection": ("max_routes_per_channel",),
+        "schedule": ("timezone", "daily_time"),
     }
 
     for section, keys in required.items():
@@ -95,7 +96,12 @@ def _check_settings(settings: dict[str, Any]) -> None:
         for key in keys:
             value = data.get(key)
 
-            if (
+            if key in ("timezone", "daily_time"):
+                if not isinstance(value, str) or not value.strip():
+                    raise ValueError(
+                        f"settings.json 参数 {section}.{key} 必须是非空文本"
+                    )
+            elif (
                 isinstance(value, bool)
                 or not isinstance(value, int)
                 or value <= 0
@@ -103,6 +109,22 @@ def _check_settings(settings: dict[str, Any]) -> None:
                 raise ValueError(
                     f"settings.json 参数 {section}.{key} 必须是正整数"
                 )
+
+    if settings["schedule"]["timezone"] != "Asia/Shanghai":
+        raise ValueError("settings.json schedule.timezone 必须为 Asia/Shanghai")
+
+    clock = settings["schedule"]["daily_time"]
+
+    try:
+        hour, minute = (int(part) for part in clock.split(":"))
+    except (ValueError, AttributeError) as exc:
+        raise ValueError(
+            "settings.json schedule.daily_time 必须使用 HH:MM 格式"
+        ) from exc
+
+    if len(clock) != 5 or not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise ValueError("settings.json schedule.daily_time 不是有效 HH:MM 时间")
+
 
 def load_configuration(
     root: Path = ROOT,
