@@ -1372,35 +1372,60 @@ def run_formal_flow(config: dict[str, Any]) -> int:
                 for result in admission_results
             )
 
-            print(
-                f"全局准入：本轮准入 {accepted_now} 条；"
-                f"本轮拒绝 {rejected_now} 条；"
-                f"最终保留 {len(accepted_routes)} 条。"
+            _log_event(
+                "线路准入",
+                "全局准入统计",
+                "SUMMARY",
+                (
+                    f"本轮准入 {accepted_now} 条；"
+                    f"本轮拒绝 {rejected_now} 条；"
+                    f"最终保留 {len(accepted_routes)} 条"
+                ),
             )
 
-            print(
-                "频道有效线路统计："
-                + "；".join(
+            _log_event(
+                "线路准入",
+                "频道有效线路统计",
+                "SUMMARY",
+                "；".join(
                     f"{channel} {count}/2"
                     for channel, count in admission["channel_counts"].items()
-                )
-            )        
-    print(
-        f"来源汇总：有效来源 {valid_sources}；"
-        f"累计提取候选 {extracted_total}；"
-        f"重复候选 {duplicate_total}；"
-        f"实际完成检测 {len(detected)}。"
+                ),
+            )
+    _log_event(
+        "来源采集",
+        "采集结果汇总",
+        "SUMMARY",
+        (
+            f"有效来源 {valid_sources}；"
+            f"累计提取候选 {extracted_total}；"
+            f"重复候选 {duplicate_total}；"
+            f"实际完成检测 {len(detected)}"
+        ),
     )
-    print(f"采集停止原因：{stopped}")
+    _log_event(
+        "来源采集",
+        "采集停止情况",
+        "SUMMARY",
+        f"停止原因：{stopped}",
+    )
 
     for error in errors:
-        print(f"来源警告：{error}", file=sys.stderr)
+        _log_event(
+            "来源采集",
+            "来源处理",
+            "WARNING",
+            error,
+            error=True,
+        )
 
     if system_error:
-        print(
-            "发生准入系统错误，停止后续处理；"
-            "正式订阅未修改。",
-            file=sys.stderr,
+        _log_event(
+            "线路准入",
+            "正式处理流程",
+            "FAIL",
+            "发生准入系统错误，停止后续处理；正式订阅未修改",
+            error=True,
         )
         return 1
 
@@ -1411,30 +1436,48 @@ def run_formal_flow(config: dict[str, Any]) -> int:
             channels,
         )
     except publisher.PublisherError as exc:
-        print(
-            f"订阅生成或格式检查失败：{exc}",
-            file=sys.stderr,
+        _log_event(
+            "订阅生成",
+            "订阅内容",
+            "FAIL",
+            str(exc),
+            error=True,
         )
-        print("正式订阅未修改。", file=sys.stderr)
+        _log_event(
+            "订阅生成",
+            "正式订阅文件",
+            "UNMODIFIED",
+            "订阅生成或格式检查失败，正式订阅未修改",
+            error=True,
+        )
         return 1
 
-    print(
-        f"订阅内容生成并校验通过："
-        f"线路 {subscriptions['route_count']} 条；"
-        f"频道 {sum(count > 0 for count in subscriptions['channel_counts'].values())} 个。"
+    _log_event(
+        "订阅生成",
+        "订阅内容校验",
+        "SUCCESS",
+        (
+            f"线路 {subscriptions['route_count']} 条；"
+            f"有效频道 "
+            f"{sum(count > 0 for count in subscriptions['channel_counts'].values())} 个"
+        ),
     )
 
-    print(
-        "本轮频道统计："
-        + "；".join(
+    _log_event(
+        "订阅生成",
+        "频道线路统计",
+        "SUMMARY",
+        "；".join(
             f"{channel} {count}/2"
             for channel, count in subscriptions["channel_counts"].items()
-        )
+        ),
     )
 
-    print(
-        "第8阶段处理完成：已执行正式准入、频道统计、"
-        "M3U/TXT 生成及一致性检查。"
+    _log_event(
+        "订阅生成",
+        "第8阶段",
+        "SUCCESS",
+        "已执行正式准入、频道统计、M3U/TXT 生成及一致性检查",
     )
 
     # 第9阶段：执行正式订阅安全发布。
