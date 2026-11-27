@@ -987,23 +987,33 @@ def _print_detection_summary(
         if status == PASS:
             continue
 
-        print(
-            f"Globalping 检测异常："
-            f"频道 {item.get('channel', '未知频道')}；"
-            f"主机 {_safe_host(item)}；"
-            f"状态 {status}；"
-            f"原因：{_safe_diagnostic_text(remote.get('error') or '未提供')}"
+        _log_event(
+            "Globalping检测",
+            "候选线路",
+            str(status),
+            (
+                f"频道 {item.get('channel', '未知频道')}；"
+                f"主机 {_safe_host(item)}；"
+                f"原因：{remote.get('error') or '未提供'}"
+            ),
+            error=True,
         )
 
         probes = remote.get("probes", {})
         if isinstance(probes, dict):
             for probe in probes.values():
                 if isinstance(probe, dict):
-                    print(
-                        f"  探针：{probe.get('country', '未知地区')} "
-                        f"{probe.get('city', '未知城市')}；"
-                        f"ASN {probe.get('asn', '未知')}；"
-                        f"网络 {probe.get('network', '未知网络')}。"
+                    _log_event(
+                        "Globalping探针",
+                        "探针信息",
+                        str(status),
+                        (
+                            f"{probe.get('country', '未知地区')} "
+                            f"{probe.get('city', '未知城市')}；"
+                            f"ASN {probe.get('asn', '未知')}；"
+                            f"网络 {probe.get('network', '未知网络')}"
+                        ),
+                        error=True,
                     )
 
         stages = remote.get("stages", {})
@@ -1011,11 +1021,16 @@ def _print_detection_summary(
             for stage_name, stage in stages.items():
                 if not isinstance(stage, dict):
                     continue
-                print(
-                    f"  阶段 {stage_name}："
-                    f"{stage.get('status', '未知')}；"
-                    f"测量ID {stage.get('measurement_id') or '无'}；"
-                    f"原因：{_safe_diagnostic_text(stage.get('reason') or '未提供')}"
+                _log_event(
+                    "Globalping阶段",
+                    "测量阶段",
+                    str(stage.get('status', '未知')),
+                    (
+                        f"{stage_name}；"
+                        f"测量ID {stage.get('measurement_id') or '无'}；"
+                        f"原因：{stage.get('reason') or '未提供'}"
+                    ),
+                    error=True,
                 )
 
 def _safe_host_from_url(value: Any) -> str:
