@@ -1,4 +1,3 @@
-
 # 央视频道
 CCTV-1
 CCTV-2
@@ -36,19 +35,57 @@ CCTV-17
 澳门莲花卫视
 中天新闻
 
-# 体育频道
+# 国内体育频道
 广东体育
 五星体育
 睛彩篮球
 睛彩竞技
+纬来体育
+纬来育乐
+博斯运动
+博斯无限
+劲爆体育
+北京体育休闲
+
+# NBA及美国篮球赛事频道
 NBA TV
 ESPN
 ESPN 2
+ESPNU
+ESPN Deportes
+ESPNews
+Fox Sports 1
+Fox Sports 2
+CBS Sports Network
+TNT
+TBS
+ABC
+NBC Sports
+
+# 加拿大体育频道
+TSN 1
+TSN 2
+TSN 3
+TSN 4
+TSN 5
+Sportsnet
+Sportsnet One
+Sportsnet 360
+
+# 欧洲及国际体育频道
 beIN SPORTS XTRA
 Eurosport 1
 Eurosport 2
-Fox Sports 1
+Sportklub
+ELEVEN SPORTS
+ELEVEN SPORTS 1
+ELEVEN SPORTS 2
+ELEVEN SPORTS 3
+ELEVEN SPORTS 4
+ELEVEN SPORTS 5
+
+# 其他国际体育频道
 Sky Sports F1
 TNT Sports 1
+FanDuel Sports Network
 The NBA Channel
-
