@@ -1130,14 +1130,25 @@ def publish_subscriptions(
         )
 
         # 先准备好两份临时文件。
-        for target, data in zip(targets, new_data):
-            staged.append(
-                _write_temp_file(
-                    directory,
-                    f".{target.name}.stage-",
-                    data,
+        try:
+            for target, data in zip(targets, new_data):
+                staged.append(
+                    _write_temp_file(
+                        directory,
+                        f".{target.name}.stage-",
+                        data,
+                    )
                 )
+        except Exception as exc:
+            emit(
+                "临时文件准备",
+                "FAIL",
+                f"临时文件准备失败，正式订阅未修改：{exc}",
             )
+            raise PublisherError(
+                f"临时文件准备失败，正式订阅未修改：{exc}",
+                subscription_state="UNMODIFIED",
+            ) from exc
 
         emit(
             "临时文件准备",
