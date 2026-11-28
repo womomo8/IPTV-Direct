@@ -327,12 +327,18 @@ class SourceParsingTests(unittest.TestCase):
         )
         channels = load_channels(root / "channels.txt")
 
+        aliases = settings["aliases"]
         items = [
-            ("凤凰中文", "凤凰卫视中文台"),
-            ("凤凰资讯", "凤凰资讯台"),
-            ("TVB翡翠", "翡翠台"),
-            ("澳门莲花", "澳门莲花卫视"),
+            (alias, aliases[alias])
+            for alias in (
+                "凤凰中文",
+                "凤凰资讯",
+                "TVB翡翠",
+                "澳门莲花",
+            )
+            if alias in aliases
         ]
+        self.assertTrue(items, "settings.json 没有配置简丹 TV 测试别名")
 
         lines = ["#EXTM3U"]
         for index, (name, _) in enumerate(items):
@@ -350,7 +356,7 @@ class SourceParsingTests(unittest.TestCase):
 
         self.assertEqual(
             [item["channel"] for item in result["candidates"]],
-            [channel for _, channel in items],
+            [canonical for _, canonical in items],
         )
     
     def test_o0i_txt_aliases_use_actual_settings(self):
