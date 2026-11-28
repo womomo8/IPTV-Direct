@@ -953,24 +953,34 @@ def publish_subscriptions(
     )
 
     if not isinstance(subscriptions, dict):
-        raise PublisherError("订阅数据格式错误")
+        raise PublisherError(
+            "订阅数据格式错误",
+            subscription_state="UNMODIFIED",
+        )
 
     m3u_text = subscriptions.get("m3u")
     txt_text = subscriptions.get("txt")
 
-    validate_subscriptions(
-        m3u_text,
-        txt_text,
-        channels,
-    )
+    try:
+        validate_subscriptions(
+            m3u_text,
+            txt_text,
+            channels,
+        )
 
-    new_snapshot = _subscription_snapshot(
-        m3u_text,
-        txt_text,
-    )
+        new_snapshot = _subscription_snapshot(
+            m3u_text,
+            txt_text,
+        )
+    except PublisherError as exc:
+        exc.subscription_state = "UNMODIFIED"
+        raise
 
     if subscriptions.get("route_count") != new_snapshot["route_count"]:
-        raise PublisherError("订阅线路数量统计不一致")
+        raise PublisherError(
+            "订阅线路数量统计不一致",
+            subscription_state="UNMODIFIED",
+        )
 
     directory = Path(output_dir)
 
@@ -979,8 +989,13 @@ def publish_subscriptions(
         directory / "iptv.txt",
     ]
 
-    directory.mkdir(parents=True, exist_ok=True)
-
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise PublisherError(
+            f"发布前创建输出目录失败：{exc}",
+            subscription_state="UNMODIFIED",
+        ) from exc
     old_data = []
 
     for target in targets:
@@ -988,6 +1003,11 @@ def publish_subscriptions(
             data = target.read_bytes()
         except FileNotFoundError:
             data = None
+        except OSError as exc:
+            raise PublisherError(
+                f"发布前读取旧订阅文件失败：{target.name}：{exc}",
+                subscription_state="UNMODIFIED",
+            ) from exc
 
         old_data.append(data)
 
@@ -996,7 +1016,8 @@ def publish_subscriptions(
 
     if has_m3u != has_txt:
         raise PublisherError(
-            "旧订阅只有一份存在有效内容，阻止发布"
+            "旧订阅只有一份存在有效内容，阻止发布",
+            subscription_state="UNMODIFIED",
         )
 
     first_publish = not has_m3u and not has_txt
@@ -1013,7 +1034,8 @@ def publish_subscriptions(
 
         except (UnicodeDecodeError, PublisherError) as exc:
             raise PublisherError(
-                f"旧订阅损坏，阻止覆盖：{exc}"
+                f"旧订阅损坏，阻止覆盖：{exc}",
+                subscription_state="UNMODIFIED",
             ) from exc
 
         old_channel_count = old_snapshot["channel_count"]
