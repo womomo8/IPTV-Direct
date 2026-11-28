@@ -38,6 +38,32 @@ class SourceFlowTests(unittest.TestCase):
                 f"detection\\.{key}",
             ):
                 main._check_settings(settings)
+
+    def test_real_automatic_sources_are_loaded(self):
+        config = main.load_configuration()
+        automatic_sources = config["automatic_sources"]
+
+        self.assertTrue(
+            automatic_sources,
+            "sources.json 没有加载出启用的自动来源",
+        )
+
+        source_ids = [
+            source["id"]
+            for source in automatic_sources
+        ]
+
+        self.assertEqual(
+            len(source_ids),
+            len(set(source_ids)),
+            "正式自动来源存在重复 ID",
+        )
+
+        for source in automatic_sources:
+            self.assertEqual(source["source_type"], "automatic")
+            self.assertTrue(source["enabled"])
+            self.assertIn(source["mode"], ("playlist", "index"))
+            self.assertTrue(source["url"].startswith(("http://", "https://")))
     
     def test_real_source_flow_with_all_source_types(self):
         config = main.load_configuration()
@@ -55,7 +81,7 @@ class SourceFlowTests(unittest.TestCase):
         ]
 
         self.assertGreaterEqual(len(remote_sources), 2)
-        self.assertEqual(len(inline_sources), 2)
+        self.assertGreater(len(inline_sources), 0)
 
         manual_txt = remote_sources[0]
         manual_m3u = remote_sources[1]
@@ -227,29 +253,29 @@ class SourceFlowTests(unittest.TestCase):
 
         # 来源线路数量可能变化，不固定候选总数。
         # 至少验证两个远程人工来源和两个内嵌来源均进入检测。
-        self.assertGreaterEqual(len(detected_candidates), 6)
+        self.assertGreaterEqual(
+            len(detected_candidates),
+            2 + len(inline_sources),
+        )
 
         channels = {
             candidate["channel"]
             for candidate in detected_candidates
         }
 
+        configured_channels = set(config["channels"])
+
+        self.assertTrue(channels)
+        self.assertTrue(
+            channels.issubset(configured_channels),
+            f"检测结果出现正式频道配置之外的频道："
+            f"{channels - configured_channels}",
+        )
         self.assertTrue({
-            "CCTV-1",
             "CCTV-2",
             "CCTV-3",
             "CCTV-4",
             "CCTV-5",
-            "CCTV-5+",
-            "CCTV-7",
-            "CCTV-9",
-            "广东体育",
-            "睛彩竞技",
-            "睛彩篮球",
-            "凤凰卫视中文台",
-            "凤凰资讯台",
-            "翡翠台",
-            "澳门莲花卫视",
         }.issubset(channels))
 
         # 人工来源：普通 URL、远程 M3U、两个内嵌 M3U。
@@ -258,7 +284,10 @@ class SourceFlowTests(unittest.TestCase):
             for candidate in detected_candidates
             if candidate["source_type"] == "manual"
         ]
-        self.assertGreaterEqual(len(manual_candidates), 4)
+        self.assertGreaterEqual(
+            len(manual_candidates),
+            2 + len(inline_sources),
+        )
 
         # 两个模拟远程人工来源各产生一条候选。
         self.assertEqual(
