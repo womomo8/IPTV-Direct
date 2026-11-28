@@ -418,7 +418,6 @@ def run_source_batch_pipeline(
         try:
             stream_results = stream.check_candidates(
                 stream_candidates,
-                settings["detection"],
             )
 
             if (
@@ -1175,14 +1174,56 @@ def _print_manual_source_details(
     detected: list[dict[str, Any]],
     admission_results: list[dict[str, Any]],
 ) -> None:
-    """只输出来源解析异常，不重复打印候选检测和准入明细。"""
+    """按来源和错误类型汇总解析异常，避免重复日志淹没诊断信息。"""
 
-    for error in normalized.get("errors", []):
+    source_name = source.get(
+        "name",
+        source.get("url", "未命名来源"),
+    )
+
+    grouped_errors = {}
+    error_samples = {}
+
+    grouped_prefixes = (
+        "忽略带前导连字符的异常 M3U 记录：",
+        "线路缺少可确认的目标频道信息：",
+        "频道名称不在目标频道配置中：",
+    )
+
+    for raw_error in normalized.get("errors", []):
+        error = str(raw_error)
+
+        group = next(
+            (
+                prefix[:-1]
+                for prefix in grouped_prefixes
+                if error.startswith(prefix)
+            ),
+            error,
+        )
+
+        grouped_errors[group] = grouped_errors.get(group, 0) + 1
+
+        samples = error_samples.setdefault(group, [])
+        if len(samples) < 2:
+            samples.append(_safe_diagnostic_text(error))
+
+    for group, count in grouped_errors.items():
+        sample_text = ""
+        samples = error_samples[group]
+
+        if samples:
+            sample_text = "；示例：" + "；".join(samples)
+
         _log_event(
             "来源解析",
-            "来源处理",
+            "来源错误汇总",
             "WARNING",
-            str(error),
+            (
+                f"{source_name}；"
+                f"{group} × {count} 条"
+                f"{sample_text}"
+            ),
             error=True,
         )
 
