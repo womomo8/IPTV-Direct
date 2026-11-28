@@ -634,6 +634,82 @@ class PublisherReleaseTests(unittest.TestCase):
             )
         )
 
+    def test_restore_cleanup_failure_does_not_report_rollback_failure(self):
+        """恢复成功但临时文件清理失败时，订阅状态仍应为 RESTORED。"""
+        old = make_subscriptions([
+            ("CCTV-1", "https://example.com/old1.m3u8"),
+            ("CCTV-5", "https://example.com/old5.m3u8"),
+        ])
+        new = make_subscriptions([
+            ("CCTV-1", "https://example.com/new1.m3u8"),
+            ("CCTV-5", "https://example.com/new5.m3u8"),
+        ])
+
+        self.publish(old)
+
+        m3u_path = self.output_dir / "iptv.m3u"
+        txt_path = self.output_dir / "iptv.txt"
+
+        old_m3u = m3u_path.read_bytes()
+        old_txt = txt_path.read_bytes()
+
+        real_replace = publisher.os.replace
+        real_unlink = Path.unlink
+        replace_count = {"value": 0}
+        events = []
+
+        def fail_second_replace(source, target):
+            replace_count["value"] += 1
+
+            if replace_count["value"] == 2:
+                raise OSError("模拟第二份正式文件替换失败")
+
+            return real_replace(source, target)
+
+        def fail_restore_cleanup(path, *args, **kwargs):
+            if ".restore-" in path.name:
+                raise OSError("模拟恢复临时文件清理失败")
+
+            return real_unlink(path, *args, **kwargs)
+
+        with (
+            patch(
+                "publisher.os.replace",
+                side_effect=fail_second_replace,
+            ),
+            patch(
+                "publisher.Path.unlink",
+                autospec=True,
+                side_effect=fail_restore_cleanup,
+            ),
+        ):
+            with self.assertRaises(
+                publisher.PublisherError
+            ) as context:
+                publisher.publish_subscriptions(
+                    new,
+                    CHANNELS,
+                    output_dir=self.output_dir,
+                    event_callback=lambda stage, status, detail: (
+                        events.append((stage, status, detail))
+                    ),
+                )
+
+        self.assertEqual(
+            context.exception.subscription_state,
+            "RESTORED",
+        )
+        self.assertEqual(m3u_path.read_bytes(), old_m3u)
+        self.assertEqual(txt_path.read_bytes(), old_txt)
+
+        self.assertTrue(
+            any(
+                stage == "回滚临时文件清理"
+                and status == "WARNING"
+                for stage, status, detail in events
+            )
+        )
+    
     def test_restore_continues_after_one_file_restore_failure(self):
         """一份文件恢复失败时，仍必须继续尝试恢复另一份文件。"""
         self.output_dir.mkdir(parents=True)
