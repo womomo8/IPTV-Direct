@@ -82,15 +82,7 @@ def _required_checks(media_type: str) -> tuple[str, ...] | None:
 
 
 def _local_admission_reason(candidate: dict[str, Any]) -> str | None:
-    """检查本地检测是否满足正式准入标准。"""
-    stream_quality = candidate.get("stream_quality")
-
-    if (
-        not isinstance(stream_quality, dict)
-        or stream_quality.get("status") != PASS
-    ):
-        return "视频质量检测未明确通过"
-
+    """按检测阶段顺序检查本地检测和视频质量准入条件。"""
     media_type = candidate.get("media_type")
     required = _required_checks(media_type)
 
@@ -111,6 +103,14 @@ def _local_admission_reason(candidate: dict[str, Any]) -> str | None:
 
         if state != PASS:
             return f"本地 {name.upper()} 检测未通过：{state or '缺少结果'}"
+
+    stream_quality = candidate.get("stream_quality")
+
+    if (
+        not isinstance(stream_quality, dict)
+        or stream_quality.get("status") != PASS
+    ):
+        return "视频质量检测未明确通过"
 
     return None
 
