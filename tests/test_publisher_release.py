@@ -188,6 +188,18 @@ class PublisherReleaseTests(unittest.TestCase):
         self.assertTrue(result["published"])
         self.assertEqual(result["channel_count"], 1)
 
+    def test_only_one_old_file_exists_is_blocked(self):
+        """旧 M3U 和 TXT 只有一份存在时，必须阻止发布。"""
+        self.output_dir.mkdir(parents=True)
+        (self.output_dir / "iptv.m3u").write_text(
+            "#EXTM3U\n",
+            encoding="utf-8",
+        )
+
+        new = make_subscriptions([
+            ("CCTV-1", "https://example.com/new1.m3u8"),
+        ])
+
         with self.assertRaisesRegex(
             publisher.PublisherError,
             "只有一份存在有效内容",
@@ -198,6 +210,16 @@ class PublisherReleaseTests(unittest.TestCase):
             context.exception.subscription_state,
             "UNMODIFIED",
         )
+
+    def test_both_empty_old_files_are_blocked(self):
+        """两份旧订阅都存在但内容为空时，必须阻止覆盖。"""
+        self.output_dir.mkdir(parents=True)
+        (self.output_dir / "iptv.m3u").write_bytes(b"")
+        (self.output_dir / "iptv.txt").write_bytes(b"")
+
+        new = make_subscriptions([
+            ("CCTV-1", "https://example.com/new1.m3u8"),
+        ])
 
         with self.assertRaisesRegex(
             publisher.PublisherError,
@@ -210,6 +232,15 @@ class PublisherReleaseTests(unittest.TestCase):
             "UNMODIFIED",
         )
 
+    def test_single_empty_old_file_is_blocked(self):
+        """只有一份空的旧订阅文件时，必须阻止覆盖。"""
+        self.output_dir.mkdir(parents=True)
+        (self.output_dir / "iptv.m3u").write_bytes(b"")
+
+        new = make_subscriptions([
+            ("CCTV-1", "https://example.com/new1.m3u8"),
+        ])
+
         with self.assertRaisesRegex(
             publisher.PublisherError,
             "只有一份存在有效内容",
@@ -220,7 +251,19 @@ class PublisherReleaseTests(unittest.TestCase):
             context.exception.subscription_state,
             "UNMODIFIED",
         )
-    
+
+    def test_corrupted_old_subscription_is_blocked(self):
+        """旧订阅损坏时，必须阻止覆盖。"""
+        self.output_dir.mkdir(parents=True)
+        (self.output_dir / "iptv.m3u").write_text(
+            "这不是有效的 M3U\n",
+            encoding="utf-8",
+        )
+        (self.output_dir / "iptv.txt").write_text(
+            "CCTV-1,https://example.com/old1.m3u8\n",
+            encoding="utf-8",
+        )
+
         with self.assertRaisesRegex(
             publisher.PublisherError,
             "旧订阅损坏",
@@ -234,6 +277,34 @@ class PublisherReleaseTests(unittest.TestCase):
             "UNMODIFIED",
         )
 
+    def test_old_subscription_read_error_is_unmodified(self):
+        """读取旧订阅文件失败时，必须明确标记订阅未修改。"""
+        old = make_subscriptions([
+            ("CCTV-1", "https://example.com/old1.m3u8"),
+            ("CCTV-5", "https://example.com/old5.m3u8"),
+        ])
+        new = make_subscriptions([
+            ("CCTV-1", "https://example.com/new1.m3u8"),
+            ("CCTV-5", "https://example.com/new5.m3u8"),
+        ])
+
+        self.publish(old)
+
+        with patch(
+            "publisher.Path.read_bytes",
+            side_effect=PermissionError("模拟旧订阅文件读取权限错误"),
+        ):
+            with self.assertRaisesRegex(
+                publisher.PublisherError,
+                "发布前读取旧订阅文件失败",
+            ) as context:
+                self.publish(new)
+
+        self.assertEqual(
+            context.exception.subscription_state,
+            "UNMODIFIED",
+        )
+    
     def test_failed_second_replace_restores_old_files(self):
         """第二份正式文件替换失败时，必须恢复两份旧文件。"""
         old = make_subscriptions([
@@ -320,8 +391,13 @@ class PublisherReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(
             publisher.PublisherError,
             "线路数量统计不一致",
-        ):
+        ) as context:
             self.publish(invalid)
+
+        self.assertEqual(
+            context.exception.subscription_state,
+            "UNMODIFIED",
+        )
 
     def test_publish_callback_reports_release_stages(self):
         """发布回调应报告关键阶段，但不改变发布结果。"""
