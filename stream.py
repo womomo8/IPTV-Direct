@@ -24,6 +24,8 @@ PROBE_RW_TIMEOUT = 15_000_000
 DECODE_RW_TIMEOUT = 12_000_000
 MIN_WIDTH = 1920
 MIN_HEIGHT = 1080
+SPORTS_MIN_WIDTH = 1280
+SPORTS_MIN_HEIGHT = 720
 MIN_FPS = 23.0
 ALLOWED_CODECS = {"h264", "hevc"}
 DECODE_FRAMES = 30
@@ -290,6 +292,7 @@ def check_stream(
     url: str,
     probe_semaphore: BoundedSemaphore | None = None,
     decode_semaphore: BoundedSemaphore | None = None,
+    category: str = "",
 ) -> dict[str, Any]:
 
     result: dict[str, Any] = {
@@ -320,12 +323,21 @@ def check_stream(
 
         result.update(metadata)
 
+        if category == "体育频道":
+            min_width = SPORTS_MIN_WIDTH
+            min_height = SPORTS_MIN_HEIGHT
+        else:
+            min_width = MIN_WIDTH
+            min_height = MIN_HEIGHT
+
         if (
-            metadata["width"] < MIN_WIDTH
-            or metadata["height"] < MIN_HEIGHT
+            metadata["width"] < min_width
+            or metadata["height"] < min_height
         ):
             result["status"] = FAIL
-            result["reason"] = "实际分辨率低于 1920×1080"
+            result["reason"] = (
+                f"实际分辨率低于 {min_width}×{min_height}"
+            )
             return result
 
         codec = metadata["codec"].lower()
@@ -417,6 +429,7 @@ def check_candidates(
                 url,
                 probe_semaphore,
                 decode_semaphore,
+                candidate.get("category", ""),
             )
         except Exception as exc:
             quality = {
