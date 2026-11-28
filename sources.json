@@ -28,6 +28,34 @@
       "url": "https://doubo.tv/en/playlists/",
       "enabled": true,
       "mode": "index"
+    },
+    {
+      "id": "source-005",
+      "name": "Chaniug 国内 IPTV 自动采集",
+      "url": "https://raw.githubusercontent.com/Chaniug/IPTV-Collector/master/iptv-cn.m3u",
+      "enabled": true,
+      "mode": "playlist"
+    },
+    {
+      "id": "source-006",
+      "name": "Zyq1120 FFprobe 已验证线路",
+      "url": "https://raw.githubusercontent.com/zyq1120/iptv-playlist/main/iptv-ffprobe-only.m3u",
+      "enabled": true,
+      "mode": "playlist"
+    },
+    {
+      "id": "sports-001",
+      "name": "AdeelWajid 每日验证体育频道",
+      "url": "https://raw.githubusercontent.com/AdeelWajid/iptv_validated_list/main/playlists/categories/sports.m3u",
+      "enabled": true,
+      "mode": "playlist"
+    },
+    {
+      "id": "sports-002",
+      "name": "FreeCastHub 公共体育频道",
+      "url": "https://raw.githubusercontent.com/freecasthub/public-iptv/main/sports.m3u",
+      "enabled": true,
+      "mode": "playlist"
     }
   ]
 }
