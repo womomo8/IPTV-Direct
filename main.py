@@ -1088,7 +1088,6 @@ def run_formal_flow(config: dict[str, Any]) -> int:
                 "normalized": normalized,
                 "candidates": candidates,
             })
-        else:
 
         print(
             f"来源处理：{label}；"
