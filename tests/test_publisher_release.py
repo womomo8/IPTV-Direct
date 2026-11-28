@@ -304,6 +304,73 @@ class PublisherReleaseTests(unittest.TestCase):
             context.exception.subscription_state,
             "UNMODIFIED",
         )
+
+    def test_second_staged_file_failure_is_unmodified(self):
+        """第二份临时文件准备失败时，旧订阅必须保持不变。"""
+        old = make_subscriptions([
+            ("CCTV-1", "https://example.com/old1.m3u8"),
+            ("CCTV-5", "https://example.com/old5.m3u8"),
+        ])
+        new = make_subscriptions([
+            ("CCTV-1", "https://example.com/new1.m3u8"),
+            ("CCTV-5", "https://example.com/new5.m3u8"),
+        ])
+
+        self.publish(old)
+
+        m3u_path = self.output_dir / "iptv.m3u"
+        txt_path = self.output_dir / "iptv.txt"
+
+        old_m3u = m3u_path.read_bytes()
+        old_txt = txt_path.read_bytes()
+
+        real_write_temp_file = publisher._write_temp_file
+        call_count = {"value": 0}
+
+        def fail_second_staged_file(directory, prefix, data):
+            call_count["value"] += 1
+
+            if call_count["value"] == 2:
+                raise OSError("模拟第二份临时文件写入失败")
+
+            return real_write_temp_file(directory, prefix, data)
+
+        events = []
+
+        with patch(
+            "publisher._write_temp_file",
+            side_effect=fail_second_staged_file,
+        ):
+            with self.assertRaisesRegex(
+                publisher.PublisherError,
+                "临时文件准备失败",
+            ) as context:
+                publisher.publish_subscriptions(
+                    new,
+                    CHANNELS,
+                    output_dir=self.output_dir,
+                    event_callback=lambda stage, status, detail: (
+                        events.append((stage, status, detail))
+                    ),
+                )
+
+        self.assertEqual(
+            context.exception.subscription_state,
+            "UNMODIFIED",
+        )
+        self.assertEqual(m3u_path.read_bytes(), old_m3u)
+        self.assertEqual(txt_path.read_bytes(), old_txt)
+
+        self.assertFalse(
+            list(self.output_dir.glob(".*.stage-*.tmp"))
+        )
+
+        self.assertTrue(
+            any(
+                stage == "临时文件准备" and status == "FAIL"
+                for stage, status, detail in events
+            )
+        )
     
     def test_failed_second_replace_restores_old_files(self):
         """第二份正式文件替换失败时，必须恢复两份旧文件。"""
