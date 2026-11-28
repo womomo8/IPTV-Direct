@@ -82,6 +82,8 @@ def _check_settings(settings: dict[str, Any]) -> None:
             "max_hls_manifest_bytes",
             "max_ts_read_bytes",
             "max_redirects",
+            "stream_probe_concurrency",
+            "stream_decode_concurrency",
         ),
         "globalping": ("max_probes",),
         "selection": ("max_routes_per_channel",),
