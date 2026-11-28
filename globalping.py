@@ -59,11 +59,17 @@ class GlobalpingError(RuntimeError):
         *,
         rate_limited: bool = False,
         response_headers: dict[str, str] | None = None,
+        api_status_code: int | None = None,
+        api_error_type: str | None = None,
+        measurement_creation_no_probes: bool = False,
     ) -> None:
         super().__init__(message)
         self.status = status
         self.rate_limited = rate_limited
         self.response_headers = response_headers or {}
+        self.api_status_code = api_status_code
+        self.api_error_type = api_error_type
+        self.measurement_creation_no_probes = measurement_creation_no_probes
 
 
 def _status(status: str, reason: str) -> dict[str, str]:
@@ -116,6 +122,18 @@ def _api_request(
             return 304, None, response_headers
 
         detail = raw_error.decode("utf-8", errors="replace")[:1500]
+        api_error_type = None
+        try:
+            error_payload = json.loads(raw_error.decode("utf-8"))
+            if isinstance(error_payload, dict):
+                error_object = error_payload.get("error")
+                if isinstance(error_object, dict):
+                    value = error_object.get("type")
+                    if isinstance(value, str):
+                        api_error_type = value
+        except (UnicodeError, json.JSONDecodeError):
+            pass
+
         if exc.code == 429:
             rate_info = {
                 key: value
@@ -128,11 +146,15 @@ def _api_request(
                 f"响应：{detail}",
                 rate_limited=True,
                 response_headers=response_headers,
+                api_status_code=exc.code,
+                api_error_type=api_error_type,
             ) from exc
 
         raise GlobalpingError(
             f"Globalping API HTTP {exc.code}：{detail}",
             response_headers=response_headers,
+            api_status_code=exc.code,
+            api_error_type=api_error_type,
         ) from exc
 
     except urllib.error.URLError as exc:
@@ -379,8 +401,14 @@ def _create_measurement(
             method="POST",
             payload=payload,
         )
-    except GlobalpingError:
-        budget["halted"] = True
+    except GlobalpingError as exc:
+        if (
+            exc.api_status_code == 422
+            and exc.api_error_type == "no_probes_found"
+        ):
+            exc.measurement_creation_no_probes = True
+        else:
+            budget["halted"] = True
         raise
 
     if status != 202 or not isinstance(data, dict):
@@ -1084,6 +1112,12 @@ def _run_hls(
         }
 
     except GlobalpingError as exc:
+        if (
+            exc.measurement_creation_no_probes
+            and not measurements
+        ):
+            raise
+
         if exc.rate_limited:
             budget["halted"] = True
 
@@ -1158,6 +1192,12 @@ def _run_direct_ts(
         }
 
     except GlobalpingError as exc:
+        if (
+            exc.measurement_creation_no_probes
+            and not measurements
+        ):
+            raise
+
         if exc.rate_limited:
             budget["halted"] = True
 
@@ -1384,6 +1424,7 @@ def create_session(settings: dict[str, Any]) -> dict[str, Any]:
                 "remaining": 0,
                 "probe_count": 1,
                 "halted": True,
+                "unavailable_asns": [],
             },
             "error": str(exc),
         }
@@ -1393,6 +1434,7 @@ def create_session(settings: dict[str, Any]) -> dict[str, Any]:
             "remaining": remaining,
             "probe_count": 1,
             "halted": False,
+            "unavailable_asns": [],
         },
         "error": None,
     }
@@ -1502,6 +1544,19 @@ def check_candidates(
     ):
         raise TypeError("Globalping session 结构无效。")
 
+    budget.setdefault("unavailable_asns", [])
+    unavailable_asns = budget["unavailable_asns"]
+    if (
+        not isinstance(unavailable_asns, list)
+        or any(
+            isinstance(asn, bool)
+            or not isinstance(asn, int)
+            or asn <= 0
+            for asn in unavailable_asns
+        )
+    ):
+        raise TypeError("Globalping session 的 unavailable_asns 结构无效。")
+
     if error or budget["halted"]:
         reason = error or (
             "Globalping 额度不足或触发限流，已停止本轮后续测量创建。"
@@ -1545,182 +1600,212 @@ def check_candidates(
                 errors.append(reason)
                 break
 
-            try:
-                locations = choose_probes(
-                    1,
-                    excluded_asns=used_asns,
-                )
-
-                if not isinstance(locations, list) or len(locations) != 1:
-                    raise GlobalpingError(
-                        "探针选择结果不是恰好一个探针。"
+            # 仅当测量创建明确返回 no_probes_found 时，换 ASN 重试当前阶段。
+            # 每次重试都会新增一个 unavailable ASN，因此循环必然有限。
+            while True:
+                requested_asn = None
+                try:
+                    excluded_asns = used_asns | set(unavailable_asns)
+                    locations = choose_probes(
+                        1,
+                        excluded_asns=excluded_asns,
                     )
 
-                location = locations[0]
-
-                if not isinstance(location, dict):
-                    raise GlobalpingError("探针请求信息格式无效。")
-
-                requested_asn = location.get("asn")
-                tags = location.get("tags")
-                limit = location.get("limit")
-
-                if (
-                    isinstance(requested_asn, bool)
-                    or not isinstance(requested_asn, int)
-                    or requested_asn <= 0
-                    or requested_asn in used_asns
-                ):
-                    raise GlobalpingError(
-                        "本阶段探针 ASN 无效或与之前阶段重复。"
-                    )
-
-                if (
-                    location.get("country") != "CN"
-                    or not isinstance(tags, list)
-                    or "eyeball-network" not in tags
-                    or isinstance(limit, bool)
-                    or limit != 1
-                ):
-                    raise GlobalpingError(
-                        "本阶段探针不符合中国大陆普通用户网络单探针条件。"
-                    )
-
-                used_asns.add(requested_asn)
-
-                report_progress({
-                    "event": "stage_started",
-                    "stage_name": stage_name,
-                    "asn": requested_asn,
-                    "probe": location,
-                })
-
-                if candidate["media_type"] == "HLS":
-                    if progress_callback is None:
-                        stage_result = _run_hls(
-                            candidate,
-                            locations,
-                            budget,
+                    if not isinstance(locations, list) or len(locations) != 1:
+                        raise GlobalpingError(
+                            "探针选择结果不是恰好一个探针。"
                         )
+
+                    location = locations[0]
+
+                    if not isinstance(location, dict):
+                        raise GlobalpingError("探针请求信息格式无效。")
+
+                    requested_asn = location.get("asn")
+                    tags = location.get("tags")
+                    limit = location.get("limit")
+
+                    if (
+                        isinstance(requested_asn, bool)
+                        or not isinstance(requested_asn, int)
+                        or requested_asn <= 0
+                        or requested_asn in excluded_asns
+                    ):
+                        raise GlobalpingError(
+                            "本阶段探针 ASN 无效或与之前阶段重复。"
+                        )
+
+                    if (
+                        location.get("country") != "CN"
+                        or not isinstance(tags, list)
+                        or "eyeball-network" not in tags
+                        or isinstance(limit, bool)
+                        or limit != 1
+                    ):
+                        raise GlobalpingError(
+                            "本阶段探针不符合中国大陆普通用户网络单探针条件。"
+                        )
+
+                    report_progress({
+                        "event": "stage_started",
+                        "stage_name": stage_name,
+                        "asn": requested_asn,
+                        "probe": location,
+                    })
+
+                    if candidate["media_type"] == "HLS":
+                        if progress_callback is None:
+                            stage_result = _run_hls(
+                                candidate,
+                                locations,
+                                budget,
+                            )
+                        else:
+                            stage_result = _run_hls(
+                                candidate,
+                                locations,
+                                budget,
+                                progress_callback=report_progress,
+                                asn=requested_asn,
+                            )
                     else:
-                        stage_result = _run_hls(
-                            candidate,
-                            locations,
-                            budget,
-                            progress_callback=report_progress,
-                            asn=requested_asn,
-                        )
-                else:
-                    if progress_callback is None:
-                        stage_result = _run_direct_ts(
-                            candidate,
-                            locations,
-                            budget,
-                        )
-                    else:
-                        stage_result = _run_direct_ts(
-                            candidate,
-                            locations,
-                            budget,
-                            progress_callback=report_progress,
-                            asn=requested_asn,
-                        )
+                        if progress_callback is None:
+                            stage_result = _run_direct_ts(
+                                candidate,
+                                locations,
+                                budget,
+                            )
+                        else:
+                            stage_result = _run_direct_ts(
+                                candidate,
+                                locations,
+                                budget,
+                                progress_callback=report_progress,
+                                asn=requested_asn,
+                            )
 
-                stage_status = _overall_status(
-                    stage_result["checks"]
-                )
-
-                probe = next(
-                    iter(stage_result.get("probes", {}).values()),
-                    {},
-                )
-
-                stage_measurements = stage_result.get(
-                    "measurements", []
-                )
-
-                stage_reason = stage_result.get("error")
-
-                if not stage_reason:
-                    stage_reason = (
-                        "本 ASN 阶段所有适用检测明确通过。"
-                        if stage_status == PASS
-                        else "；".join(
-                            item["reason"]
-                            for item in stage_result["checks"].values()
-                            if item["status"] in (FAIL, INCOMPLETE)
-                        )
+                    stage_status = _overall_status(
+                        stage_result["checks"]
                     )
 
-                stages[stage_name] = {
-                    "asn": requested_asn,
-                    "probe": probe,
-                    "measurement_id": (
-                        stage_measurements[0]
-                        if stage_measurements
-                        else None
-                    ),
-                    "measurement_ids": stage_measurements,
-                    "status": stage_status,
-                    "reason": stage_reason,
-                    "checks": stage_result["checks"],
-                    "sub_stages": stage_result.get("stages", {}),
-                }
+                    probe = next(
+                        iter(stage_result.get("probes", {}).values()),
+                        {},
+                    )
 
-                if probe:
-                    probes[stage_name] = probe
+                    stage_measurements = stage_result.get(
+                        "measurements", []
+                    )
 
-                measurements.extend(stage_measurements)
+                    # 只有实际创建了测量的 ASN 才计入本条线路已使用 ASN。
+                    if stage_measurements:
+                        used_asns.add(requested_asn)
 
-                if stage_result.get("error"):
-                    errors.append(stage_result["error"])
-                report_progress({
-                    "event": "stage_completed",
-                    "stage_name": stage_name,
-                    "asn": requested_asn,
-                    "status": stage_status,
-                    "reason": stage_reason,
-                    "measurement_ids": stage_measurements,
-                    "probe": probe,
-                })
-                if stage_status != PASS:
+                    stage_reason = stage_result.get("error")
+
+                    if not stage_reason:
+                        stage_reason = (
+                            "本 ASN 阶段所有适用检测明确通过。"
+                            if stage_status == PASS
+                            else "；".join(
+                                item["reason"]
+                                for item in stage_result["checks"].values()
+                                if item["status"] in (FAIL, INCOMPLETE)
+                            )
+                        )
+
+                    stages[stage_name] = {
+                        "asn": requested_asn,
+                        "probe": probe,
+                        "measurement_id": (
+                            stage_measurements[0]
+                            if stage_measurements
+                            else None
+                        ),
+                        "measurement_ids": stage_measurements,
+                        "status": stage_status,
+                        "reason": stage_reason,
+                        "checks": stage_result["checks"],
+                        "sub_stages": stage_result.get("stages", {}),
+                    }
+
+                    if probe:
+                        probes[stage_name] = probe
+
+                    measurements.extend(stage_measurements)
+
+                    if stage_result.get("error"):
+                        errors.append(stage_result["error"])
+                    report_progress({
+                        "event": "stage_completed",
+                        "stage_name": stage_name,
+                        "asn": requested_asn,
+                        "status": stage_status,
+                        "reason": stage_reason,
+                        "measurement_ids": stage_measurements,
+                        "probe": probe,
+                    })
+                    if stage_status != PASS:
+                        break
                     break
 
-            except GlobalpingError as exc:
-                if exc.rate_limited:
-                    budget["halted"] = True
+                except GlobalpingError as exc:
+                    is_no_probe = exc.measurement_creation_no_probes
+                    if (
+                        is_no_probe
+                        and requested_asn is not None
+                        and requested_asn not in unavailable_asns
+                        and not budget["halted"]
+                    ):
+                        unavailable_asns.append(requested_asn)
+                        report_progress({
+                            "event": "stage_retry",
+                            "stage_name": stage_name,
+                            "asn": requested_asn,
+                            "reason": (
+                                "该 ASN 当前没有可用 IPv4 探针；"
+                                "本次没有创建测量，正在尝试其他 ASN。"
+                            ),
+                        })
+                        continue
 
-                reason = str(exc)
-                stage_checks = incomplete_result(
-                    candidate,
-                    reason,
-                )["globalping"]["checks"]
+                    if exc.rate_limited:
+                        budget["halted"] = True
 
-                if exc.status == FAIL:
-                    for name, item in stage_checks.items():
-                        if item["status"] != NA:
-                            stage_checks[name] = _status(FAIL, reason)
+                    reason = str(exc)
+                    stage_checks = incomplete_result(
+                        candidate,
+                        reason,
+                    )["globalping"]["checks"]
 
-                stages[stage_name] = {
-                    "asn": requested_asn,
-                    "probe": {},
-                    "measurement_id": None,
-                    "measurement_ids": [],
-                    "status": exc.status,
-                    "reason": reason,
-                    "checks": stage_checks,
-                    "sub_stages": {},
-                }         
-                report_progress({
-                    "event": "stage_completed",
-                    "stage_name": stage_name,
-                    "asn": requested_asn,
-                    "status": exc.status,
-                    "reason": reason,
-                    "measurement_ids": [],
-                    "probe": {},
-                })
-                errors.append(reason)
+                    if exc.status == FAIL:
+                        for name, item in stage_checks.items():
+                            if item["status"] != NA:
+                                stage_checks[name] = _status(FAIL, reason)
+
+                    stages[stage_name] = {
+                        "asn": requested_asn,
+                        "probe": {},
+                        "measurement_id": None,
+                        "measurement_ids": [],
+                        "status": exc.status,
+                        "reason": reason,
+                        "checks": stage_checks,
+                        "sub_stages": {},
+                    }
+                    report_progress({
+                        "event": "stage_completed",
+                        "stage_name": stage_name,
+                        "asn": requested_asn,
+                        "status": exc.status,
+                        "reason": reason,
+                        "measurement_ids": [],
+                        "probe": {},
+                    })
+                    errors.append(reason)
+                    break
+
+            if stages.get(stage_name, {}).get("status") != PASS:
                 break
 
         checks = _merge_stage_checks(candidate, stages)
