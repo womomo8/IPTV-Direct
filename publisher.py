@@ -1156,6 +1156,9 @@ def publish_subscriptions(
             "两份临时文件均已写入并完成落盘",
         )
 
+
+        publish_stage = "正式文件替换"
+
         try:
             # 依次替换正式文件。
             emit(
@@ -1179,6 +1182,7 @@ def publish_subscriptions(
             )
 
             # 重新读取正式文件。
+            publish_stage = "发布后校验"
             emit(
                 "发布后校验",
                 "STARTED",
@@ -1219,6 +1223,49 @@ def publish_subscriptions(
                 "COMPLETED",
                 "正式 M3U/TXT 内容及线路数量核验通过",
             )
+
+        except Exception as publish_error:
+            emit(
+                publish_stage,
+                "FAIL",
+                f"{publish_stage}失败：{publish_error}",
+            )
+
+            emit(
+                "正式订阅回滚",
+                "STARTED",
+                "发布过程发生异常，开始恢复旧文件",
+            )
+
+            rollback_errors = _restore_subscription_files(
+                targets,
+                old_data,
+                directory,
+            )
+
+            if rollback_errors:
+                emit(
+                    "正式订阅回滚",
+                    "FAIL",
+                    "；".join(rollback_errors),
+                )
+                raise PublisherError(
+                    f"发布失败：{publish_error}；"
+                    f"回滚失败：{'；'.join(rollback_errors)}",
+                    subscription_state="ROLLBACK_FAILED",
+                ) from publish_error
+
+            emit(
+                "正式订阅回滚",
+                "COMPLETED",
+                "旧订阅文件已恢复",
+            )
+
+            raise PublisherError(
+                f"发布失败，旧文件已恢复：{publish_error}",
+                subscription_state="RESTORED",
+            ) from publish_error
+
 
         except Exception as publish_error:
             emit(
