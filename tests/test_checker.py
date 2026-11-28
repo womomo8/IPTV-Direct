@@ -473,7 +473,7 @@ class CheckerLocalTests(unittest.TestCase):
         self.assert_status(result, "hls", "PASS")
         self.assert_status(result, "ts", "PASS")   
 
-     def test_hls_uses_second_variant_when_first_playlist_invalid(self):
+    def test_hls_uses_second_variant_when_first_playlist_invalid(self):
         self.server.routes["/master.m3u8"]["body"] = (
             "#EXTM3U\n"
             "#EXT-X-STREAM-INF:BANDWIDTH=1200000\n"
