@@ -288,6 +288,7 @@ class StreamQualityTests(unittest.TestCase):
         candidate = {
             "channel": "CCTV-1",
             "normalized_url": "https://example.com/live.ts",
+            "category": "体育频道",
         }
 
         results = stream.check_candidates([candidate])
@@ -303,7 +304,8 @@ class StreamQualityTests(unittest.TestCase):
             check.call_args.args[0],
             "https://example.com/live.ts",
         )
-        self.assertEqual(len(check.call_args.args), 3)
+        self.assertEqual(len(check.call_args.args), 4)
+        self.assertEqual(check.call_args.args[3], "体育频道")
 
     def test_check_candidates_limits_concurrency_and_isolates_errors(self):
         lock = threading.Lock()
@@ -313,7 +315,12 @@ class StreamQualityTests(unittest.TestCase):
         max_probe = 0
         max_decode = 0
 
-        def fake_check(url, probe_semaphore, decode_semaphore):
+        def fake_check(
+            url,
+            probe_semaphore,
+            decode_semaphore,
+            category="",
+        ):
             nonlocal active_probe, active_decode, max_probe, max_decode
             with lock:
                 calls[url] = calls.get(url, 0) + 1
