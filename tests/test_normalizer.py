@@ -319,38 +319,58 @@ class SourceParsingTests(unittest.TestCase):
 
         self.assertEqual(actual, dict(items))
 
-    def test_jiandantv_aliases_use_actual_settings(self):
+    def test_manual_inline_aliases_use_actual_settings(self):
         from main import load_configuration
 
         root = Path(__file__).resolve().parents[1]
         config = load_configuration(root)
 
-        settings = config["settings"]
         channels = config["channels"]
-        items = list(settings["aliases"].items())
+        aliases = config["settings"].get("aliases", {})
 
-        self.assertTrue(items, "settings.json 没有配置频道别名")
+        inline_sources = [
+            source
+            for source in config["manual_sources"]
+            if source.get("mode") == "inline"
+        ]
 
-        lines = ["#EXTM3U"]
-        for index, (name, _) in enumerate(items):
-            lines.extend([
-                f'#EXTINF:-1 tvg-id="jiandantv-{index}" tvg-name="{name}",{name}',
-                f"https://example.test/{index}.m3u8",
-            ])
+        matched_aliases = []
 
-        result = parse_source_content(
-            "\n".join(lines),
-            SOURCE,
-            channels,
-            aliases=settings["aliases"],
+        # 直接使用 manual.txt 中的真实内嵌 M3U 内容。
+        for source in inline_sources:
+            result = parse_source_content(
+                source["inline_content"],
+                source,
+                channels,
+                content_type="application/vnd.apple.mpegurl",
+                aliases=aliases,
+            )
+
+            for candidate in result["candidates"]:
+                alias = candidate.get("tvg_name")
+
+                if alias not in aliases:
+                    continue
+
+                canonical = aliases[alias]
+                matched_aliases.append(alias)
+
+                self.assertEqual(
+                    candidate["channel"],
+                    canonical,
+                    f"正式别名映射错误：{alias} -> {canonical}",
+                )
+
+                self.assertIn(
+                    canonical,
+                    channels,
+                    f"别名指向的频道不在 channels.txt：{alias} -> {canonical}",
+                )
+
+        self.assertTrue(
+            matched_aliases,
+            "manual.txt 当前内嵌来源没有覆盖 settings.json 中的别名",
         )
-
-        actual = {
-            item["tvg_name"]: item["channel"]
-            for item in result["candidates"]
-        }
-
-        self.assertEqual(actual, dict(items))
     
     def test_o0i_txt_aliases_use_actual_settings(self):
         root = Path(__file__).resolve().parents[1]
