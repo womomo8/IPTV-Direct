@@ -120,18 +120,28 @@ class SourceFlowTests(unittest.TestCase):
             },
         ]
 
+        # 模拟频道直接取自正式 channels.txt，不另设频道标准。
+        fixture_channels = config["channels"][:4]
+        self.assertEqual(
+            len(fixture_channels),
+            4,
+            "channels.txt 至少需要四个频道才能完成来源流程测试",
+        )
+
         # 所有远程下载均使用模拟内容，不访问真实网络。
         downloads = {
             manual_txt["url"]: {
                 "content": (
-                    "CCTV-2,https://media.test/manual-txt.m3u8\n"
+                    f"{fixture_channels[0]},"
+                    "https://media.test/manual-txt.m3u8\n"
                 ).encode("utf-8"),
                 "content_type": "text/plain",
             },
             manual_m3u["url"]: {
                 "content": (
                     "#EXTM3U\n"
-                    '#EXTINF:-1 tvg-name="CCTV-3",CCTV-3\n'
+                    f'#EXTINF:-1 tvg-name="{fixture_channels[1]}",'
+                    f"{fixture_channels[1]}\n"
                     "https://media.test/manual-m3u.m3u8\n"
                 ).encode("utf-8"),
                 "content_type": "application/vnd.apple.mpegurl",
@@ -139,7 +149,8 @@ class SourceFlowTests(unittest.TestCase):
             playlist_url: {
                 "content": (
                     "#EXTM3U\n"
-                    '#EXTINF:-1 tvg-name="CCTV-4",CCTV-4\n'
+                    f'#EXTINF:-1 tvg-name="{fixture_channels[2]}",'
+                    f"{fixture_channels[2]}\n"
                     "https://media.test/automatic.m3u8\n"
                 ).encode("utf-8"),
                 "content_type": "application/vnd.apple.mpegurl",
@@ -155,7 +166,8 @@ class SourceFlowTests(unittest.TestCase):
             },
             index_playlist_url: {
                 "content": (
-                    "CCTV-5,https://media.test/index.m3u8\n"
+                    f"{fixture_channels[3]},"
+                    "https://media.test/index.m3u8\n"
                 ).encode("utf-8"),
                 "content_type": "text/plain",
             },
@@ -271,12 +283,10 @@ class SourceFlowTests(unittest.TestCase):
             f"检测结果出现正式频道配置之外的频道："
             f"{channels - configured_channels}",
         )
-        self.assertTrue({
-            "CCTV-2",
-            "CCTV-3",
-            "CCTV-4",
-            "CCTV-5",
-        }.issubset(channels))
+        self.assertTrue(
+            set(fixture_channels).issubset(channels),
+            "模拟来源中的正式频道没有全部进入检测",
+        )
 
         # 人工来源：普通 URL、远程 M3U、两个内嵌 M3U。
         manual_candidates = [
