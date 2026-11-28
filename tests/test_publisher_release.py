@@ -79,6 +79,49 @@ class PublisherReleaseTests(unittest.TestCase):
             subscriptions["txt"],
         )
 
+    def test_first_publish_failure_removes_new_files(self):
+        """首次发布替换失败时，必须删除已经创建的正式文件。"""
+        subscriptions = make_subscriptions([
+            ("CCTV-1", "https://example.com/cctv1.m3u8"),
+            ("CCTV-5", "https://example.com/cctv5.m3u8"),
+        ])
+
+        real_replace = publisher.os.replace
+        call_count = {"value": 0}
+
+        def fail_second_replace(source, target):
+            call_count["value"] += 1
+
+            if call_count["value"] == 2:
+                raise OSError("模拟首次发布第二份文件替换失败")
+
+            return real_replace(source, target)
+
+        with patch(
+            "publisher.os.replace",
+            side_effect=fail_second_replace,
+        ):
+            with self.assertRaises(
+                publisher.PublisherError
+            ) as context:
+                self.publish(subscriptions)
+
+        self.assertEqual(
+            context.exception.subscription_state,
+            "RESTORED",
+        )
+
+        self.assertFalse(
+            (self.output_dir / "iptv.m3u").exists()
+        )
+        self.assertFalse(
+            (self.output_dir / "iptv.txt").exists()
+        )
+
+        self.assertFalse(
+            list(self.output_dir.glob(".*.stage-*.tmp"))
+        )
+    
     def test_existing_subscription_can_be_updated(self):
         """已有有效订阅应允许正常更新。"""
         old = make_subscriptions([
@@ -415,6 +458,81 @@ class PublisherReleaseTests(unittest.TestCase):
         self.assertEqual(m3u_path.read_bytes(), old_m3u)
         self.assertEqual(txt_path.read_bytes(), old_txt)
 
+    def test_stage_cleanup_failure_does_not_change_publish_state(self):
+        """临时文件清理失败不得覆盖原来的回滚结果。"""
+        old = make_subscriptions([
+            ("CCTV-1", "https://example.com/old1.m3u8"),
+            ("CCTV-5", "https://example.com/old5.m3u8"),
+        ])
+        new = make_subscriptions([
+            ("CCTV-1", "https://example.com/new1.m3u8"),
+            ("CCTV-5", "https://example.com/new5.m3u8"),
+        ])
+
+        self.publish(old)
+
+        m3u_path = self.output_dir / "iptv.m3u"
+        txt_path = self.output_dir / "iptv.txt"
+
+        old_m3u = m3u_path.read_bytes()
+        old_txt = txt_path.read_bytes()
+
+        real_replace = publisher.os.replace
+        real_unlink = Path.unlink
+        replace_count = {"value": 0}
+        events = []
+
+        def fail_second_replace(source, target):
+            replace_count["value"] += 1
+
+            if replace_count["value"] == 2:
+                raise OSError("模拟第二份正式文件替换失败")
+
+            return real_replace(source, target)
+
+        def fail_stage_cleanup(path, *args, **kwargs):
+            if ".stage-" in path.name:
+                raise OSError("模拟临时文件清理失败")
+
+            return real_unlink(path, *args, **kwargs)
+
+        with (
+            patch(
+                "publisher.os.replace",
+                side_effect=fail_second_replace,
+            ),
+            patch(
+                "publisher.Path.unlink",
+                autospec=True,
+                side_effect=fail_stage_cleanup,
+            ),
+        ):
+            with self.assertRaises(
+                publisher.PublisherError
+            ) as context:
+                publisher.publish_subscriptions(
+                    new,
+                    CHANNELS,
+                    output_dir=self.output_dir,
+                    event_callback=lambda stage, status, detail: (
+                        events.append((stage, status, detail))
+                    ),
+                )
+
+        self.assertEqual(
+            context.exception.subscription_state,
+            "RESTORED",
+        )
+        self.assertEqual(m3u_path.read_bytes(), old_m3u)
+        self.assertEqual(txt_path.read_bytes(), old_txt)
+
+        self.assertTrue(
+            any(
+                stage == "临时文件清理" and status == "WARNING"
+                for stage, status, detail in events
+            )
+        )
+    
     def test_rollback_failure_is_reported(self):
         """回滚失败必须明确标记正式订阅状态。"""
 
