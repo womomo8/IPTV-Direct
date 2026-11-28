@@ -688,7 +688,11 @@ class SourceDiagnosticTests(unittest.TestCase):
                 report = output.getvalue()
 
                 self.assertIn(
-                    f"｜来源解析｜来源处理｜WARNING｜{error}",
+                    f"｜来源解析｜来源错误汇总｜WARNING｜模拟来源；{error} × 1 条",
+                    report,
+                )
+                self.assertIn(
+                    f"示例：{error}",
                     report,
                 )
 
