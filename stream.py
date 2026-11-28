@@ -27,6 +27,8 @@ MIN_HEIGHT = 1080
 MIN_FPS = 23.0
 ALLOWED_CODECS = {"h264", "hevc"}
 DECODE_FRAMES = 30
+PROBE_CONCURRENCY = 4
+DECODE_CONCURRENCY = 2
 
 class StreamQualityError(Exception):
     """视频质量检测错误。"""
@@ -386,10 +388,12 @@ def check_candidates(
         raise ValueError("detection_settings 必须是字典")
 
     probe_concurrency = detection_settings.get(
-        "stream_probe_concurrency", 4
+        "stream_probe_concurrency",
+        PROBE_CONCURRENCY,
     )
     decode_concurrency = detection_settings.get(
-        "stream_decode_concurrency", 2
+        "stream_decode_concurrency",
+        DECODE_CONCURRENCY,
     )
 
     if (
