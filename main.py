@@ -918,20 +918,6 @@ def _print_admission_results(results: list[dict[str, Any]]) -> None:
             f"原因：{reason}"
         )
 
-def _print_manual_source_details(
-    source: dict[str, Any],
-    normalized: dict[str, Any],
-    detected: list[dict[str, Any]],
-    admission_results: list[dict[str, Any]],
-) -> None:
-    """只输出来源解析异常，不重复打印候选检测和准入明细。"""
-
-    for error in normalized.get("errors", []):
-        print(
-            f"来源解析提示：{_safe_diagnostic_text(error)}",
-            file=sys.stderr,
-        )
-
 # ----------------------------------------------------------------------
 # publisher 交接与停止条件
 # ----------------------------------------------------------------------
@@ -1084,12 +1070,7 @@ def run_formal_flow(config: dict[str, Any]) -> int:
             continue
 
         if not normalized.get("recognized"):
-            _print_manual_source_details(source, normalized, [], [])
-            if source.get("source_type") != "manual":
-                errors.extend(
-                    f"{label}：{error}"
-                    for error in normalized.get("errors", [])
-                )
+
             continue
 
         extracted_total += normalized["extracted_candidates"]
@@ -1108,9 +1089,6 @@ def run_formal_flow(config: dict[str, Any]) -> int:
                 "candidates": candidates,
             })
         else:
-            _print_manual_source_details(
-                source, normalized, [], []
-            )
 
         print(
             f"来源处理：{label}；"
@@ -1183,13 +1161,6 @@ def run_formal_flow(config: dict[str, Any]) -> int:
                         and _identity(result["candidate"]) in identities
                     )
                 ]
-
-                _print_manual_source_details(
-                    source_record["source"],
-                    source_record["normalized"],
-                    source_batch_results,
-                    source_admission_results,
-                )
 
             accepted_now = sum(
                 result.get("status") == publisher.ACCEPTED
