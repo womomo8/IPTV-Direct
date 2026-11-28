@@ -889,13 +889,18 @@ def _write_temp_file(directory, prefix, data):
 
     return path
 
-
-def _restore_subscription_files(targets, old_data, directory):
-    """逐个恢复旧文件，并记录所有恢复错误。"""
+def _restore_subscription_files(
+    targets,
+    old_data,
+    directory,
+    cleanup_warnings=None,
+):
+    """逐个恢复旧文件，分离恢复失败与临时文件清理失败。"""
     errors = []
 
     for index, target in enumerate(targets):
         original = old_data[index]
+        restore_file = None
 
         try:
             if original is None:
@@ -909,8 +914,18 @@ def _restore_subscription_files(targets, old_data, directory):
 
                 try:
                     os.replace(restore_file, target)
+                except Exception as exc:
+                    errors.append(
+                        f"{target.name} 恢复失败：{exc}"
+                    )
                 finally:
-                    restore_file.unlink(missing_ok=True)
+                    try:
+                        restore_file.unlink(missing_ok=True)
+                    except Exception as exc:
+                        if cleanup_warnings is not None:
+                            cleanup_warnings.append(
+                                f"{restore_file.name} 清理失败：{exc}"
+                            )
 
         except Exception as exc:
             errors.append(f"{target.name} 恢复失败：{exc}")
@@ -1237,11 +1252,21 @@ def publish_subscriptions(
                 "发布过程发生异常，开始恢复旧文件",
             )
 
+            rollback_cleanup_warnings = []
+
             rollback_errors = _restore_subscription_files(
                 targets,
                 old_data,
                 directory,
+                cleanup_warnings=rollback_cleanup_warnings,
             )
+
+            for warning in rollback_cleanup_warnings:
+                emit(
+                    "回滚临时文件清理",
+                    "WARNING",
+                    warning,
+                )
 
             if rollback_errors:
                 emit(
