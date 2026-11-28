@@ -1,6 +1,7 @@
 
 """IPTV-Direct：来源解析、频道匹配与 URL 归一。"""
 
+import ipaddress
 import re
 from pathlib import Path
 from urllib.parse import quote, urljoin, urlsplit, urlunsplit
@@ -103,8 +104,16 @@ def normalize_url(value):
 
     host = host.lower()
 
-    if ":" in host:
-        host = f"[{host}]"
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+
+    if address is not None and address.version == 6:
+        raise ValueError("不支持 IPv6 地址")
+
+    if address is not None and address.version == 4:
+        host = str(address)
 
     netloc = host
 
