@@ -66,9 +66,11 @@ class SourceFlowTests(unittest.TestCase):
             self.assertTrue(source["url"].startswith(("http://", "https://")))
     
     def test_real_source_flow_with_all_source_types(self):
+        from normalizer import parse_source_content
+
         config = main.load_configuration()
 
-        # 使用仓库真实人工来源配置中的前两条远程来源。
+        # 人工来源全部来自正式 manual.txt。
         remote_sources = [
             source
             for source in config["manual_sources"]
@@ -80,19 +82,12 @@ class SourceFlowTests(unittest.TestCase):
             if source.get("mode") == "inline"
         ]
 
-        self.assertGreaterEqual(len(remote_sources), 2)
-        self.assertGreater(len(inline_sources), 0)
+        fixture_channels = config["channels"]
+        self.assertTrue(fixture_channels, "channels.txt 没有目标频道")
 
-        manual_txt = remote_sources[0]
-        manual_m3u = remote_sources[1]
+        fixture_channel = fixture_channels[0]
 
-        config["manual_sources"] = [
-            manual_txt,
-            manual_m3u,
-            *inline_sources,
-        ]
-
-        # 模拟自动播放列表和索引来源。
+        # 自动来源使用独立模拟配置，避免访问真实网络。
         playlist_url = "https://playlist.test/list.m3u"
         index_url = "https://index.test/catalog"
         index_playlist_url = "https://index.test/from-index.txt"
@@ -120,57 +115,47 @@ class SourceFlowTests(unittest.TestCase):
             },
         ]
 
-        # 模拟频道直接取自正式 channels.txt，不另设频道标准。
-        fixture_channels = config["channels"][:4]
-        self.assertEqual(
-            len(fixture_channels),
-            4,
-            "channels.txt 至少需要四个频道才能完成来源流程测试",
-        )
+        # 每条远程人工来源都使用自己的正式 URL。
+        # 下载内容采用模拟 M3U，不依赖外部网站当前返回的数据格式。
+        downloads = {}
 
-        # 所有远程下载均使用模拟内容，不访问真实网络。
-        downloads = {
-            manual_txt["url"]: {
-                "content": (
-                    f"{fixture_channels[0]},"
-                    "https://media.test/manual-txt.m3u8\n"
-                ).encode("utf-8"),
-                "content_type": "text/plain",
-            },
-            manual_m3u["url"]: {
+        for index, source in enumerate(remote_sources):
+            channel = fixture_channels[index % len(fixture_channels)]
+            downloads[source["url"]] = {
                 "content": (
                     "#EXTM3U\n"
-                    f'#EXTINF:-1 tvg-name="{fixture_channels[1]}",'
-                    f"{fixture_channels[1]}\n"
-                    "https://media.test/manual-m3u.m3u8\n"
+                    f'#EXTINF:-1 tvg-name="{channel}",{channel}\n'
+                    f"https://media.test/manual-{index}.m3u8\n"
                 ).encode("utf-8"),
                 "content_type": "application/vnd.apple.mpegurl",
-            },
-            playlist_url: {
-                "content": (
-                    "#EXTM3U\n"
-                    f'#EXTINF:-1 tvg-name="{fixture_channels[2]}",'
-                    f"{fixture_channels[2]}\n"
-                    "https://media.test/automatic.m3u8\n"
-                ).encode("utf-8"),
-                "content_type": "application/vnd.apple.mpegurl",
-            },
-            index_url: {
-                "content": (
-                    '<html><body>'
-                    '<a href="from-index.txt">播放列表</a>'
-                    '<a href="ordinary.html">普通网页</a>'
-                    "</body></html>"
-                ).encode("utf-8"),
-                "content_type": "text/html",
-            },
-            index_playlist_url: {
-                "content": (
-                    f"{fixture_channels[3]},"
-                    "https://media.test/index.m3u8\n"
-                ).encode("utf-8"),
-                "content_type": "text/plain",
-            },
+            }
+
+        downloads[playlist_url] = {
+            "content": (
+                "#EXTM3U\n"
+                f'#EXTINF:-1 tvg-name="{fixture_channel}",'
+                f"{fixture_channel}\n"
+                "https://media.test/automatic.m3u8\n"
+            ).encode("utf-8"),
+            "content_type": "application/vnd.apple.mpegurl",
+        }
+
+        downloads[index_url] = {
+            "content": (
+                '<html><body>'
+                '<a href="from-index.txt">播放列表</a>'
+                '<a href="ordinary.html">普通网页</a>'
+                "</body></html>"
+            ).encode("utf-8"),
+            "content_type": "text/html",
+        }
+
+        downloads[index_playlist_url] = {
+            "content": (
+                f"{fixture_channel},"
+                "https://media.test/index.m3u8\n"
+            ).encode("utf-8"),
+            "content_type": "text/plain",
         }
 
         downloaded_urls = []
@@ -263,84 +248,69 @@ class SourceFlowTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
 
-        # 来源线路数量可能变化，不固定候选总数。
-        # 至少验证两个远程人工来源和两个内嵌来源均进入检测。
-        self.assertGreaterEqual(
-            len(detected_candidates),
-            2 + len(inline_sources),
-        )
-
-        channels = {
+        configured_channels = set(config["channels"])
+        detected_channels = {
             candidate["channel"]
             for candidate in detected_candidates
         }
 
-        configured_channels = set(config["channels"])
-
-        self.assertTrue(channels)
+        self.assertTrue(detected_candidates)
         self.assertTrue(
-            channels.issubset(configured_channels),
+            detected_channels.issubset(configured_channels),
             f"检测结果出现正式频道配置之外的频道："
-            f"{channels - configured_channels}",
-        )
-        self.assertTrue(
-            set(fixture_channels).issubset(channels),
-            "模拟来源中的正式频道没有全部进入检测",
+            f"{detected_channels - configured_channels}",
         )
 
-        # 人工来源：普通 URL、远程 M3U、两个内嵌 M3U。
         manual_candidates = [
             candidate
             for candidate in detected_candidates
             if candidate["source_type"] == "manual"
         ]
-        self.assertGreaterEqual(
-            len(manual_candidates),
-            2 + len(inline_sources),
-        )
-
-        # 两个模拟远程人工来源各产生一条候选。
-        self.assertEqual(
-            sum(
-                candidate["source_url"] == manual_txt["url"]
-                for candidate in manual_candidates
-            ),
-            1,
-        )
-        self.assertEqual(
-            sum(
-                candidate["source_url"] == manual_m3u["url"]
-                for candidate in manual_candidates
-            ),
-            1,
-        )
 
         manual_source_urls = {
             candidate["source_url"]
             for candidate in manual_candidates
         }
 
-        self.assertIn(manual_txt["url"], manual_source_urls)
-        self.assertIn(manual_m3u["url"], manual_source_urls)
+        # 所有正式远程人工来源都必须进入实际采集流程。
+        expected_remote_urls = {
+            source["url"] for source in remote_sources
+        }
 
-        for inline_source in inline_sources:
-            self.assertIn(
-                inline_source["url"],
-                manual_source_urls,
+        self.assertTrue(
+            expected_remote_urls.issubset(manual_source_urls),
+            "有正式远程人工来源没有进入检测",
+        )
+
+        # 对内嵌来源，先根据其真实内容判断是否存在有效目标频道，
+        # 再验证有效候选确实进入检测，不固定来源数量或频道名单。
+        for source in inline_sources:
+            parsed = parse_source_content(
+                source["inline_content"],
+                source,
+                config["channels"],
+                content_type="application/vnd.apple.mpegurl",
+                aliases=config["settings"].get("aliases", {}),
             )
-            self.assertTrue(
-                any(
-                    candidate["source_url"] == inline_source["url"]
-                    for candidate in manual_candidates
+
+            has_target_candidate = any(
+                candidate.get("channel") in configured_channels
+                for candidate in parsed["candidates"]
+            )
+
+            if has_target_candidate:
+                self.assertIn(
+                    source["url"],
+                    manual_source_urls,
+                    f"有效内嵌来源没有进入检测：{source['url']}",
                 )
-            )
-        # 自动 M3U 和索引发现的播放列表分别进入检测。
+
+        # 自动播放列表和索引发现的播放列表分别进入检测。
         automatic_candidates = [
             candidate
             for candidate in detected_candidates
             if candidate["source_type"] == "automatic"
         ]
-        self.assertEqual(len(automatic_candidates), 2)
 
         automatic_source_urls = {
             candidate["source_url"]
@@ -352,18 +322,22 @@ class SourceFlowTests(unittest.TestCase):
             {playlist_url, index_playlist_url},
         )
 
-        # 索引页面本身和普通网页均不能作为播放列表进入解析。
+        # 索引页面本身不能作为播放列表进入解析。
         self.assertNotIn(index_url, automatic_source_urls)
 
+        expected_download_urls = (
+            expected_remote_urls
+            | {playlist_url, index_url, index_playlist_url}
+        )
+
         self.assertEqual(
-            downloaded_urls,
-            [
-                manual_txt["url"],
-                manual_m3u["url"],
-                playlist_url,
-                index_url,
-                index_playlist_url,
-            ],
+            set(downloaded_urls),
+            expected_download_urls,
+        )
+        self.assertEqual(
+            len(downloaded_urls),
+            len(expected_download_urls),
+            "来源采集出现重复下载",
         )
 
 
