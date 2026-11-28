@@ -94,17 +94,53 @@ class StreamQualityTests(unittest.TestCase):
         result.update(overrides)
         return result
 
-    def check(self, metadata):
+    def check(self, metadata, category=""):
         with (
             patch("stream.shutil.which", return_value="/usr/bin/ffmpeg"),
             patch("stream._probe", return_value=metadata),
             patch("stream._decode") as decode,
         ):
             result = stream.check_stream(
-                "https://example.com/live.ts"
+                "https://example.com/live.ts",
+                category=category,
             )
         return result, decode
 
+    def test_sports_channel_720p_passes(self):
+        result, decode = self.check(
+            self.metadata(width=1280, height=720),
+            category="体育频道",
+        )
+
+        self.assertEqual(result["status"], stream.PASS)
+        decode.assert_called_once()
+
+    def test_sports_channel_below_720p_fails(self):
+        result, decode = self.check(
+            self.metadata(width=1279, height=720),
+            category="体育频道",
+        )
+
+        self.assertEqual(result["status"], stream.FAIL)
+        decode.assert_not_called()
+
+    def test_normal_channel_720p_fails(self):
+        result, decode = self.check(
+            self.metadata(width=1280, height=720),
+            category="卫视频道",
+        )
+
+        self.assertEqual(result["status"], stream.FAIL)
+        decode.assert_not_called()
+
+    def test_uncategorized_channel_720p_fails(self):
+        result, decode = self.check(
+            self.metadata(width=1280, height=720),
+        )
+
+        self.assertEqual(result["status"], stream.FAIL)
+        decode.assert_not_called()
+    
     def test_h264_1080p_meeting_all_thresholds_passes(self):
         result, decode = self.check(self.metadata())
 
