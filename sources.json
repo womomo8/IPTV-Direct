@@ -21,6 +21,13 @@
       "url": "https://raw.githubusercontent.com/IPTV-CN/IPTV/master/channels/cctv.m3u",
       "enabled": true,
       "mode": "playlist"
+    },
+    {
+      "id": "source-004",
+      "name": "Doubo Public IPTV 自动索引",
+      "url": "https://doubo.tv/en/playlists/",
+      "enabled": true,
+      "mode": "index"
     }
   ]
 }
