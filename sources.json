@@ -44,6 +44,20 @@
       "mode": "playlist"
     },
     {
+      "id": "source-007",
+      "name": "Broadcast Atlas 官方免费直播清单",
+      "url": "https://broadcastatlas.com/official.m3u",
+      "enabled": true,
+      "mode": "playlist"
+    },
+    {
+      "id": "source-008",
+      "name": "Nexonic 1080P 高清候选清单",
+      "url": "https://raw.githubusercontent.com/nexonic-technologies/nexonic-iptv/main/playlists/quality/1080p.m3u",
+      "enabled": true,
+      "mode": "playlist"
+    },
+    {
       "id": "sports-001",
       "name": "AdeelWajid 每日验证体育频道",
       "url": "https://raw.githubusercontent.com/AdeelWajid/iptv_validated_list/main/playlists/categories/sports.m3u",
