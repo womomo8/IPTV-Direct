@@ -12,6 +12,33 @@ import main
 
 class SourceFlowTests(unittest.TestCase):
 
+    def test_stream_concurrency_settings_are_loaded_and_required(self):
+        config = main.load_configuration()
+        detection = config["settings"]["detection"]
+
+        self.assertEqual(
+            detection["stream_probe_concurrency"],
+            4,
+        )
+        self.assertEqual(
+            detection["stream_decode_concurrency"],
+            2,
+        )
+
+        for key in (
+            "stream_probe_concurrency",
+            "stream_decode_concurrency",
+        ):
+            settings = dict(config["settings"])
+            settings["detection"] = dict(detection)
+            del settings["detection"][key]
+
+            with self.assertRaisesRegex(
+                ValueError,
+                f"detection\\.{key}",
+            ):
+                main._check_settings(settings)
+    
     def test_real_source_flow_with_all_source_types(self):
         config = main.load_configuration()
 
