@@ -2,8 +2,8 @@
 {
   "collection": {
     "max_valid_sources": 40,
-    "max_candidates_per_source": 100,
-    "max_candidates_total": 1000,
+    "max_candidates_per_source": 300,
+    "max_candidates_total": 3000,
     "max_index_links_per_page": 40
   },
   "detection": {
