@@ -1304,8 +1304,22 @@ def publish_subscriptions(
             ) from publish_error
 
     finally:
+        cleanup_errors = []
+
         for temp_file in staged:
-            temp_file.unlink(missing_ok=True)
+            try:
+                temp_file.unlink(missing_ok=True)
+            except OSError as exc:
+                cleanup_errors.append(
+                    f"{temp_file.name} 清理失败：{exc}"
+                )
+
+        if cleanup_errors:
+            emit(
+                "临时文件清理",
+                "WARNING",
+                "；".join(cleanup_errors),
+            )
 
     emit(
         "发布流程",
