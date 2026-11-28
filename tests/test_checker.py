@@ -681,6 +681,18 @@ class CheckerLocalTests(unittest.TestCase):
         self.assert_status(result, "http", "FAIL")
         self.assert_status(result, "ts", "INCOMPLETE")
 
+    def test_abort_only_shutdowns_socket(self):
+        """超时线程只中断 socket，不与请求线程争抢连接关闭权。"""
+        conn = Mock()
+        sock = Mock()
+        conn.sock = sock
+
+        Detector._abort(conn)
+
+        sock.shutdown.assert_called_once_with(socket.SHUT_RDWR)
+        sock.close.assert_not_called()
+        conn.close.assert_not_called()
+    
     def test_active_detection_budget_timeout(self):
         result = self.check(
             "/slow.ts",
