@@ -16,9 +16,7 @@
     "max_source_download_bytes": 8388608,
     "max_hls_manifest_bytes": 1048576,
     "max_ts_read_bytes": 65536,
-    "max_redirects": 5,
-    "stream_probe_concurrency": 4,
-    "stream_decode_concurrency": 2
+    "max_redirects": 5
   },
 
   "globalping": {
