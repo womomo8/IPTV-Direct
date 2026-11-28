@@ -155,11 +155,16 @@ class PublisherAdmissionTests(unittest.TestCase):
                 result["results"][0]["status"],
                 publisher.REJECTED,
             )
+            self.assertEqual(
+                result["results"][0]["reason"],
+                "视频质量检测未明确通过",
+            )
     
     def test_local_failure_is_rejected(self):
-        """本地任一适用检测失败，不得准入。"""
+        """本地检测失败时，即使没有视频检测结果，也应报告本地原因。"""
 
         candidate = make_candidate(local_status="FAIL")
+        candidate.pop("stream_quality")
 
         result = self.process([candidate])
 
@@ -167,6 +172,10 @@ class PublisherAdmissionTests(unittest.TestCase):
         self.assertEqual(
             result["results"][0]["status"],
             publisher.REJECTED,
+        )
+        self.assertEqual(
+            result["results"][0]["reason"],
+            "本地 IPV4 检测未通过：FAIL",
         )
 
     def test_globalping_failure_is_rejected(self):
