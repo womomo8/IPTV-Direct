@@ -144,6 +144,25 @@ class URLNormalizationTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     normalize_url(url)
 
+    def test_rejects_ipv6_literal_addresses(self):
+        for url in (
+            "http://[2001:db8::1]/live.ts",
+            "https://[2001:db8::1]:8443/live.m3u8",
+            "http://[::1]/live.ts",
+        ):
+            with self.subTest(url=url):
+                with self.assertRaisesRegex(ValueError, "不支持 IPv6"):
+                    normalize_url(url)
+
+    def test_keeps_ipv4_literal_and_domain_hosts(self):
+        self.assertEqual(
+            normalize_url("http://192.0.2.1/live.ts"),
+            "http://192.0.2.1/live.ts",
+        )
+        self.assertEqual(
+            normalize_url("http://example.com/live.ts"),
+            "http://example.com/live.ts",
+        )
 
 class ChannelMatchingTests(unittest.TestCase):
 
@@ -881,6 +900,22 @@ class SourceNormalizationTests(unittest.TestCase):
                 seen_urls=set(),
             )
 
+    def test_ipv6_candidate_is_filtered_before_detection(self):
+        content = (
+            "CCTV-1,http://[2001:db8::1]/ipv6.ts\n"
+            "CCTV-5,https://example.test/ipv4.ts\n"
+        )
+
+        result = self.normalize(content)
+
+        self.assertEqual(
+            [item["normalized_url"] for item in result["candidates"]],
+            ["https://example.test/ipv4.ts"],
+        )
+        self.assertEqual(result["extracted_candidates"], 1)
+        self.assertTrue(
+            any("不支持 IPv6 地址" in error for error in result["errors"])
+        )
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
