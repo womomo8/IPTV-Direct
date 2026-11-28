@@ -384,7 +384,7 @@ class CheckerLocalTests(unittest.TestCase):
         }
 
     def settings(self, **overrides):
-        """返回与 settings.json detection 区段一致的测试配置。"""
+        """返回用于隔离边界测试的独立参数，不代表正式 settings.json。"""
         config = {
             "local_concurrency": 4,
             "per_host_concurrency": 2,
