@@ -536,7 +536,7 @@ class CheckerLocalTests(unittest.TestCase):
 
         result = self.check(
             "/master.m3u8",
-            candidate_active_budget_seconds=0.5,
+            candidate_active_budget_seconds=1,
         )
 
         self.assert_status(result, "hls", "INCOMPLETE")
