@@ -625,6 +625,17 @@ class Detector:
             line.startswith("#EXT-X-STREAM-INF:")
             for line in lines
         ):
+            variants = [
+                urljoin(final_url, lines[index + 1])
+                for index, line in enumerate(lines[:-1])
+                if line.startswith("#EXT-X-STREAM-INF:")
+                and not lines[index + 1].startswith("#")
+            ]
+            if not variants:
+                raise CheckError(
+                    FAIL, "主播放清单没有媒体播放列表"
+                )
+
             media = None
             media_data = None
             media_url = None
@@ -669,13 +680,7 @@ class Detector:
                     FAIL,
                     "所有媒体播放列表均检测失败",
                 )
-            media_data = self._complete_manifest(
-                media, "媒体播放清单"
-            )
-            media_url = media["url"]
-            media_lines = self._playlist(
-                media_data, candidate_result
-            )
+
         else:
             media_url, media_lines = final_url, lines
 
