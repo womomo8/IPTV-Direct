@@ -198,21 +198,13 @@ class Detector:
 
     @staticmethod
     def _abort(conn):
-        """shutdown 能中断其他线程中的阻塞读取；单纯 close 不可靠。"""
+        """只中断底层 socket；连接对象由请求线程统一关闭。"""
         sock = getattr(conn, "sock", None)
         if sock is not None:
             try:
                 sock.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
-            try:
-                sock.close()
-            except OSError:
-                pass
-        try:
-            conn.close()
-        except OSError:
-            pass
 
     @staticmethod
     def _read(response, conn, limit, deadline, connected):
