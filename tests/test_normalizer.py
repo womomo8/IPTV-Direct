@@ -320,30 +320,21 @@ class SourceParsingTests(unittest.TestCase):
         self.assertEqual(actual, dict(items))
 
     def test_jiandantv_aliases_use_actual_settings(self):
+        from main import load_configuration
+
         root = Path(__file__).resolve().parents[1]
+        config = load_configuration(root)
 
-        settings = json.loads(
-            (root / "settings.json").read_text(encoding="utf-8")
-        )
-        channels = load_channels(root / "channels.txt")
+        settings = config["settings"]
+        channels = config["channels"]
+        items = list(settings["aliases"].items())
 
-        aliases = settings["aliases"]
-        items = [
-            (alias, aliases[alias])
-            for alias in (
-                "凤凰中文",
-                "凤凰资讯",
-                "TVB翡翠",
-                "澳门莲花",
-            )
-            if alias in aliases
-        ]
-        self.assertTrue(items, "settings.json 没有配置简丹 TV 测试别名")
+        self.assertTrue(items, "settings.json 没有配置频道别名")
 
         lines = ["#EXTM3U"]
         for index, (name, _) in enumerate(items):
             lines.extend([
-                f'#EXTINF:-1 tvg-id="jiandantv-{index}",{name}',
+                f'#EXTINF:-1 tvg-id="jiandantv-{index}" tvg-name="{name}",{name}',
                 f"https://example.test/{index}.m3u8",
             ])
 
@@ -354,10 +345,12 @@ class SourceParsingTests(unittest.TestCase):
             aliases=settings["aliases"],
         )
 
-        self.assertEqual(
-            [item["channel"] for item in result["candidates"]],
-            [canonical for _, canonical in items],
-        )
+        actual = {
+            item["tvg_name"]: item["channel"]
+            for item in result["candidates"]
+        }
+
+        self.assertEqual(actual, dict(items))
     
     def test_o0i_txt_aliases_use_actual_settings(self):
         root = Path(__file__).resolve().parents[1]
