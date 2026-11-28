@@ -457,6 +457,22 @@ class CheckerLocalTests(unittest.TestCase):
         self.assert_status(result, "hls", "PASS")
         self.assert_status(result, "ts", "PASS")
 
+     def test_hls_uses_second_variant_when_first_fails(self):
+        self.server.routes["/master.m3u8"]["body"] = (
+            "#EXTM3U\n"
+            "#EXT-X-VERSION:3\n"
+            "#EXT-X-STREAM-INF:BANDWIDTH=1200000\n"
+            "missing/index.m3u8\n"
+            "#EXT-X-STREAM-INF:BANDWIDTH=2400000\n"
+            "variant/index.m3u8\n"
+        ).encode("utf-8")
+
+        result = self.check("/master.m3u8")
+
+        self.assertEqual(result["media_type"], "HLS")
+        self.assert_status(result, "hls", "PASS")
+        self.assert_status(result, "ts", "PASS")   
+    
     def test_hls_invalid_ts_segments_do_not_pass(self):
         self.server.routes["/bad-hls.m3u8"]["body"] = (
             MEDIA_PLAYLIST.replace(
