@@ -625,22 +625,50 @@ class Detector:
             line.startswith("#EXT-X-STREAM-INF:")
             for line in lines
         ):
-            variants = [
-                urljoin(final_url, lines[index + 1])
-                for index, line in enumerate(lines[:-1])
-                if line.startswith("#EXT-X-STREAM-INF:")
-                and not lines[index + 1].startswith("#")
-            ]
-            if not variants:
+            media = None
+            media_data = None
+            media_url = None
+            media_lines = None
+            variant_errors = []
+
+            for variant in variants:
+                try:
+                    media = self._request(
+                        variant,
+                        deadline,
+                        self.manifest_limit,
+                        use_range=True,
+                    )
+                    media_data = self._complete_manifest(
+                        media, "媒体播放清单"
+                    )
+                    media_url = media["url"]
+                    media_lines = self._playlist(
+                        media_data, candidate_result
+                    )
+                    break
+                except CheckError as exc:
+                    variant_errors.append(exc)
+
+                    if time.monotonic() >= deadline:
+                        raise CheckError(
+                            INCOMPLETE,
+                            "尝试备用媒体播放列表时，候选检测预算已耗尽",
+                        ) from exc
+
+            if media_lines is None:
+                if any(
+                    error.status == INCOMPLETE
+                    for error in variant_errors
+                ):
+                    raise CheckError(
+                        INCOMPLETE,
+                        "所有媒体播放列表均未能完成检测",
+                    )
                 raise CheckError(
-                    FAIL, "主播放清单没有媒体播放列表"
+                    FAIL,
+                    "所有媒体播放列表均检测失败",
                 )
-            media = self._request(
-                variants[0],
-                deadline,
-                self.manifest_limit,
-                use_range=True,
-            )
             media_data = self._complete_manifest(
                 media, "媒体播放清单"
             )
