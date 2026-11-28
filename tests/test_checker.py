@@ -488,6 +488,39 @@ class CheckerLocalTests(unittest.TestCase):
         self.assert_status(result, "hls", "FAIL")
         self.assert_status(result, "ts", "FAIL")
 
+    def test_hls_all_variants_fail(self):
+        self.server.routes["/master.m3u8"]["body"] = (
+            "#EXTM3U\n"
+            "#EXT-X-STREAM-INF:BANDWIDTH=1200000\n"
+            "missing/first.m3u8\n"
+            "#EXT-X-STREAM-INF:BANDWIDTH=2400000\n"
+            "missing/second.m3u8\n"
+        ).encode("utf-8")
+
+        result = self.check("/master.m3u8")
+
+        self.assert_status(result, "hls", "FAIL")
+
+    def test_hls_variant_timeout_is_incomplete(self):
+        self.server.routes["/master.m3u8"]["body"] = (
+            "#EXTM3U\n"
+            "#EXT-X-STREAM-INF:BANDWIDTH=1200000\n"
+            "slow/index.m3u8\n"
+        ).encode("utf-8")
+
+        self.server.routes["/slow/index.m3u8"] = {
+            "status": 200,
+            "body": MEDIA_PLAYLIST,
+            "delay": 1.0,
+        }
+
+        result = self.check(
+            "/master.m3u8",
+            candidate_active_budget_seconds=0.5,
+        )
+
+        self.assert_status(result, "hls", "INCOMPLETE")
+    
     def test_hls_uses_one_total_candidate_budget(self):
         started = time.monotonic()
 
