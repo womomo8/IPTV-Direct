@@ -447,6 +447,126 @@ class PublisherReleaseTests(unittest.TestCase):
             "ROLLBACK_FAILED",
         )
         self.assertIn("回滚失败", str(context.exception))   
+
+
+    def test_post_publish_validation_failure_restores_old_files(self):
+        """发布后读取失败时，必须恢复两份旧订阅并记录失败阶段。"""
+        old = make_subscriptions([
+            ("CCTV-1", "https://example.com/old1.m3u8"),
+            ("CCTV-5", "https://example.com/old5.m3u8"),
+        ])
+        new = make_subscriptions([
+            ("CCTV-1", "https://example.com/new1.m3u8"),
+            ("CCTV-5", "https://example.com/new5.m3u8"),
+        ])
+
+        self.publish(old)
+
+        m3u_path = self.output_dir / "iptv.m3u"
+        txt_path = self.output_dir / "iptv.txt"
+
+        old_m3u = m3u_path.read_bytes()
+        old_txt = txt_path.read_bytes()
+
+        real_read_text = Path.read_text
+
+        def fail_published_m3u(path, *args, **kwargs):
+            if path.name == "iptv.m3u":
+                raise OSError("模拟发布后读取失败")
+
+            return real_read_text(path, *args, **kwargs)
+
+        events = []
+
+        with patch(
+            "publisher.Path.read_text",
+            autospec=True,
+            side_effect=fail_published_m3u,
+        ):
+            with self.assertRaisesRegex(
+                publisher.PublisherError,
+                "旧文件已恢复",
+            ) as context:
+                publisher.publish_subscriptions(
+                    new,
+                    CHANNELS,
+                    output_dir=self.output_dir,
+                    event_callback=lambda stage, status, detail: (
+                        events.append((stage, status, detail))
+                    ),
+                )
+
+        self.assertEqual(
+            context.exception.subscription_state,
+            "RESTORED",
+        )
+        self.assertEqual(m3u_path.read_bytes(), old_m3u)
+        self.assertEqual(txt_path.read_bytes(), old_txt)
+
+        self.assertTrue(
+            any(
+                stage == "发布后校验" and status == "FAIL"
+                for stage, status, detail in events
+            )
+        )
+        self.assertTrue(
+            any(
+                stage == "正式订阅回滚" and status == "COMPLETED"
+                for stage, status, detail in events
+            )
+        )
+
+    def test_restore_continues_after_one_file_restore_failure(self):
+        """一份文件恢复失败时，仍必须继续尝试恢复另一份文件。"""
+        self.output_dir.mkdir(parents=True)
+
+        m3u_path = self.output_dir / "iptv.m3u"
+        txt_path = self.output_dir / "iptv.txt"
+
+        m3u_path.write_bytes(b"new m3u")
+        txt_path.write_bytes(b"new txt")
+
+        old_data = [
+            b"old m3u",
+            b"old txt",
+        ]
+        targets = [
+            m3u_path,
+            txt_path,
+        ]
+
+        real_write_temp_file = publisher._write_temp_file
+        call_count = {"value": 0}
+
+        def fail_first_restore(directory, prefix, data):
+            call_count["value"] += 1
+
+            if call_count["value"] == 1:
+                raise OSError("模拟第一份文件恢复失败")
+
+            return real_write_temp_file(
+                directory,
+                prefix,
+                data,
+            )
+
+        with patch(
+            "publisher._write_temp_file",
+            side_effect=fail_first_restore,
+        ):
+            errors = publisher._restore_subscription_files(
+                targets,
+                old_data,
+                self.output_dir,
+            )
+
+        self.assertEqual(call_count["value"], 2)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("iptv.m3u 恢复失败", errors[0])
+
+        self.assertEqual(m3u_path.read_bytes(), b"new m3u")
+        self.assertEqual(txt_path.read_bytes(), b"old txt")
+
     
     def test_inconsistent_route_count_is_rejected(self):
         """传入的线路数量与订阅实际内容不一致时，必须拒绝。"""
