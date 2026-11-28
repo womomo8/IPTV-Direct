@@ -237,14 +237,12 @@ class SourceBatchPipelineTests(unittest.TestCase):
         )
         self.assertTrue(callable(callback))
 
-        with patch("main._log_event") as log_mock:
+        with patch("builtins.print") as print_mock:
             callback(1, 1)
 
-        log_mock.assert_called_once_with(
-            "本地检测",
-            "本地检测阶段",
-            "PROGRESS",
-            "已完成 1/1 条",
+        print_mock.assert_called_once_with(
+            "[本地检测] 进度：已完成 1/1 条。",
+            flush=True,
         )
 
     def test_globalping_progress_callback_logs_probe_stage(self):
@@ -265,21 +263,16 @@ class SourceBatchPipelineTests(unittest.TestCase):
         )
         self.assertTrue(callable(callback))
 
-        with patch("main._log_event") as log_mock:
+        with patch("builtins.print") as print_mock:
             callback({
                 "event": "stage_started",
                 "stage": "probe_1",
                 "asn": 12345,
             })
 
-        log_mock.assert_called_once_with(
-            "Globalping事件",
-            "候选线路",
-            "EVENT",
-            (
-                "[Globalping] 频道一；主机 example.test；"
-                "第一 ASN 探针阶段；ASN 12345；探针阶段开始。"
-            ),
+        print_mock.assert_called_once_with(
+            "[Globalping] 频道一；主机 example.test；第一 ASN 探针阶段；ASN 12345；探针阶段开始。",
+            flush=True,
         )
 
     def test_detection_summary_is_printed_before_admission(self):
@@ -341,87 +334,6 @@ class SourceBatchPipelineTests(unittest.TestCase):
         self.assertEqual(
             events,
             ["summary", "admission"],
-        )
-
-    def test_local_summary_separates_status_and_aggregates_reasons(self):
-        """本地状态互斥统计，主要原因按候选数量汇总。"""
-
-        passed = make_local(
-            make_candidate("频道一", 1)
-        )
-
-        failed = make_local(
-            make_candidate("频道一", 2)
-        )
-        failed["checks"]["http"] = {
-            "status": "FAIL",
-            "reason": "连接被拒绝",
-        }
-
-        incomplete = make_local(
-            make_candidate("频道一", 3)
-        )
-        incomplete["checks"]["ts"] = {
-            "status": "INCOMPLETE",
-            "reason": "请求超时",
-        }
-
-        mixed = make_local(
-            make_candidate("频道一", 4)
-        )
-        mixed["checks"]["http"] = {
-            "status": "FAIL",
-            "reason": "连接被拒绝",
-        }
-        mixed["checks"]["ts"] = {
-            "status": "INCOMPLETE",
-            "reason": "请求超时",
-        }
-
-        with patch("main._log_event") as log_mock:
-            main._print_detection_summary(
-                [passed, failed, incomplete, mixed],
-                [],
-            )
-
-        events = [
-            call.args[:4]
-            for call in log_mock.call_args_list
-        ]
-
-        self.assertIn(
-            (
-                "检测汇总",
-                "本地及Globalping统计",
-                "SUCCESS",
-                (
-                    "候选 4 条；本地 PASS 1 条；"
-                    "FAIL 2 条；INCOMPLETE 1 条；"
-                    "Globalping 实际尝试 0 条；"
-                    "创建测量 0 条；尝试但未创建测量 0 条；"
-                    "未进入检测 4 条；Globalping PASS 0 条；"
-                    "FAIL 0 条；INCOMPLETE 0 条"
-                ),
-            ),
-            events,
-        )
-        self.assertIn(
-            (
-                "本地检测",
-                "FAIL原因汇总",
-                "FAIL",
-                "HTTP：连接被拒绝 × 2 条",
-            ),
-            events,
-        )
-        self.assertIn(
-            (
-                "本地检测",
-                "INCOMPLETE原因汇总",
-                "INCOMPLETE",
-                "TS：请求超时 × 1 条",
-            ),
-            events,
         )
     
     def test_only_stream_pass_can_enter_globalping(self):
@@ -890,64 +802,6 @@ class HistoricalCandidateTests(unittest.TestCase):
             self.settings["collection"]["max_candidates_total"],
         )
 
-    def test_history_with_unmatched_channel_is_skipped(self):
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            self.write_history(root)
-
-            (root / "output" / "iptv.m3u").write_text(
-                "#EXTM3U\n"
-                '#EXTINF:-1 tvg-name="旧频道",旧频道\n'
-                "https://example.test/old.m3u8\n",
-                encoding="utf-8",
-            )
-
-            (root / "output" / "iptv.txt").write_text(
-                "旧频道,https://example.test/old.m3u8\n",
-                encoding="utf-8",
-            )
-
-            candidates = main._load_historical_candidates(
-                root,
-                ["频道一"],
-                self.settings,
-            )
-
-        self.assertEqual(candidates, [])
-
-    def test_history_partial_channel_match_keeps_matching_routes(self):
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            self.write_history(root)
-
-            (root / "output" / "iptv.m3u").write_text(
-                "#EXTM3U\n"
-                '#EXTINF:-1 tvg-name="频道一",频道一\n'
-                "https://example.test/current.m3u8\n"
-                '#EXTINF:-1 tvg-name="旧频道",旧频道\n'
-                "https://example.test/old.m3u8\n",
-                encoding="utf-8",
-            )
-
-            (root / "output" / "iptv.txt").write_text(
-                "频道一,https://example.test/current.m3u8\n"
-                "旧频道,https://example.test/old.m3u8\n",
-                encoding="utf-8",
-            )
-
-            candidates = main._load_historical_candidates(
-                root,
-                ["频道一"],
-                self.settings,
-            )
-
-        self.assertEqual(len(candidates), 1)
-        self.assertEqual(candidates[0]["channel"], "频道一")
-        self.assertEqual(
-            candidates[0]["normalized_url"],
-            "https://example.test/current.m3u8",
-        )    
-    
     def test_missing_one_history_file_fails_closed(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

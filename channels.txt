@@ -18,9 +18,6 @@ CCTV-14
 CCTV-15
 CCTV-16
 CCTV-17
-CCTV-风云足球
-CCTV-央视台球
-CCTV-高尔夫·网球
 
 # 卫视频道
 湖南卫视
@@ -42,27 +39,16 @@ CCTV-高尔夫·网球
 # 体育频道
 广东体育
 五星体育
-天津体育
-劲爆体育
-BRTV体育休闲
-陕西体育休闲
-
-# 国外频道
+睛彩篮球
+睛彩竞技
 NBA TV
 ESPN
 ESPN 2
-beIN Sports
-Sky Sports F1
-DAZN
-The NBA Channel
-Fox Sports 1
-TNT Sports 1
 beIN SPORTS XTRA
 Eurosport 1
 Eurosport 2
-
-
-
-
-
+Fox Sports 1
+Sky Sports F1
+TNT Sports 1
+The NBA Channel
 

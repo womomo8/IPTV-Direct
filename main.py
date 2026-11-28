@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from datetime import datetime
 import sys
 import time
 import unittest
@@ -39,30 +38,6 @@ PASS = "PASS"
 FAIL = "FAIL"
 INCOMPLETE = "INCOMPLETE"
 
-def _log_event(
-    stage: str,
-    obj: str,
-    status: str,
-    detail: str,
-    *,
-    error: bool = False,
-) -> None:
-    """统一正式运行日志格式；不参与业务判断。"""
-
-    timestamp = datetime.now().astimezone().isoformat(
-        timespec="seconds"
-    )
-
-    message = (
-        f"{timestamp}｜{stage}｜{obj}｜{status}｜"
-        f"{_safe_diagnostic_text(detail)}"
-    )
-
-    print(
-        message,
-        file=sys.stderr if error else sys.stdout,
-        flush=True,
-    )
 
 def _read_text(path: Path) -> str:
     try:
@@ -248,26 +223,22 @@ def _load_historical_candidates(
             f"历史订阅读取失败：{exc}"
         ) from exc
 
-    # 从历史 M3U 自身提取频道名称，用于校验历史文件完整性。
-    # 不使用当前频道列表校验旧标签，避免旧标签变化阻断整轮运行。
-    historical_channels = list(dict.fromkeys(
-        title
-        for line in m3u_text.splitlines()
-        if line.startswith("#EXTINF:") and "," in line
-        for title in [line.split(",", 1)[1].strip()]
-        if title
-    ))
-
+    # 先确认旧订阅两份文件一致、频道有效、URL 有效。
     try:
         publisher.validate_subscriptions(
             m3u_text,
             txt_text,
-            historical_channels,
+            channels,
         )
     except publisher.PublisherError as exc:
         raise publisher.PublisherError(
             f"历史订阅校验失败：{exc}"
         ) from exc
+
+    route_count = sum(
+        line.startswith("#EXTINF:")
+        for line in m3u_text.splitlines()
+    )
 
     limits = settings["collection"]
 
@@ -302,15 +273,14 @@ def _load_historical_candidates(
 
     candidates = normalized.get("candidates", [])
 
-    # 历史线路允许个别频道无法匹配当前配置。
-    # 只要 M3U 格式可识别且没有触发候选上限，
-    # 就保留成功匹配的线路，未匹配线路由 normalizer 跳过。
+    # 必须确保旧订阅中的每一条线路都成功进入候选池。
     if (
         not normalized.get("recognized")
         or normalized.get("limit_reached")
+        or len(candidates) != route_count
     ):
         raise publisher.PublisherError(
-            "历史订阅解析失败或超过候选线路上限"
+            "历史订阅线路解析数量不完整，不能跳过未解析线路"
         )
 
     return candidates
@@ -338,20 +308,16 @@ def run_source_batch_pipeline(
     target_channels = {channel.casefold() for channel in channels}
     originals = [_identity(item) for item in candidates]
 
-    _log_event(
-        "本地检测",
-        "本地检测阶段",
-        "STARTED",
-        f"待检测 {len(candidates)} 条",
+    print(
+        f"[本地检测] 开始：待检测 {len(candidates)} 条。",
+        flush=True,
     )
     local_started = time.perf_counter()
 
     def report_local_progress(completed, total):
-        _log_event(
-            "本地检测",
-            "本地检测阶段",
-            "PROGRESS",
-            f"已完成 {completed}/{total} 条",
+        print(
+            f"[本地检测] 进度：已完成 {completed}/{total} 条。",
+            flush=True,
         )
 
     try:
@@ -384,15 +350,11 @@ def run_source_batch_pipeline(
             for item in candidates
         ]
 
-    _log_event(
-        "本地检测",
-        "本地检测阶段",
-        "COMPLETED",
-        (
-            f"返回 {len(local_results)} 条；"
-            f"耗时 {time.perf_counter() - local_started:.2f} 秒"
-        ),
-    )
+    print(
+        f"[本地检测] 完成：返回 {len(local_results)} 条；"
+        f"耗时 {time.perf_counter() - local_started:.2f} 秒。",
+        flush=True,
+    )    
     stream_indices = [
         index
         for index, item in enumerate(local_results)
@@ -408,16 +370,15 @@ def run_source_batch_pipeline(
     ]
 
     if stream_candidates:
-        _log_event(
-            "视频检测",
-            "视频检测阶段",
-            "STARTED",
-            f"待检测 {len(stream_candidates)} 条",
+        print(
+            f"[视频检测] 开始：待检测 {len(stream_candidates)} 条。",
+            flush=True,
         )
         stream_started = time.perf_counter()
         try:
             stream_results = stream.check_candidates(
                 stream_candidates,
+                settings["detection"],
             )
 
             if (
@@ -446,15 +407,11 @@ def run_source_batch_pipeline(
                     },
                 }
 
-        _log_event(
-            "视频检测",
-            "视频检测阶段",
-            "COMPLETED",
-            (
-                f"处理 {len(stream_candidates)} 条；"
-                f"耗时 {time.perf_counter() - stream_started:.2f} 秒"
-            ),
-        )
+        print(
+            f"[视频检测] 完成：处理 {len(stream_candidates)} 条；"
+            f"耗时 {time.perf_counter() - stream_started:.2f} 秒。",
+            flush=True,
+        )   
     output: list[dict[str, Any] | None] = [None] * len(candidates)
     pending: list[tuple[int, dict[str, Any]]] = []
 
@@ -526,15 +483,11 @@ def run_source_batch_pipeline(
 
     for progress_index, (original_index, candidate) in enumerate(pending, 1):
         globalping_started = time.perf_counter()
-        _log_event(
-            "Globalping检测",
-            "候选线路",
-            "PROGRESS",
-            (
-                f"进度 {progress_index}/{len(pending)}；"
-                f"频道 {candidate.get('channel', '未知频道')}；"
-                f"目标主机 {_safe_host(candidate)}"
-            ),
+        print(
+            f"[Globalping] 进度 {progress_index}/{len(pending)}："
+            f"{candidate.get('channel', '未知频道')}；"
+            f"目标主机 {_safe_host(candidate)}。",
+            flush=True,
         )
 
         if not session_created:
@@ -613,12 +566,7 @@ def run_source_batch_pipeline(
                     else:
                         return
 
-                    _log_event(
-                        "Globalping事件",
-                        "候选线路",
-                        "EVENT",
-                        f"{prefix}{asn_text}；{message}",
-                    )
+                    print(f"{prefix}{asn_text}；{message}", flush=True)
 
                 remote_results = globalping.check_candidates(
                     [candidate],
@@ -696,18 +644,12 @@ def run_source_batch_pipeline(
             if isinstance(result.get("globalping"), dict)
             else "未知"
         )
-        _log_event(
-            "Globalping检测",
-            "候选线路",
-            str(remote_status),
-            (
-                f"进度 {progress_index}/{len(pending)}；"
-                f"频道 {candidate.get('channel', '未知频道')}；"
-                f"主机 {_safe_host(candidate)}；"
-                f"耗时 {time.perf_counter() - globalping_started:.2f} 秒"
-            ),
-            error=remote_status != PASS,
-        )
+        print(
+            f"[Globalping] 完成 {progress_index}/{len(pending)}："
+            f"状态 {remote_status}；"
+            f"耗时 {time.perf_counter() - globalping_started:.2f} 秒。",
+            flush=True,
+        )    
     completed_results = []
 
     for index, result in enumerate(output):
@@ -721,14 +663,11 @@ def run_source_batch_pipeline(
     _print_detection_summary(
         completed_results,
         submitted_candidates,
-        attempted_count=len(pending),
     )
 
-    _log_event(
-        "线路准入",
-        "批量准入",
-        "STARTED",
-        f"待处理候选 {len(completed_results)} 条",
+    print(
+        f"[准入] 开始：待处理候选 {len(completed_results)} 条。",
+        flush=True,
     )
     admission_started = time.perf_counter()
 
@@ -743,11 +682,9 @@ def run_source_batch_pipeline(
         exc.detection_results = completed_results
         raise
 
-    _log_event(
-        "线路准入",
-        "批量准入",
-        "SUCCESS",
-        f"处理完成；耗时 {time.perf_counter() - admission_started:.2f} 秒",
+    print(
+        f"[准入] 完成：耗时 {time.perf_counter() - admission_started:.2f} 秒。",
+        flush=True,
     )
 
     returned = admission.get("results")
@@ -807,86 +744,14 @@ def run_source_batch_pipeline(
         submitted_candidates,
     )
 
-def _local_detection_outcome(
-    candidate: dict[str, Any],
-) -> tuple[str, str | None]:
-    """按候选线路归类本地检测结果，并选取一个主要原因。"""
-
-    if checker.local_checks_passed(candidate):
-        return PASS, None
-
-    checks = candidate.get("checks")
-    if not isinstance(checks, dict):
-        return INCOMPLETE, "缺少有效的本地检测结果"
-
-    media_type = candidate.get("media_type")
-
-    if media_type == "HLS":
-        required = ("ipv4", "http", "ts", "hls")
-    elif media_type == "DIRECT_TS":
-        required = ("ipv4", "http", "ts")
-    else:
-        return INCOMPLETE, "无法确认媒体类型"
-
-    failed = [
-        name
-        for name in required
-        if isinstance(checks.get(name), dict)
-        and checks[name].get("status") == FAIL
-    ]
-
-    if failed:
-        name = failed[0]
-        detail = checks[name]
-        reason = detail.get("reason") or "未提供失败原因"
-        return FAIL, f"{name.upper()}：{reason}"
-
-    for name in required:
-        detail = checks.get(name)
-
-        if (
-            not isinstance(detail, dict)
-            or detail.get("status") != PASS
-        ):
-            reason = (
-                detail.get("reason")
-                if isinstance(detail, dict)
-                else None
-            )
-            reason = reason or (
-                detail.get("status", "缺少检测状态")
-                if isinstance(detail, dict)
-                else "缺少检测结果"
-            )
-            return INCOMPLETE, f"{name.upper()}：{reason}"
-
-    if media_type == "DIRECT_TS":
-        hls = checks.get("hls")
-        if not isinstance(hls, dict) or hls.get("status") != "N/A":
-            return INCOMPLETE, "HLS：直接 TS 线路的 HLS 状态不符合预期"
-
-    return INCOMPLETE, "本地检测结果不完整"
-
-
 def _print_detection_summary(
     results: list[dict[str, Any]],
     submitted_candidates: list[dict[str, Any]] | None = None,
-    attempted_count: int | None = None,
 ) -> None:
-    """输出本地、视频及远程检测汇总，避免重复异常日志。"""
+    """输出批次统计，仅对检测异常保留必要诊断。"""
 
-    local_counts = {state: 0 for state in (PASS, FAIL, INCOMPLETE)}
-    local_reasons = {state: {} for state in (FAIL, INCOMPLETE)}
-
-    for item in results:
-        status, reason = _local_detection_outcome(item)
-        local_counts[status] += 1
-
-        if reason is not None:
-            reason = _safe_diagnostic_text(reason)
-            local_reasons[status][reason] = (
-                local_reasons[status].get(reason, 0) + 1
-            )
+    local_ok = sum(checker.local_checks_passed(item) for item in results)
+    local_bad = len(results) - local_ok
 
     submitted_items = (
         submitted_candidates
@@ -897,81 +762,22 @@ def _print_detection_summary(
         ]
     )
 
-    measurement_count = len(submitted_items)
-
-    if attempted_count is None:
-        attempted_count = measurement_count
-
-    if attempted_count < measurement_count:
-        raise ValueError(
-            "Globalping 统计异常：创建测量数超过实际尝试数"
-        )
-
-    if attempted_count > len(results):
-        raise ValueError(
-            "Globalping 统计异常：实际尝试数超过候选总数"
-        )
-
-    attempted_without_measurement = (
-        attempted_count - measurement_count
-    )
-    not_entered_count = len(results) - attempted_count
-
     remote_counts = {state: 0 for state in (PASS, FAIL, INCOMPLETE)}
     for item in submitted_items:
         remote = item.get("globalping", {})
         if isinstance(remote, dict) and remote.get("status") in remote_counts:
             remote_counts[remote["status"]] += 1
 
-    _log_event(
-        "检测汇总",
-        "本地及Globalping统计",
-        "SUCCESS",
-        (
-            f"候选 {len(results)} 条；"
-            f"本地 PASS {local_counts[PASS]} 条；"
-            f"FAIL {local_counts[FAIL]} 条；"
-            f"INCOMPLETE {local_counts[INCOMPLETE]} 条；"
-            f"Globalping 实际尝试 {attempted_count} 条；"
-            f"创建测量 {measurement_count} 条；"
-            f"尝试但未创建测量 {attempted_without_measurement} 条；"
-            f"未进入检测 {not_entered_count} 条；"
-            f"Globalping PASS {remote_counts[PASS]} 条；"
-            f"FAIL {remote_counts[FAIL]} 条；"
-            f"INCOMPLETE {remote_counts[INCOMPLETE]} 条"
-        ),
+    print(
+        f"检测统计：候选 {len(results)} 条；"
+        f"本地全部通过 {local_ok} 条；"
+        f"本地未通过/未完成 {local_bad} 条；"
+        f"Globalping 已提交 {len(submitted_items)} 条、"
+        f"未提交 {len(results) - len(submitted_items)} 条；"
+        f"PASS {remote_counts[PASS]} 条；"
+        f"FAIL {remote_counts[FAIL]} 条；"
+        f"INCOMPLETE {remote_counts[INCOMPLETE]} 条。"
     )
-
-    for status in (FAIL, INCOMPLETE):
-        reasons = sorted(
-            local_reasons[status].items(),
-            key=lambda item: (-item[1], item[0]),
-        )
-
-        if not reasons:
-            continue
-
-        shown = reasons[:5]
-        summary = "；".join(
-            f"{reason} × {count} 条"
-            for reason, count in shown
-        )
-
-        remaining = reasons[5:]
-        if remaining:
-            remaining_count = sum(count for _, count in remaining)
-            summary += (
-                f"；其他原因 {len(remaining)} 类，"
-                f"共 {remaining_count} 条"
-            )
-
-        _log_event(
-            "本地检测",
-            f"{status}原因汇总",
-            status,
-            summary,
-            error=True,
-        )
 
     stream_counts = {state: 0 for state in (PASS, FAIL, INCOMPLETE)}
     stream_checked = 0
@@ -984,17 +790,11 @@ def _print_detection_summary(
                     continue
                 if detail.get("status") == PASS:
                     continue
-                _log_event(
-                    "本地检测",
-                    "候选线路",
-                    str(detail.get("status", "未知")),
-                    (
-                        f"频道 {item.get('channel', '未知频道')}；"
-                        f"主机 {_safe_host(item)}；"
-                        f"{check_name.upper()}；"
-                        f"原因：{detail.get('reason') or '未提供'}"
-                    ),
-                    error=True,
+                print(
+                    f"本地检测异常：频道 {item.get('channel', '未知频道')}；"
+                    f"主机 {_safe_host(item)}；"
+                    f"{check_name.upper()} {detail.get('status', '未知')}；"
+                    f"原因：{_safe_diagnostic_text(detail.get('reason') or '未提供')}"
                 )
 
         quality = item.get("stream_quality")
@@ -1009,32 +809,22 @@ def _print_detection_summary(
         if status == PASS:
             continue
 
-        _log_event(
-            "视频检测",
-            "候选线路",
-            str(status),
-            (
-                f"频道 {item.get('channel', '未知频道')}；"
-                f"主机 {_safe_host(item)}；"
-                f"分辨率 {quality.get('width', '未知')}×{quality.get('height', '未知')}；"
-                f"编码 {quality.get('codec') or '未知'}；"
-                f"帧率 {quality.get('fps') or '未知'}；"
-                f"原因：{quality.get('reason') or '未提供'}"
-            ),
-            error=True,
+        print(
+            f"视频检测异常：频道 {item.get('channel', '未知频道')}；"
+            f"主机 {_safe_host(item)}；"
+            f"状态 {status}；"
+            f"分辨率 {quality.get('width', '未知')}×{quality.get('height', '未知')}；"
+            f"编码 {quality.get('codec') or '未知'}；"
+            f"帧率 {quality.get('fps') or '未知'}；"
+            f"原因：{_safe_diagnostic_text(quality.get('reason') or '未提供')}"
         )
 
-    _log_event(
-        "视频检测",
-        "视频质量汇总",
-        "SUCCESS",
-        (
-            f"实际检测 {stream_checked} 条；"
-            f"PASS {stream_counts[PASS]} 条；"
-            f"FAIL {stream_counts[FAIL]} 条；"
-            f"INCOMPLETE {stream_counts[INCOMPLETE]} 条；"
-            f"未进入视频检测 {len(results) - stream_checked} 条"
-        ),
+    print(
+        f"视频质量统计：实际检测 {stream_checked} 条；"
+        f"PASS {stream_counts[PASS]} 条；"
+        f"FAIL {stream_counts[FAIL]} 条；"
+        f"INCOMPLETE {stream_counts[INCOMPLETE]} 条；"
+        f"未进入视频检测 {len(results) - stream_checked} 条。"
     )
 
     for item in submitted_items:
@@ -1046,33 +836,23 @@ def _print_detection_summary(
         if status == PASS:
             continue
 
-        _log_event(
-            "Globalping检测",
-            "候选线路",
-            str(status),
-            (
-                f"频道 {item.get('channel', '未知频道')}；"
-                f"主机 {_safe_host(item)}；"
-                f"原因：{remote.get('error') or '未提供'}"
-            ),
-            error=True,
+        print(
+            f"Globalping 检测异常："
+            f"频道 {item.get('channel', '未知频道')}；"
+            f"主机 {_safe_host(item)}；"
+            f"状态 {status}；"
+            f"原因：{_safe_diagnostic_text(remote.get('error') or '未提供')}"
         )
 
         probes = remote.get("probes", {})
         if isinstance(probes, dict):
             for probe in probes.values():
                 if isinstance(probe, dict):
-                    _log_event(
-                        "Globalping探针",
-                        "探针信息",
-                        str(status),
-                        (
-                            f"{probe.get('country', '未知地区')} "
-                            f"{probe.get('city', '未知城市')}；"
-                            f"ASN {probe.get('asn', '未知')}；"
-                            f"网络 {probe.get('network', '未知网络')}"
-                        ),
-                        error=True,
+                    print(
+                        f"  探针：{probe.get('country', '未知地区')} "
+                        f"{probe.get('city', '未知城市')}；"
+                        f"ASN {probe.get('asn', '未知')}；"
+                        f"网络 {probe.get('network', '未知网络')}。"
                     )
 
         stages = remote.get("stages", {})
@@ -1080,16 +860,11 @@ def _print_detection_summary(
             for stage_name, stage in stages.items():
                 if not isinstance(stage, dict):
                     continue
-                _log_event(
-                    "Globalping阶段",
-                    "测量阶段",
-                    str(stage.get('status', '未知')),
-                    (
-                        f"{stage_name}；"
-                        f"测量ID {stage.get('measurement_id') or '无'}；"
-                        f"原因：{stage.get('reason') or '未提供'}"
-                    ),
-                    error=True,
+                print(
+                    f"  阶段 {stage_name}："
+                    f"{stage.get('status', '未知')}；"
+                    f"测量ID {stage.get('measurement_id') or '无'}；"
+                    f"原因：{_safe_diagnostic_text(stage.get('reason') or '未提供')}"
                 )
 
 def _safe_host_from_url(value: Any) -> str:
@@ -1104,7 +879,7 @@ def _safe_host(candidate: dict[str, Any]) -> str:
     return _safe_host_from_url(candidate.get("normalized_url", ""))
 
 def _safe_diagnostic_text(value: Any) -> str:
-    """清理换行并隐藏 URL 和常见凭据字段。"""
+    """保留错误原因，同时将其中的完整 URL 替换为主机名。"""
     text = str(value).replace("\r", " ").replace("\n", " ")
     pattern = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 
@@ -1116,30 +891,7 @@ def _safe_diagnostic_text(value: Any) -> str:
             raw = raw[:-1]
         return _safe_host_from_url(raw) + suffix
 
-    text = pattern.sub(hide_url, text)
-
-    secret_pattern = re.compile(
-        r"(?i)\b("
-        r"access[_-]?token|refresh[_-]?token|"
-        r"api[_-]?key|client[_-]?secret|"
-        r"token|password|passwd|secret|authorization"
-        r")(\s*[:=]\s*)([^&\s,;]+)"
-    )
-
-    text = secret_pattern.sub(
-        lambda match: (
-            f"{match.group(1)}{match.group(2)}[REDACTED]"
-        ),
-        text,
-    )
-
-    text = re.sub(
-        r"(?i)\bBearer\s+\S+",
-        "Bearer [REDACTED]",
-        text,
-    )
-
-    return text
+    return pattern.sub(hide_url, text)
 
 def _print_admission_results(results: list[dict[str, Any]]) -> None:
     """逐条输出最终准入状态和拒绝原因。"""
@@ -1152,21 +904,17 @@ def _print_admission_results(results: list[dict[str, Any]]) -> None:
         channel = candidate.get("channel", "未知频道")
         host = _safe_host(candidate)
         status = item.get("status", "UNKNOWN")
-        reason = item.get("reason") or "未提供"
-
-        _log_event(
-            "线路准入",
-            "候选线路",
-            str(status),
-            (
-                f"第 {index} 条；"
-                f"频道 {channel}；"
-                f"主机 {host}；"
-                f"原因：{reason}"
-            ),
-            error=status == publisher.REJECTED,
+        reason = _safe_diagnostic_text(
+            item.get("reason") or "未提供"
         )
 
+        print(
+            f"[最终准入] 第 {index} 条；"
+            f"频道 {channel}；"
+            f"主机 {host}；"
+            f"结果 {status}；"
+            f"原因：{reason}"
+        )
 
 def _print_manual_source_details(
     source: dict[str, Any],
@@ -1174,57 +922,12 @@ def _print_manual_source_details(
     detected: list[dict[str, Any]],
     admission_results: list[dict[str, Any]],
 ) -> None:
-    """按来源和错误类型汇总解析异常，避免重复日志淹没诊断信息。"""
+    """只输出来源解析异常，不重复打印候选检测和准入明细。"""
 
-    source_name = source.get(
-        "name",
-        source.get("url", "未命名来源"),
-    )
-
-    grouped_errors = {}
-    error_samples = {}
-
-    grouped_prefixes = (
-        "忽略带前导连字符的异常 M3U 记录：",
-        "线路缺少可确认的目标频道信息：",
-        "频道名称不在目标频道配置中：",
-    )
-
-    for raw_error in normalized.get("errors", []):
-        error = str(raw_error)
-
-        group = next(
-            (
-                prefix[:-1]
-                for prefix in grouped_prefixes
-                if error.startswith(prefix)
-            ),
-            error,
-        )
-
-        grouped_errors[group] = grouped_errors.get(group, 0) + 1
-
-        samples = error_samples.setdefault(group, [])
-        if len(samples) < 2:
-            samples.append(_safe_diagnostic_text(error))
-
-    for group, count in grouped_errors.items():
-        sample_text = ""
-        samples = error_samples[group]
-
-        if samples:
-            sample_text = "；示例：" + "；".join(samples)
-
-        _log_event(
-            "来源解析",
-            "来源错误汇总",
-            "WARNING",
-            (
-                f"{source_name}；"
-                f"{group} × {count} 条"
-                f"{sample_text}"
-            ),
-            error=True,
+    for error in normalized.get("errors", []):
+        print(
+            f"来源解析提示：{_safe_diagnostic_text(error)}",
+            file=sys.stderr,
         )
 
 # ----------------------------------------------------------------------
@@ -1268,20 +971,11 @@ def run_formal_flow(config: dict[str, Any]) -> int:
             settings,
         )
     except publisher.PublisherError as exc:
-        _log_event(
-            "历史订阅检查",
-            "历史订阅文件",
-            "FAIL",
-            f"读取或校验失败，停止本轮处理：{exc}",
-            error=True,
+        print(
+            f"历史订阅读取或校验失败，停止本轮处理：{exc}",
+            file=sys.stderr,
         )
-        _log_event(
-            "历史订阅检查",
-            "正式订阅文件",
-            "UNMODIFIED",
-            "历史订阅读取或校验失败，正式订阅未修改",
-            error=True,
-        )
+        print("正式订阅未修改。", file=sys.stderr)
         return 1    
     # 历史线路作为普通候选重新检测。
     # 先加入统一候选池，避免新来源重复线路再次占用总额度。
@@ -1320,15 +1014,9 @@ def run_formal_flow(config: dict[str, Any]) -> int:
         if item.get("errors"):
             if source.get("source_type") == "manual":
                 for message in item["errors"]:
-                    _log_event(
-                        "来源采集",
-                        "人工来源",
-                        "INCOMPLETE",
-                        (
-                            f"{source.get('name', '未命名来源')}；"
-                            f"下载失败：{message}"
-                        ),
-                        error=True,
+                    print(
+                        f"人工来源下载失败：{source.get('name', '未命名来源')}；"
+                        f"原因：{_safe_diagnostic_text(message)}"
                     )
             else:
                 errors.extend(
@@ -1341,13 +1029,7 @@ def run_formal_flow(config: dict[str, Any]) -> int:
         if not isinstance(downloaded, dict):
             message = "采集器未返回下载内容"
             if source.get("source_type") == "manual":
-                _log_event(
-                    "来源采集",
-                    "人工来源",
-                    "INCOMPLETE",
-                    f"{label}；原因：{message}",
-                    error=True,
-                )
+                print(f"人工来源采集异常：{label}；原因：{message}")
             else:
                 errors.append(f"{label}：{message}")
             continue
@@ -1355,17 +1037,12 @@ def run_formal_flow(config: dict[str, Any]) -> int:
         content = downloaded.get("content")
         content_size = len(content) if isinstance(content, (bytes, str)) else 0
         if source.get("source_type") == "manual":
-            _log_event(
-                "来源采集",
-                "人工来源",
-                "SUCCESS",
-                (
-                    f"{label}；"
-                    f"HTTP {downloaded.get('http_status', '未知')}；"
-                    f"内容 {content_size} 字节；"
-                    f"类型 {downloaded.get('content_type') or '未提供'}；"
-                    f"最终主机 {_safe_host_from_url(downloaded.get('final_url'))}"
-                ),
+            print(
+                f"人工来源下载成功：{label}；"
+                f"HTTP {downloaded.get('http_status', '未知')}；"
+                f"内容 {content_size} 字节；"
+                f"类型 {downloaded.get('content_type') or '未提供'}；"
+                f"最终主机 {_safe_host_from_url(downloaded.get('final_url'))}。"
             )
 
         remaining = limits["max_candidates_total"] - extracted_total
@@ -1373,12 +1050,7 @@ def run_formal_flow(config: dict[str, Any]) -> int:
         if remaining <= 0:
             stopped = f"达到全部候选总上限 {limits['max_candidates_total']}"
             if source.get("source_type") == "manual":
-                _log_event(
-                    "来源采集",
-                    "人工来源",
-                    "INCOMPLETE",
-                    f"{label}；停止解析：{stopped}",
-                )
+                print(f"人工来源停止解析：{label}；原因：{stopped}。")
             break
 
         source_info = {
@@ -1404,13 +1076,7 @@ def run_formal_flow(config: dict[str, Any]) -> int:
         except Exception as exc:
             safe_message = _safe_diagnostic_text(exc)
             if source.get("source_type") == "manual":
-                _log_event(
-                    "来源解析",
-                    "人工来源",
-                    "INCOMPLETE",
-                    f"{label}；归一解析异常：{safe_message}",
-                    error=True,
-                )
+                print(f"人工来源解析异常：{label}；原因：{safe_message}")
             else:
                 errors.append(f"{label}：归一解析异常：{safe_message}")
             continue
@@ -1444,17 +1110,12 @@ def run_formal_flow(config: dict[str, Any]) -> int:
                 source, normalized, [], []
             )
 
-        _log_event(
-            "来源采集",
-            "来源处理",
-            "SUCCESS",
-            (
-                f"{label}；"
-                f"识别格式 {normalized['format']}；"
-                f"匹配目标频道 {normalized['matched_target_candidates']} 条；"
-                f"本批去重 {normalized['duplicate_candidates']} 条；"
-                f"进入全局候选池 {len(candidates)} 条"
-            ),
+        print(
+            f"来源处理：{label}；"
+            f"识别格式 {normalized['format']}；"
+            f"匹配目标频道 {normalized['matched_target_candidates']} 条；"
+            f"本批去重 {normalized['duplicate_candidates']} 条；"
+            f"进入全局候选池 {len(candidates)} 条。"
         )
 
         stop_reason = _collection_stop_reason(
@@ -1537,60 +1198,35 @@ def run_formal_flow(config: dict[str, Any]) -> int:
                 for result in admission_results
             )
 
-            _log_event(
-                "线路准入",
-                "全局准入统计",
-                "SUCCESS",
-                (
-                    f"本轮准入 {accepted_now} 条；"
-                    f"本轮拒绝 {rejected_now} 条；"
-                    f"最终保留 {len(accepted_routes)} 条"
-                ),
+            print(
+                f"全局准入：本轮准入 {accepted_now} 条；"
+                f"本轮拒绝 {rejected_now} 条；"
+                f"最终保留 {len(accepted_routes)} 条。"
             )
 
-            _log_event(
-                "线路准入",
-                "频道有效线路统计",
-                "SUCCESS",
-                "；".join(
+            print(
+                "频道有效线路统计："
+                + "；".join(
                     f"{channel} {count}/2"
                     for channel, count in admission["channel_counts"].items()
-                ),
-            )
-    _log_event(
-        "来源采集",
-        "采集结果汇总",
-        "SUCCESS",
-        (
-            f"有效来源 {valid_sources}；"
-            f"累计提取候选 {extracted_total}；"
-            f"重复候选 {duplicate_total}；"
-            f"实际完成检测 {len(detected)}"
-        ),
+                )
+            )        
+    print(
+        f"来源汇总：有效来源 {valid_sources}；"
+        f"累计提取候选 {extracted_total}；"
+        f"重复候选 {duplicate_total}；"
+        f"实际完成检测 {len(detected)}。"
     )
-    _log_event(
-        "来源采集",
-        "采集停止情况",
-        "SUCCESS",
-        f"停止原因：{stopped}",
-    )
+    print(f"采集停止原因：{stopped}")
 
     for error in errors:
-        _log_event(
-            "来源采集",
-            "来源处理",
-            "WARNING",
-            error,
-            error=True,
-        )
+        print(f"来源警告：{error}", file=sys.stderr)
 
     if system_error:
-        _log_event(
-            "线路准入",
-            "正式处理流程",
-            "FAIL",
-            "发生准入系统错误，停止后续处理；正式订阅未修改",
-            error=True,
+        print(
+            "发生准入系统错误，停止后续处理；"
+            "正式订阅未修改。",
+            file=sys.stderr,
         )
         return 1
 
@@ -1601,66 +1237,38 @@ def run_formal_flow(config: dict[str, Any]) -> int:
             channels,
         )
     except publisher.PublisherError as exc:
-        _log_event(
-            "订阅生成",
-            "订阅内容",
-            "FAIL",
-            str(exc),
-            error=True,
+        print(
+            f"订阅生成或格式检查失败：{exc}",
+            file=sys.stderr,
         )
-        _log_event(
-            "订阅生成",
-            "正式订阅文件",
-            "UNMODIFIED",
-            "订阅生成或格式检查失败，正式订阅未修改",
-            error=True,
-        )
+        print("正式订阅未修改。", file=sys.stderr)
         return 1
 
-    _log_event(
-        "订阅生成",
-        "订阅内容校验",
-        "SUCCESS",
-        (
-            f"线路 {subscriptions['route_count']} 条；"
-            f"有效频道 "
-            f"{sum(count > 0 for count in subscriptions['channel_counts'].values())} 个"
-        ),
+    print(
+        f"订阅内容生成并校验通过："
+        f"线路 {subscriptions['route_count']} 条；"
+        f"频道 {sum(count > 0 for count in subscriptions['channel_counts'].values())} 个。"
     )
 
-    _log_event(
-        "订阅生成",
-        "频道线路统计",
-        "SUCCESS",
-        "；".join(
+    print(
+        "本轮频道统计："
+        + "；".join(
             f"{channel} {count}/2"
             for channel, count in subscriptions["channel_counts"].items()
-        ),
+        )
     )
 
-    _log_event(
-        "订阅生成",
-        "第8阶段",
-        "SUCCESS",
-        "已执行正式准入、频道统计、M3U/TXT 生成及一致性检查",
+    print(
+        "第8阶段处理完成：已执行正式准入、频道统计、"
+        "M3U/TXT 生成及一致性检查。"
     )
 
     # 第9阶段：执行正式订阅安全发布。
-    def report_publish_progress(stage, status, detail):
-        _log_event(
-            "订阅发布",
-            stage,
-            status,
-            detail,
-            error=status in ("FAIL", "ROLLBACK_FAILED"),
-        )
-
     try:
         publish_result = publisher.publish_subscriptions(
             subscriptions,
             channels,
             output_dir=ROOT / "output",
-            event_callback=report_publish_progress,
         )
     except Exception as exc:
         subscription_state = getattr(
@@ -1676,54 +1284,29 @@ def run_formal_flow(config: dict[str, Any]) -> int:
             "UNKNOWN": "正式订阅状态无法确认，需要检查正式文件。",
         }
 
-        _log_event(
-            "订阅发布",
-            "正式订阅",
-            "FAIL",
-            str(exc),
-            error=True,
+        print(
+            f"第9阶段正式订阅发布失败：{exc}",
+            file=sys.stderr,
         )
-        _log_event(
-            "订阅发布",
-            "正式订阅文件",
-            subscription_state,
+        print(
             state_messages.get(
                 subscription_state,
                 state_messages["UNKNOWN"],
             ),
-            error=True,
+            file=sys.stderr,
         )
         return 1
 
-    _log_event(
-        "订阅发布",
-        "正式订阅",
-        "SUCCESS",
-        (
-            f"频道 {publish_result['channel_count']} 个；"
-            f"线路 {publish_result['route_count']} 条"
-        ),
+    print(
+        "第9阶段正式订阅发布成功："
+        f"频道 {publish_result['channel_count']} 个；"
+        f"线路 {publish_result['route_count']} 条。"
     )
-    _log_event(
-        "订阅发布",
-        "M3U 文件",
-        "SUCCESS",
-        f"正式文件路径：{publish_result['m3u_path']}",
-    )
-    _log_event(
-        "订阅发布",
-        "TXT 文件",
-        "SUCCESS",
-        f"正式文件路径：{publish_result['txt_path']}",
-    )
+    print(f"M3U 文件：{publish_result['m3u_path']}")
+    print(f"TXT 文件：{publish_result['txt_path']}")
 
     if publish_result["first_publish"]:
-        _log_event(
-            "订阅发布",
-            "正式订阅",
-            "SUCCESS",
-            "本次属于首次发布",
-        )
+        print("本次属于首次发布。")
 
     return 0
 
@@ -1755,13 +1338,7 @@ def main(argv: list[str] | None = None) -> int:
             test_mode=args.mode == "test"
         )
     except ValueError as exc:
-        _log_event(
-            "配置检查",
-            "运行配置",
-            "FAIL",
-            str(exc),
-            error=True,
-        )
+        print(f"配置检查失败：{exc}", file=sys.stderr)
         return 1
 
     mode_name = (
@@ -1770,32 +1347,16 @@ def main(argv: list[str] | None = None) -> int:
         else "测试运行"
     )
 
-    _log_event(
-        "程序入口",
-        "IPTV-Direct",
-        "STARTED",
-        mode_name,
-    )
+    print(f"IPTV-Direct：{mode_name}")
 
-    _log_event(
-        "配置检查",
-        "运行配置",
-        "SUCCESS",
-        (
-            f"目标频道 {len(config['channels'])} 个；"
-            f"人工来源 {len(config['manual_sources'])} 条；"
-            f"启用自动来源 {len(config['automatic_sources'])} 条"
-        ),
+    print(
+        f"配置读取成功：目标频道 {len(config['channels'])} 个；"
+        f"人工来源 {len(config['manual_sources'])} 条；"
+        f"启用自动来源 {len(config['automatic_sources'])} 条。"
     )
 
     for error in config.get("errors", []):
-        _log_event(
-            "配置检查",
-            "来源配置",
-            "WARNING",
-            error,
-            error=True,
-        )
+        print(f"来源配置警告：{error}", file=sys.stderr)
 
     if args.mode == "test":
         suite = unittest.defaultTestLoader.discover(str(ROOT / "tests"))

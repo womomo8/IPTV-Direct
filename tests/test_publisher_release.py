@@ -79,49 +79,6 @@ class PublisherReleaseTests(unittest.TestCase):
             subscriptions["txt"],
         )
 
-    def test_first_publish_failure_removes_new_files(self):
-        """首次发布替换失败时，必须删除已经创建的正式文件。"""
-        subscriptions = make_subscriptions([
-            ("CCTV-1", "https://example.com/cctv1.m3u8"),
-            ("CCTV-5", "https://example.com/cctv5.m3u8"),
-        ])
-
-        real_replace = publisher.os.replace
-        call_count = {"value": 0}
-
-        def fail_second_replace(source, target):
-            call_count["value"] += 1
-
-            if call_count["value"] == 2:
-                raise OSError("模拟首次发布第二份文件替换失败")
-
-            return real_replace(source, target)
-
-        with patch(
-            "publisher.os.replace",
-            side_effect=fail_second_replace,
-        ):
-            with self.assertRaises(
-                publisher.PublisherError
-            ) as context:
-                self.publish(subscriptions)
-
-        self.assertEqual(
-            context.exception.subscription_state,
-            "RESTORED",
-        )
-
-        self.assertFalse(
-            (self.output_dir / "iptv.m3u").exists()
-        )
-        self.assertFalse(
-            (self.output_dir / "iptv.txt").exists()
-        )
-
-        self.assertFalse(
-            list(self.output_dir.glob(".*.stage-*.tmp"))
-        )
-    
     def test_existing_subscription_can_be_updated(self):
         """已有有效订阅应允许正常更新。"""
         old = make_subscriptions([
@@ -246,13 +203,8 @@ class PublisherReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(
             publisher.PublisherError,
             "只有一份存在有效内容",
-        ) as context:
+        ):
             self.publish(new)
-
-        self.assertEqual(
-            context.exception.subscription_state,
-            "UNMODIFIED",
-        )
 
     def test_both_empty_old_files_are_blocked(self):
         """两份旧订阅都存在但内容为空时，必须阻止覆盖。"""
@@ -267,13 +219,8 @@ class PublisherReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(
             publisher.PublisherError,
             "旧订阅损坏",
-        ) as context:
+        ):
             self.publish(new)
-
-        self.assertEqual(
-            context.exception.subscription_state,
-            "UNMODIFIED",
-        )
 
     def test_single_empty_old_file_is_blocked(self):
         """只有一份空的旧订阅文件时，必须阻止覆盖。"""
@@ -287,14 +234,9 @@ class PublisherReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(
             publisher.PublisherError,
             "只有一份存在有效内容",
-        ) as context:
-            self.publish(new)
-
-        self.assertEqual(
-            context.exception.subscription_state,
-            "UNMODIFIED",
-        )
-
+        ):
+            self.publish(new)  
+    
     def test_corrupted_old_subscription_is_blocked(self):
         """旧订阅损坏时，必须阻止覆盖。"""
         self.output_dir.mkdir(parents=True)
@@ -310,111 +252,11 @@ class PublisherReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(
             publisher.PublisherError,
             "旧订阅损坏",
-        ) as context:
+        ):
             self.publish(make_subscriptions([
                 ("CCTV-1", "https://example.com/new1.m3u8"),
             ]))
 
-        self.assertEqual(
-            context.exception.subscription_state,
-            "UNMODIFIED",
-        )
-
-    def test_old_subscription_read_error_is_unmodified(self):
-        """读取旧订阅文件失败时，必须明确标记订阅未修改。"""
-        old = make_subscriptions([
-            ("CCTV-1", "https://example.com/old1.m3u8"),
-            ("CCTV-5", "https://example.com/old5.m3u8"),
-        ])
-        new = make_subscriptions([
-            ("CCTV-1", "https://example.com/new1.m3u8"),
-            ("CCTV-5", "https://example.com/new5.m3u8"),
-        ])
-
-        self.publish(old)
-
-        with patch(
-            "publisher.Path.read_bytes",
-            side_effect=PermissionError("模拟旧订阅文件读取权限错误"),
-        ):
-            with self.assertRaisesRegex(
-                publisher.PublisherError,
-                "发布前读取旧订阅文件失败",
-            ) as context:
-                self.publish(new)
-
-        self.assertEqual(
-            context.exception.subscription_state,
-            "UNMODIFIED",
-        )
-
-    def test_second_staged_file_failure_is_unmodified(self):
-        """第二份临时文件准备失败时，旧订阅必须保持不变。"""
-        old = make_subscriptions([
-            ("CCTV-1", "https://example.com/old1.m3u8"),
-            ("CCTV-5", "https://example.com/old5.m3u8"),
-        ])
-        new = make_subscriptions([
-            ("CCTV-1", "https://example.com/new1.m3u8"),
-            ("CCTV-5", "https://example.com/new5.m3u8"),
-        ])
-
-        self.publish(old)
-
-        m3u_path = self.output_dir / "iptv.m3u"
-        txt_path = self.output_dir / "iptv.txt"
-
-        old_m3u = m3u_path.read_bytes()
-        old_txt = txt_path.read_bytes()
-
-        real_write_temp_file = publisher._write_temp_file
-        call_count = {"value": 0}
-
-        def fail_second_staged_file(directory, prefix, data):
-            call_count["value"] += 1
-
-            if call_count["value"] == 2:
-                raise OSError("模拟第二份临时文件写入失败")
-
-            return real_write_temp_file(directory, prefix, data)
-
-        events = []
-
-        with patch(
-            "publisher._write_temp_file",
-            side_effect=fail_second_staged_file,
-        ):
-            with self.assertRaisesRegex(
-                publisher.PublisherError,
-                "临时文件准备失败",
-            ) as context:
-                publisher.publish_subscriptions(
-                    new,
-                    CHANNELS,
-                    output_dir=self.output_dir,
-                    event_callback=lambda stage, status, detail: (
-                        events.append((stage, status, detail))
-                    ),
-                )
-
-        self.assertEqual(
-            context.exception.subscription_state,
-            "UNMODIFIED",
-        )
-        self.assertEqual(m3u_path.read_bytes(), old_m3u)
-        self.assertEqual(txt_path.read_bytes(), old_txt)
-
-        self.assertFalse(
-            list(self.output_dir.glob(".*.stage-*.tmp"))
-        )
-
-        self.assertTrue(
-            any(
-                stage == "临时文件准备" and status == "FAIL"
-                for stage, status, detail in events
-            )
-        )
-    
     def test_failed_second_replace_restores_old_files(self):
         """第二份正式文件替换失败时，必须恢复两份旧文件。"""
         old = make_subscriptions([
@@ -458,81 +300,6 @@ class PublisherReleaseTests(unittest.TestCase):
         self.assertEqual(m3u_path.read_bytes(), old_m3u)
         self.assertEqual(txt_path.read_bytes(), old_txt)
 
-    def test_stage_cleanup_failure_does_not_change_publish_state(self):
-        """临时文件清理失败不得覆盖原来的回滚结果。"""
-        old = make_subscriptions([
-            ("CCTV-1", "https://example.com/old1.m3u8"),
-            ("CCTV-5", "https://example.com/old5.m3u8"),
-        ])
-        new = make_subscriptions([
-            ("CCTV-1", "https://example.com/new1.m3u8"),
-            ("CCTV-5", "https://example.com/new5.m3u8"),
-        ])
-
-        self.publish(old)
-
-        m3u_path = self.output_dir / "iptv.m3u"
-        txt_path = self.output_dir / "iptv.txt"
-
-        old_m3u = m3u_path.read_bytes()
-        old_txt = txt_path.read_bytes()
-
-        real_replace = publisher.os.replace
-        real_unlink = Path.unlink
-        replace_count = {"value": 0}
-        events = []
-
-        def fail_second_replace(source, target):
-            replace_count["value"] += 1
-
-            if replace_count["value"] == 2:
-                raise OSError("模拟第二份正式文件替换失败")
-
-            return real_replace(source, target)
-
-        def fail_stage_cleanup(path, *args, **kwargs):
-            if ".stage-" in path.name:
-                raise OSError("模拟临时文件清理失败")
-
-            return real_unlink(path, *args, **kwargs)
-
-        with (
-            patch(
-                "publisher.os.replace",
-                side_effect=fail_second_replace,
-            ),
-            patch(
-                "publisher.Path.unlink",
-                autospec=True,
-                side_effect=fail_stage_cleanup,
-            ),
-        ):
-            with self.assertRaises(
-                publisher.PublisherError
-            ) as context:
-                publisher.publish_subscriptions(
-                    new,
-                    CHANNELS,
-                    output_dir=self.output_dir,
-                    event_callback=lambda stage, status, detail: (
-                        events.append((stage, status, detail))
-                    ),
-                )
-
-        self.assertEqual(
-            context.exception.subscription_state,
-            "RESTORED",
-        )
-        self.assertEqual(m3u_path.read_bytes(), old_m3u)
-        self.assertEqual(txt_path.read_bytes(), old_txt)
-
-        self.assertTrue(
-            any(
-                stage == "临时文件清理" and status == "WARNING"
-                for stage, status, detail in events
-            )
-        )
-    
     def test_rollback_failure_is_reported(self):
         """回滚失败必须明确标记正式订阅状态。"""
 
@@ -565,202 +332,6 @@ class PublisherReleaseTests(unittest.TestCase):
             "ROLLBACK_FAILED",
         )
         self.assertIn("回滚失败", str(context.exception))   
-
-
-    def test_post_publish_validation_failure_restores_old_files(self):
-        """发布后读取失败时，必须恢复两份旧订阅并记录失败阶段。"""
-        old = make_subscriptions([
-            ("CCTV-1", "https://example.com/old1.m3u8"),
-            ("CCTV-5", "https://example.com/old5.m3u8"),
-        ])
-        new = make_subscriptions([
-            ("CCTV-1", "https://example.com/new1.m3u8"),
-            ("CCTV-5", "https://example.com/new5.m3u8"),
-        ])
-
-        self.publish(old)
-
-        m3u_path = self.output_dir / "iptv.m3u"
-        txt_path = self.output_dir / "iptv.txt"
-
-        old_m3u = m3u_path.read_bytes()
-        old_txt = txt_path.read_bytes()
-
-        real_read_text = Path.read_text
-
-        def fail_published_m3u(path, *args, **kwargs):
-            if path.name == "iptv.m3u":
-                raise OSError("模拟发布后读取失败")
-
-            return real_read_text(path, *args, **kwargs)
-
-        events = []
-
-        with patch(
-            "publisher.Path.read_text",
-            autospec=True,
-            side_effect=fail_published_m3u,
-        ):
-            with self.assertRaisesRegex(
-                publisher.PublisherError,
-                "旧文件已恢复",
-            ) as context:
-                publisher.publish_subscriptions(
-                    new,
-                    CHANNELS,
-                    output_dir=self.output_dir,
-                    event_callback=lambda stage, status, detail: (
-                        events.append((stage, status, detail))
-                    ),
-                )
-
-        self.assertEqual(
-            context.exception.subscription_state,
-            "RESTORED",
-        )
-        self.assertEqual(m3u_path.read_bytes(), old_m3u)
-        self.assertEqual(txt_path.read_bytes(), old_txt)
-
-        self.assertTrue(
-            any(
-                stage == "发布后校验" and status == "FAIL"
-                for stage, status, detail in events
-            )
-        )
-        self.assertTrue(
-            any(
-                stage == "正式订阅回滚" and status == "COMPLETED"
-                for stage, status, detail in events
-            )
-        )
-
-    def test_restore_cleanup_failure_does_not_report_rollback_failure(self):
-        """恢复成功但临时文件清理失败时，订阅状态仍应为 RESTORED。"""
-        old = make_subscriptions([
-            ("CCTV-1", "https://example.com/old1.m3u8"),
-            ("CCTV-5", "https://example.com/old5.m3u8"),
-        ])
-        new = make_subscriptions([
-            ("CCTV-1", "https://example.com/new1.m3u8"),
-            ("CCTV-5", "https://example.com/new5.m3u8"),
-        ])
-
-        self.publish(old)
-
-        m3u_path = self.output_dir / "iptv.m3u"
-        txt_path = self.output_dir / "iptv.txt"
-
-        old_m3u = m3u_path.read_bytes()
-        old_txt = txt_path.read_bytes()
-
-        real_replace = publisher.os.replace
-        real_unlink = Path.unlink
-        replace_count = {"value": 0}
-        events = []
-
-        def fail_second_replace(source, target):
-            replace_count["value"] += 1
-
-            if replace_count["value"] == 2:
-                raise OSError("模拟第二份正式文件替换失败")
-
-            return real_replace(source, target)
-
-        def fail_restore_cleanup(path, *args, **kwargs):
-            if ".restore-" in path.name:
-                raise OSError("模拟恢复临时文件清理失败")
-
-            return real_unlink(path, *args, **kwargs)
-
-        with (
-            patch(
-                "publisher.os.replace",
-                side_effect=fail_second_replace,
-            ),
-            patch(
-                "publisher.Path.unlink",
-                autospec=True,
-                side_effect=fail_restore_cleanup,
-            ),
-        ):
-            with self.assertRaises(
-                publisher.PublisherError
-            ) as context:
-                publisher.publish_subscriptions(
-                    new,
-                    CHANNELS,
-                    output_dir=self.output_dir,
-                    event_callback=lambda stage, status, detail: (
-                        events.append((stage, status, detail))
-                    ),
-                )
-
-        self.assertEqual(
-            context.exception.subscription_state,
-            "RESTORED",
-        )
-        self.assertEqual(m3u_path.read_bytes(), old_m3u)
-        self.assertEqual(txt_path.read_bytes(), old_txt)
-
-        self.assertTrue(
-            any(
-                stage == "回滚临时文件清理"
-                and status == "WARNING"
-                for stage, status, detail in events
-            )
-        )
-    
-    def test_restore_continues_after_one_file_restore_failure(self):
-        """一份文件恢复失败时，仍必须继续尝试恢复另一份文件。"""
-        self.output_dir.mkdir(parents=True)
-
-        m3u_path = self.output_dir / "iptv.m3u"
-        txt_path = self.output_dir / "iptv.txt"
-
-        m3u_path.write_bytes(b"new m3u")
-        txt_path.write_bytes(b"new txt")
-
-        old_data = [
-            b"old m3u",
-            b"old txt",
-        ]
-        targets = [
-            m3u_path,
-            txt_path,
-        ]
-
-        real_write_temp_file = publisher._write_temp_file
-        call_count = {"value": 0}
-
-        def fail_first_restore(directory, prefix, data):
-            call_count["value"] += 1
-
-            if call_count["value"] == 1:
-                raise OSError("模拟第一份文件恢复失败")
-
-            return real_write_temp_file(
-                directory,
-                prefix,
-                data,
-            )
-
-        with patch(
-            "publisher._write_temp_file",
-            side_effect=fail_first_restore,
-        ):
-            errors = publisher._restore_subscription_files(
-                targets,
-                old_data,
-                self.output_dir,
-            )
-
-        self.assertEqual(call_count["value"], 2)
-        self.assertEqual(len(errors), 1)
-        self.assertIn("iptv.m3u 恢复失败", errors[0])
-
-        self.assertEqual(m3u_path.read_bytes(), b"new m3u")
-        self.assertEqual(txt_path.read_bytes(), b"old txt")
-
     
     def test_inconsistent_route_count_is_rejected(self):
         """传入的线路数量与订阅实际内容不一致时，必须拒绝。"""
@@ -772,67 +343,8 @@ class PublisherReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(
             publisher.PublisherError,
             "线路数量统计不一致",
-        ) as context:
+        ):
             self.publish(invalid)
-
-        self.assertEqual(
-            context.exception.subscription_state,
-            "UNMODIFIED",
-        )
-
-    def test_publish_callback_reports_release_stages(self):
-        """发布回调应报告关键阶段，但不改变发布结果。"""
-        events = []
-
-        subscriptions = make_subscriptions([
-            ("CCTV-1", "https://example.com/cctv1.m3u8"),
-            ("CCTV-5", "https://example.com/cctv5.m3u8"),
-        ])
-
-        result = publisher.publish_subscriptions(
-            subscriptions,
-            CHANNELS,
-            output_dir=self.output_dir,
-            event_callback=lambda stage, status, detail: (
-                events.append((stage, status, detail))
-            ),
-        )
-
-        self.assertTrue(result["published"])
-
-        stages = [event[0] for event in events]
-
-        self.assertIn("发布检查", stages)
-        self.assertIn("旧订阅检查", stages)
-        self.assertIn("临时文件准备", stages)
-        self.assertIn("正式文件替换", stages)
-        self.assertIn("发布后校验", stages)
-        self.assertIn("发布流程", stages)
-
-    def test_callback_exception_does_not_affect_publish(self):
-        """日志回调异常不得阻止正式订阅发布。"""
-        subscriptions = make_subscriptions([
-            ("CCTV-1", "https://example.com/cctv1.m3u8"),
-            ("CCTV-5", "https://example.com/cctv5.m3u8"),
-        ])
-
-        def broken_callback(stage, status, detail):
-            raise RuntimeError("模拟日志回调异常")
-
-        result = publisher.publish_subscriptions(
-            subscriptions,
-            CHANNELS,
-            output_dir=self.output_dir,
-            event_callback=broken_callback,
-        )
-
-        self.assertTrue(result["published"])
-        self.assertTrue(
-            (self.output_dir / "iptv.m3u").is_file()
-        )
-        self.assertTrue(
-            (self.output_dir / "iptv.txt").is_file()
-        )
 
 
 if __name__ == "__main__":

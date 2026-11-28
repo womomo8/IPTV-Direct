@@ -11,12 +11,14 @@
     "per_host_concurrency": 5,
     "queue_limit": 60,
     "max_queue_seconds": 60,
-    "candidate_active_budget_seconds": 12,
+    "candidate_active_budget_seconds": 8,
     "source_download_timeout_seconds": 20,
     "max_source_download_bytes": 8388608,
     "max_hls_manifest_bytes": 1048576,
     "max_ts_read_bytes": 65536,
-    "max_redirects": 5
+    "max_redirects": 5,
+    "stream_probe_concurrency": 4,
+    "stream_decode_concurrency": 2
   },
 
   "globalping": {

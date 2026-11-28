@@ -131,38 +131,8 @@ def normalize_url(value):
         "",
     ))
 
-_CHANNEL_METADATA_LABEL = (
-    r"(?:\d{3,4}\s*[pi]"
-    r"(?:\s*/\s*\d{3,4}\s*[pi])?"
-    r"(?:\s*\d{2,3})?"
-    r"|4k(?:\s*uhd)?|8k|uhd|fhd|hd|sd"
-    r"|geo[- ]?blocked|not\s+24/7)"
-)
-
-_CHANNEL_METADATA_SUFFIX = re.compile(
-    rf"\s*(?:\({_CHANNEL_METADATA_LABEL}\)"
-    rf"|\[{_CHANNEL_METADATA_LABEL}\])\s*$",
-    re.IGNORECASE,
-)
-
-
-def _strip_channel_metadata(name):
-    """只移除频道名称末尾明确的清晰度和状态标记。"""
-    name = (name or "").strip()
-
-    while name:
-        match = _CHANNEL_METADATA_SUFFIX.search(name)
-
-        if not match:
-            break
-
-        name = name[:match.start()].rstrip()
-
-    return name
-
-
 def _channel_match(names, channels, aliases):
-    """移除末尾元数据后，只按标准名称或明确别名精确匹配。"""
+    """只按标准名称或明确别名精确匹配。"""
     targets = {name.casefold(): name for name in channels}
 
     if aliases is not None and not isinstance(aliases, dict):
@@ -174,27 +144,19 @@ def _channel_match(names, channels, aliases):
     }
 
     for name in names:
-        raw_name = (name or "").strip()
+        name = (name or "").strip()
 
-        if not raw_name:
+        if not name:
             continue
 
-        if raw_name.casefold() in alias_map:
-            canonical = alias_map[raw_name.casefold()]
-        else:
-            name = _strip_channel_metadata(raw_name)
-
-            if not name:
-                continue
-
-            canonical = alias_map.get(name.casefold(), name)
-
+        canonical = alias_map.get(name.casefold(), name)
         matched = targets.get(str(canonical).casefold())
 
         if matched:
             return matched
 
     return None
+
 
 def _parse_attributes(text):
     return dict(re.findall(r'([\w-]+)="([^"]*)"', text))
@@ -370,9 +332,9 @@ def parse_source_content(
             if is_m3u:
                 title, attrs = pending or ("", {})
                 names = [
-                    title,
                     attrs.get("tvg-name", ""),
                     attrs.get("tvg-id", ""),
+                    title,
                 ]
                 raw_url = urljoin(base, line)
             else:
@@ -562,3 +524,4 @@ def normalize_source_content(
         "retained_candidates": len(retained),
         "limit_reached": source_limited,
     }
+

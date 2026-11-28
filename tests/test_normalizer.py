@@ -1,12 +1,11 @@
 
 """normalizer.py：解析、频道匹配、URL 归一和去重专项测试。"""
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
-from urllib.parse import urljoin
 
-from main import load_configuration
 from normalizer import (
     ChannelConfigError,
     _channel_match,
@@ -18,12 +17,17 @@ from normalizer import (
 )
 
 
-ROOT = Path(__file__).resolve().parents[1]
-CONFIG = load_configuration(ROOT)
+CHANNELS = ["CCTV-1", "CCTV-5", "湖南卫视"]
 
-CHANNELS = CONFIG["channels"]
-ALIASES = CONFIG["settings"]["aliases"]
-SOURCE = CONFIG["manual_sources"][0]
+SOURCE = {
+    "id": "test-001",
+    "name": "模拟测试来源",
+    "url": "https://example.test/list.m3u",
+    "final_url": "https://example.test/list.m3u",
+    "source_type": "manual",
+    "priority": 0,
+    "order": 3,
+}
 
 
 class ChannelConfigTests(unittest.TestCase):
@@ -111,7 +115,7 @@ class URLNormalizationTests(unittest.TestCase):
             "%E9%A2%91%E9%81%93.m3u"
             "?token=%E4%B8%AD%E6%96%87&part=%2F",
         )
-
+    
     def test_removes_fragment(self):
         self.assertEqual(
             normalize_url("https://example.com/live#section"),
@@ -159,56 +163,6 @@ class ChannelMatchingTests(unittest.TestCase):
             "CCTV-5",
         )
 
-    def test_matches_channel_with_resolution_suffix(self):
-        self.assertEqual(
-            _channel_match(
-                ["ESPN (1080p)"],
-                ["ESPN"],
-                None,
-            ),
-            "ESPN",
-        )
-
-    def test_matches_channel_with_multiple_metadata_suffixes(self):
-        self.assertEqual(
-            _channel_match(
-                ["ESPN (720p) [Geo-blocked]"],
-                ["ESPN"],
-                None,
-            ),
-            "ESPN",
-        )
-
-    def test_matches_channel_with_status_suffix(self):
-        self.assertEqual(
-            _channel_match(
-                ["ESPN [Not 24/7]"],
-                ["ESPN"],
-                None,
-            ),
-            "ESPN",
-        )
-
-    def test_metadata_suffix_is_removed_before_alias_matching(self):
-        self.assertEqual(
-            _channel_match(
-                ["ESPN 2 HD (1080p)"],
-                ["ESPN 2"],
-                {"ESPN 2 HD": "ESPN 2"},
-            ),
-            "ESPN 2",
-        )
-
-    def test_preserves_official_hd_channel_name(self):
-        self.assertEqual(
-            _channel_match(
-                ["DD Sports HD"],
-                ["DD Sports HD"],
-                None,
-            ),
-            "DD Sports HD",
-        )
-
     def test_unknown_alias_does_not_match(self):
         self.assertIsNone(
             _channel_match(
@@ -254,19 +208,32 @@ class SourceParsingTests(unittest.TestCase):
         )
 
     def test_ibert_txt_aliases_use_actual_settings(self):
-        items = list(ALIASES.items())
-        self.assertTrue(items, "settings.json 没有配置频道别名")
+        root = Path(__file__).resolve().parents[1]
 
-        content = "\n".join(
-            f"{alias},https://example.test/{index}.m3u8"
-            for index, (alias, _) in enumerate(items)
+        settings = json.loads(
+            (root / "settings.json").read_text(encoding="utf-8")
         )
+        channels = load_channels(root / "channels.txt")
+
+        content = "\n".join([
+            "CCTV-1_(1080p),https://example.test/cctv1",
+            "CCTV-5+_(1080p),https://example.test/cctv5plus",
+            "Hunan_TV_(2160p),https://example.test/hunan",
+            "BRTV_北京卫视_(1080p),https://example.test/beijing",
+            "江苏卫视_(1080p),https://example.test/jiangsu",
+            "浙江卫视_(1080p),https://example.test/zhejiang",
+            "五星体育_(720p),https://example.test/sports",
+            "凤凰中文_(720p),https://example.test/phoenix",
+            "[BD]广东卫视[ipv6],https://example.test/guangdong",
+            "[SD]江苏卫视[ipv6],https://example.test/jiangsu2",
+            "CCTV-4K_(1080p),https://example.test/cctv4k",
+        ])
 
         result = parse_source_content(
             content,
             SOURCE,
-            CHANNELS,
-            aliases=ALIASES,
+            channels,
+            aliases=settings["aliases"],
         )
 
         actual = {
@@ -274,39 +241,76 @@ class SourceParsingTests(unittest.TestCase):
             for item in result["candidates"]
         }
 
-        self.assertEqual(actual, dict(items))
+        self.assertEqual(actual["CCTV-1_(1080p)"], "CCTV-1")
+        self.assertEqual(actual["CCTV-5+_(1080p)"], "CCTV-5+")
+        self.assertEqual(actual["Hunan_TV_(2160p)"], "湖南卫视")
+        self.assertEqual(actual["BRTV_北京卫视_(1080p)"], "北京卫视")
+        self.assertEqual(actual["江苏卫视_(1080p)"], "江苏卫视")
+        self.assertEqual(actual["浙江卫视_(1080p)"], "浙江卫视")
+        self.assertEqual(actual["五星体育_(720p)"], "五星体育")
+        self.assertEqual(actual["凤凰中文_(720p)"], "凤凰卫视中文台")
+        self.assertEqual(actual["[BD]广东卫视[ipv6]"], "广东卫视")
+        self.assertEqual(actual["[SD]江苏卫视[ipv6]"], "江苏卫视")
+        self.assertIsNone(actual["CCTV-4K_(1080p)"])
 
     def test_iptv_org_aliases_use_actual_settings(self):
-        items = list(ALIASES.items())
-        self.assertTrue(items, "settings.json 没有配置频道别名")
+        root = Path(__file__).resolve().parents[1]
+
+        settings = json.loads(
+            (root / "settings.json").read_text(encoding="utf-8")
+        )
+        channels = load_channels(root / "channels.txt")
+
+        items = [
+            ("beIN SPORTS XTRA (1080p)", "beIN SPORTS XTRA"),
+            ("ESPN (United States) HD (720p)", "ESPN"),
+            ("ESPN 2 (United States) HD (720p)", "ESPN 2"),
+            ("CCTV-5+ (1080p)", "CCTV-5+"),
+            ("Eurosport 1 (1080p)", "Eurosport 1"),
+            ("Eurosport 2 (1080p)", "Eurosport 2"),
+            ("Fox Sports 1 (720p)", "Fox Sports 1"),
+            ("NBA TV (720p)", "NBA TV"),
+            ("Sky Sports F1 (720p)", "Sky Sports F1"),
+            ("Jade (1080p)", "翡翠台"),
+            ("Phoenix Chinese Channel (720p)", "凤凰卫视中文台"),
+            ("Phoenix InfoNews Channel (720p)", "凤凰资讯台"),
+            ("Lotus TV (720p)", "澳门莲花卫视"),
+            ("TVB明珠", "明珠台"),
+        ]
 
         lines = ["#EXTM3U"]
         for index, (name, _) in enumerate(items):
             lines.extend([
-                f'#EXTINF:-1 tvg-id="external-{index}" tvg-name="{name}",{name}',
+                f'#EXTINF:-1 tvg-id="external-{index}",{name}',
                 f"https://example.test/{index}.m3u8",
             ])
 
         result = parse_source_content(
             "\n".join(lines),
             SOURCE,
-            CHANNELS,
-            aliases=ALIASES,
+            channels,
+            aliases=settings["aliases"],
         )
 
-        actual = {
-            item["tvg_name"]: item["channel"]
-            for item in result["candidates"]
-        }
-
-        self.assertEqual(actual, dict(items))
+        self.assertEqual(
+            [item["channel"] for item in result["candidates"]],
+            [channel for _, channel in items],
+        )   
 
     def test_jiandantv_aliases_use_actual_settings(self):
-        alias_names = ("凤凰中文", "凤凰资讯", "TVB翡翠", "澳门莲花")
-        for alias in alias_names:
-            self.assertIn(alias, ALIASES, f"settings.json 缺少别名：{alias}")
+        root = Path(__file__).resolve().parents[1]
 
-        items = [(alias, ALIASES[alias]) for alias in alias_names]
+        settings = json.loads(
+            (root / "settings.json").read_text(encoding="utf-8")
+        )
+        channels = load_channels(root / "channels.txt")
+
+        items = [
+            ("凤凰中文", "凤凰卫视中文台"),
+            ("凤凰资讯", "凤凰资讯台"),
+            ("TVB翡翠", "翡翠台"),
+            ("澳门莲花", "澳门莲花卫视"),
+        ]
 
         lines = ["#EXTM3U"]
         for index, (name, _) in enumerate(items):
@@ -318,42 +322,41 @@ class SourceParsingTests(unittest.TestCase):
         result = parse_source_content(
             "\n".join(lines),
             SOURCE,
-            CHANNELS,
-            aliases=ALIASES,
+            channels,
+            aliases=settings["aliases"],
         )
 
         self.assertEqual(
             [item["channel"] for item in result["candidates"]],
             [channel for _, channel in items],
         )
-
+    
     def test_o0i_txt_aliases_use_actual_settings(self):
-        items = [
-            (alias, canonical)
-            for alias, canonical in ALIASES.items()
-            if "蓝光" in alias
-        ]
-        self.assertTrue(items, "settings.json 没有配置蓝光别名")
+        root = Path(__file__).resolve().parents[1]
 
-        content = "\n".join(
-            f"{alias},https://example.test/{index}.m3u8"
-            for index, (alias, _) in enumerate(items)
+        settings = json.loads(
+            (root / "settings.json").read_text(encoding="utf-8")
         )
+        channels = load_channels(root / "channels.txt")
+
+        content = "\n".join([
+            "CCTV-5蓝光,https://example.test/cctv5.m3u8",
+            "CCTV-5+蓝光,https://example.test/cctv5plus.m3u8",
+            "五星体育蓝光,https://example.test/wuxing.m3u8",
+        ])
 
         result = parse_source_content(
             content,
             SOURCE,
-            CHANNELS,
-            aliases=ALIASES,
+            channels,
+            aliases=settings["aliases"],
         )
 
-        actual = {
-            item["tvg_name"]: item["channel"]
-            for item in result["candidates"]
-        }
-
-        self.assertEqual(actual, dict(items))
-
+        self.assertEqual(
+            [item["channel"] for item in result["candidates"]],
+            ["CCTV-5", "CCTV-5+", "五星体育"],
+        )
+    
     def test_parse_m3u_and_extract_channel_attributes(self):
         content = (
             "#EXTM3U\n"
@@ -377,66 +380,28 @@ class SourceParsingTests(unittest.TestCase):
         self.assertEqual(candidate["tvg_name"], "CCTV-1")
         self.assertEqual(candidate["category"], "央视")
 
-    def test_m3u_display_title_overrides_conflicting_tvg_name(self):
-        channels = ["CCTV-5", "CCTV-5+"]
-
-        content = (
-            "#EXTM3U\n"
-            '#EXTINF:-1 tvg-name="CCTV5",CCTV5+\n'
-            "https://example.test/cctv5plus.m3u8\n"
-        )
-
-        result = parse_source_content(
-            content,
-            SOURCE,
-            channels,
-            aliases={
-                "CCTV5": "CCTV-5",
-                "CCTV5+": "CCTV-5+",
-            },
-        )
-
-        self.assertEqual(
-            result["candidates"][0]["channel"],
-            "CCTV-5+",
-        )
-
-    def test_m3u_falls_back_to_tvg_name_when_title_is_unknown(self):
-        channels = ["CCTV-5", "CCTV-5+"]
-
-        content = (
-            "#EXTM3U\n"
-            '#EXTINF:-1 tvg-name="CCTV5",未知标题\n'
-            "https://example.test/cctv5.m3u8\n"
-        )
-
-        result = parse_source_content(
-            content,
-            SOURCE,
-            channels,
-            aliases={"CCTV5": "CCTV-5"},
-        )
-
-        self.assertEqual(
-            result["candidates"][0]["channel"],
-            "CCTV-5",
-        )
-
     def test_parse_m3u_title_with_commas_in_quoted_attributes(self):
+        root = Path(__file__).resolve().parents[1]
+
+        settings = json.loads(
+            (root / "settings.json").read_text(encoding="utf-8")
+        )
+        channels = load_channels(root / "channels.txt")
+
         content = (
             "#EXTM3U\n"
             '#EXTINF:-1 tvg-id="SkySportsF1.uk@SD" '
             'http-referrer="https://stmify.com/" '
-            'http-user-agent="Mozilla/5.0 (Windows, NT 10.0; Win64; x64) '
+            'http-user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
             'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 '
-            'Safari/537.36" group-title="Sports",Sky Sports F1\n'
+            'Safari/537.36" group-title="Sports",Sky Sports F1 (720p)\n'
             '#EXTVLCOPT:http-referrer=https://stmify.com/\n'
             '#EXTVLCOPT:http-user-agent=Mozilla/5.0 test\n'
             "https://example.test/sky.m3u8\n"
             '#EXTINF:-1 tvg-id="LotusTV.mo@SD" '
-            'http-user-agent="Mozilla/5.0 (Windows, NT 10.0; Win64; x64) '
+            'http-user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
             'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 '
-            'Safari/537.36" group-title="General",澳门莲花\n'
+            'Safari/537.36" group-title="General",Lotus TV (720p)\n'
             '#EXTVLCOPT:http-user-agent=Mozilla/5.0 test\n'
             "https://example.test/lotus.m3u8\n"
         )
@@ -444,8 +409,8 @@ class SourceParsingTests(unittest.TestCase):
         result = parse_source_content(
             content,
             SOURCE,
-            CHANNELS,
-            aliases=ALIASES,
+            channels,
+            aliases=settings["aliases"],
         )
 
         self.assertEqual(
@@ -459,7 +424,7 @@ class SourceParsingTests(unittest.TestCase):
                 "https://example.test/lotus.m3u8",
             ],
         )
-
+    
     def test_parse_m3u_relative_url(self):
         content = (
             "#EXTM3U\n"
@@ -471,12 +436,11 @@ class SourceParsingTests(unittest.TestCase):
             content,
             SOURCE,
             CHANNELS,
-            aliases=ALIASES,
         )
 
         self.assertEqual(
             result["candidates"][0]["raw_url"],
-            urljoin(SOURCE["url"], "../live/stream.ts"),
+            "https://example.test/live/stream.ts",
         )
 
     def test_parse_m3u_ignores_leading_hyphen_url(self):
@@ -626,7 +590,6 @@ class SourceParsingTests(unittest.TestCase):
 class SourceNormalizationTests(unittest.TestCase):
 
     def normalize(self, content, seen_urls=None, **kwargs):
-        kwargs.setdefault("aliases", ALIASES)
         return normalize_source_content(
             content=content,
             source=SOURCE,
@@ -648,9 +611,9 @@ class SourceNormalizationTests(unittest.TestCase):
             candidate["normalized_url"],
             "https://example.test/live.ts",
         )
-        self.assertEqual(candidate["source_type"], SOURCE["source_type"])
-        self.assertEqual(candidate["priority"], SOURCE["priority"])
-        self.assertEqual(candidate["source_order"], SOURCE["order"])
+        self.assertEqual(candidate["source_type"], "manual")
+        self.assertEqual(candidate["priority"], 0)
+        self.assertEqual(candidate["source_order"], 3)
 
     def test_global_duplicate_url_is_removed(self):
         seen = set()
@@ -713,7 +676,6 @@ class SourceNormalizationTests(unittest.TestCase):
             channels=CHANNELS,
             max_candidates_per_source=1,
             seen_urls=seen,
-            aliases=ALIASES,
         )
 
         self.assertEqual(
@@ -736,7 +698,6 @@ class SourceNormalizationTests(unittest.TestCase):
             channels=CHANNELS,
             max_candidates_per_source=1,
             seen_urls=set(),
-            aliases=ALIASES,
         )
 
         self.assertEqual(
@@ -747,7 +708,7 @@ class SourceNormalizationTests(unittest.TestCase):
         self.assertTrue(
             any("无效线路 URL" in error for error in result["errors"])
         )
-
+    
     def test_channel_category_comes_from_channels_file(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "channels.txt"
@@ -779,7 +740,6 @@ class SourceNormalizationTests(unittest.TestCase):
             channels=CHANNELS,
             max_candidates_per_source=1,
             seen_urls=set(),
-            aliases=ALIASES,
         )
 
         self.assertEqual(len(result["candidates"]), 1)
@@ -799,7 +759,6 @@ class SourceNormalizationTests(unittest.TestCase):
             max_candidates_per_source=100,
             max_candidates_remaining=1,
             seen_urls=set(),
-            aliases=ALIASES,
         )
 
         self.assertEqual(len(result["candidates"]), 1)
@@ -820,7 +779,6 @@ class SourceNormalizationTests(unittest.TestCase):
                 channels=CHANNELS,
                 max_candidates_per_source=0,
                 seen_urls=set(),
-                aliases=ALIASES,
             )
 
 
