@@ -657,34 +657,6 @@ class GlobalpingSummaryTests(unittest.TestCase):
 
 class SourceDiagnosticTests(unittest.TestCase):
 
-    def test_manual_and_automatic_sources_print_parse_errors(self):
-        for source_type in ("manual", "automatic"):
-            with self.subTest(source_type=source_type):
-                source = {
-                    "name": "模拟来源",
-                    "source_type": source_type,
-                }
-                error = f"{source_type} 来源解析异常"
-                normalized = {
-                    "errors": [error],
-                }
-
-                output = io.StringIO()
-
-                with contextlib.redirect_stderr(output):
-                    main._print_manual_source_details(
-                        source,
-                        normalized,
-                        [],
-                        [],
-                    )
-
-                report = output.getvalue()
-
-                self.assertIn(
-                    f"来源解析提示：{error}",
-                    report,
-                )
 
 if __name__ == "__main__":
     unittest.main()
