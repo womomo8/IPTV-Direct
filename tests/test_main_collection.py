@@ -655,8 +655,6 @@ class GlobalpingSummaryTests(unittest.TestCase):
 
         self.assertNotIn("token=secret", report)
 
-class SourceDiagnosticTests(unittest.TestCase):
-
 
 if __name__ == "__main__":
     unittest.main()
