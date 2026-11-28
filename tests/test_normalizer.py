@@ -463,26 +463,27 @@ class SourceParsingTests(unittest.TestCase):
         )
         channels = load_channels(root / "channels.txt")
 
-        content = (
-            "#EXTM3U\n"
-            '#EXTINF:-1 tvg-id="SkySportsF1.uk@SD" '
-            'http-referrer="https://stmify.com/" '
-            'http-user-agent="Mozilla/5.0 (Windows, NT 10.0; Win64; x64) '
-            'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 '
-            'Safari/537.36" group-title="Sports",Sky Sport F1\n'
-            '#EXTVLCOPT:http-referrer=https://stmify.com/\n'
-            '#EXTVLCOPT:http-user-agent=Mozilla/5.0 test\n'
-            "https://example.test/sky.m3u8\n"
-            '#EXTINF:-1 tvg-id="LotusTV.mo@SD" '
-            'http-user-agent="Mozilla/5.0 (Windows, NT 10.0; Win64; x64) '
-            'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 '
-            'Safari/537.36" group-title="General",澳门莲花\n'
-            '#EXTVLCOPT:http-user-agent=Mozilla/5.0 test\n'
-            "https://example.test/lotus.m3u8\n"
-        )
+        items = [
+            (alias, canonical)
+            for alias, canonical in settings["aliases"].items()
+            if canonical in channels
+        ][:2]
+
+        self.assertEqual(len(items), 2)
+
+        lines = ["#EXTM3U"]
+
+        for index, (alias, _) in enumerate(items):
+            lines.extend([
+                f'#EXTINF:-1 tvg-id="external-{index}" '
+                'http-user-agent="Mozilla/5.0 (Windows, NT 10.0; '
+                'Win64; x64)" '
+                f'group-title="Sports",{alias}',
+                f"https://example.test/{index}.m3u8",
+            ])
 
         result = parse_source_content(
-            content,
+            "\n".join(lines),
             SOURCE,
             channels,
             aliases=settings["aliases"],
@@ -490,13 +491,18 @@ class SourceParsingTests(unittest.TestCase):
 
         self.assertEqual(
             [item["channel"] for item in result["candidates"]],
-            ["Sky Sport F1", "澳门莲花卫视"],
+            [canonical for _, canonical in items],
         )
+
+        self.assertTrue(
+            all(item["channel"] in channels for item in result["candidates"])
+        )
+
         self.assertEqual(
             [item["raw_url"] for item in result["candidates"]],
             [
-                "https://example.test/sky.m3u8",
-                "https://example.test/lotus.m3u8",
+                f"https://example.test/{index}.m3u8"
+                for index in range(len(items))
             ],
         )
     
