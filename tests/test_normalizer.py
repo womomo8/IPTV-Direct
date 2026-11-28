@@ -914,7 +914,11 @@ class SourceNormalizationTests(unittest.TestCase):
         )
         self.assertEqual(result["extracted_candidates"], 1)
         self.assertTrue(
-            any("不支持 IPv6 地址" in error for error in result["errors"])
+            any(
+                "无效线路 URL" in error
+                and "2001:db8::1" in error
+                for error in result["errors"]
+            )
         )
 
 if __name__ == "__main__":
